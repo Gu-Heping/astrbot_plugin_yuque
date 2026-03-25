@@ -1,0 +1,17 @@
+{
+  "yuque_token": {
+    "description": "语雀团队 Token（用于访问团队知识库）",
+    "type": "string",
+    "hint": "从语雀团队设置中获取"
+  },
+  "yuque_base_url": {
+    "description": "语雀 API 地址",
+    "type": "string",
+    "default": "https://nova.yuque.com/api/v2"
+  },
+  "docs_path": {
+    "description": "本地语雀文档目录（yuque2git 同步目录）",
+    "type": "string",
+    "default": "/home/admin/yuque-docs"
+  }
+}
