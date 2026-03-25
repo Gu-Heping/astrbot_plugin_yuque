@@ -1,11 +1,11 @@
 {
   "version": "1.0",
   "project": "NovaBot",
-  "last_wake": "2026-03-26T02:00:00+08:00",
-  "wake_count": 1,
+  "last_wake": "2026-03-26T02:30:00+08:00",
+  "wake_count": 2,
   
   "phase": "idle",
-  "phase_entered": "2026-03-26T02:20:00+08:00",
+  "phase_entered": "2026-03-26T02:40:00+08:00",
   "phase_history": [
     {"phase": "idle", "entered": "2026-03-26T00:00:00", "exited": "2026-03-26T02:00:00"},
     {"phase": "planning", "entered": "2026-03-26T02:00:00", "exited": "2026-03-26T02:05:00"},
@@ -13,18 +13,17 @@
     {"phase": "testing", "entered": "2026-03-26T02:15:00", "exited": "2026-03-26T02:18:00"},
     {"phase": "auditing", "entered": "2026-03-26T02:18:00", "exited": "2026-03-26T02:19:00"},
     {"phase": "committing", "entered": "2026-03-26T02:19:00", "exited": "2026-03-26T02:19:30"},
-    {"phase": "pushing", "entered": "2026-03-26T02:19:30", "exited": "2026-03-26T02:20:00"}
+    {"phase": "pushing", "entered": "2026-03-26T02:19:30", "exited": "2026-03-26T02:20:00"},
+    {"phase": "idle", "entered": "2026-03-26T02:20:00", "exited": "2026-03-26T02:30:00"},
+    {"phase": "planning", "entered": "2026-03-26T02:30:00", "exited": "2026-03-26T02:35:00"},
+    {"phase": "developing", "entered": "2026-03-26T02:35:00", "exited": "2026-03-26T02:38:00"},
+    {"phase": "testing", "entered": "2026-03-26T02:38:00", "exited": "2026-03-26T02:39:00"},
+    {"phase": "committing", "entered": "2026-03-26T02:39:00", "exited": "2026-03-26T02:39:30"},
+    {"phase": "pushing", "entered": "2026-03-26T02:39:30", "exited": "2026-03-26T02:40:00"}
   ],
   
   "current_task": null,
   "task_queue": [
-    {
-      "id": "T002", 
-      "title": "实现 gno 检索集成",
-      "priority": 1,
-      "status": "pending",
-      "created": "2026-03-26"
-    },
     {
       "id": "T003",
       "title": "实现用户画像生成",
@@ -42,13 +41,21 @@
       "status": "done",
       "completed_at": "2026-03-26T02:20:00+08:00",
       "commit": "74367fa"
+    },
+    {
+      "id": "T002",
+      "title": "实现 gno 检索集成",
+      "priority": 1,
+      "status": "done",
+      "completed_at": "2026-03-26T02:40:00+08:00",
+      "commit": "6750331"
     }
   ],
   "blocked": [],
   
   "questions": [
-    "gno MCP 需要在 AstrBot 中配置",
-    "需要在 AstrBot 环境中测试 /bind 指令"
+    "需要在 AstrBot 环境中测试完整流程",
+    "gno MCP 需要用户在 AstrBot 中手动配置"
   ],
   "ideas": [],
   
@@ -57,20 +64,9 @@
     "NovaBot设计/01-数据架构.md",
     "NovaBot设计/03-个人层.md"
   ],
-  "commits": ["74367fa"],
-  "tests_passed": 1,
+  "commits": ["74367fa", "6750331"],
+  "tests_passed": 2,
   "tests_failed": 0,
   
-  "files_created": [
-    "metadata.yaml",
-    "_conf_schema.json",
-    "requirements.txt",
-    "main.py",
-    "plans/T001.md"
-  ],
-  "test_results": {
-    "syntax_check": "passed"
-  },
-  
-  "next_focus": "T002"
+  "next_focus": "T003"
 }
