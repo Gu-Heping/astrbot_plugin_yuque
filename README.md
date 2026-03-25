@@ -97,6 +97,63 @@
 
 ---
 
+## 部署指南
+
+### 1. 安装插件
+
+```bash
+# 在 AstrBot 的 data/plugins 目录下
+cd AstrBot/data/plugins
+git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
+```
+
+### 2. 配置 gno MCP
+
+NovaBot 使用 gno 作为检索引擎，需要在 AstrBot 中配置 gno MCP：
+
+1. 打开 AstrBot WebUI（默认 http://localhost:6185）
+2. 进入 **AI 配置** → **MCP**
+3. 点击 **新增服务器**
+4. 填写配置：
+
+```json
+{
+  "command": "/home/admin/.bun/bin/gno",
+  "args": ["mcp", "serve"],
+  "env": {
+    "NODE_LLAMA_CPP_GPU": "false"
+  }
+}
+```
+
+5. 点击 **测试**，确认成功
+6. 点击 **保存**
+
+### 3. 配置插件
+
+在 WebUI 的插件页面，找到 NovaBot，配置：
+
+| 配置项 | 说明 |
+|--------|------|
+| yuque_token | 语雀团队 Token（可选，用于访问团队知识库） |
+| yuque_base_url | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
+| docs_path | 语雀文档本地路径，默认 `/home/admin/yuque-docs` |
+
+### 4. 使用指令
+
+| 指令 | 说明 |
+|------|------|
+| `/bind <Token>` | 绑定语雀账号 |
+| `/unbind` | 解除绑定 |
+| `/profile` | 查看用户画像 |
+| `/novabot` | 帮助信息 |
+
+### 5. 直接提问
+
+绑定后，直接在对话中提问即可，NovaBot 会自动从语雀知识库检索答案。
+
+---
+
 ## 文档索引
 
 | 文档 | 路径 | 用途 |

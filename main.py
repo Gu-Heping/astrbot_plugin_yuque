@@ -128,6 +128,28 @@ class NovaBotPlugin(Star):
         self.docs_path = Path(config.get("docs_path", "/home/admin/yuque-docs"))
         logger.info("NovaBot 插件初始化完成")
 
+    @filter.on_llm_request()
+    async def on_llm_request(self, event, req):
+        """LLM 请求前钩子：添加系统提示引导检索行为"""
+        req.system_prompt += """
+
+你是 NovaBot，NOVA 社团的智能助手。语雀知识库是你的知识来源。
+
+【检索指引】
+- 用户提问涉及技术文档、教程、项目经验时 → 使用 gno.query 工具搜索
+- 用户问「有什么文档」「谁写过」→ 使用 gno.search 工具
+- 搜索结果中会包含文档来源，回答时请标注
+
+【回答风格】
+- 有温度，像学习伙伴而不是机器
+- 回答后追问「还想了解什么？」
+- 标注来源：「根据《文档名》by 作者...」
+
+【个人信息】
+- 用户问「我的画像」「我写过什么」→ 引导使用 /profile 指令
+- 用户要绑定语雀 → 引导使用 /bind 指令
+"""
+
     @filter.command("bind")
     async def bind(self, event: AstrMessageEvent, arg: str = ""):
         """绑定语雀账号
