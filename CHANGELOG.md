@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.9.2] - 2026-03-26
+
+### 修复
+- **同步状态显示**：修复知识库数显示为 0 的问题（使用 repos_count）
+- **Token 类型显示**：sync_all_repos 返回 token_type，保存到状态
+- **同步进度显示**：恢复进度回调，同步时实时更新进度
+
 ## [v0.9.1] - 2026-03-26
 
 ### 修复
