@@ -26,11 +26,14 @@ class DashScopeEmbeddings(Embeddings):
         self.model = model
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """批量嵌入"""
+        """批量嵌入 - 使用 asyncio.to_thread 避免阻塞"""
+        import asyncio
         import httpx
 
         # 过滤空文本
         valid_texts = [t if t and t.strip() else " " for t in texts]
+
+        logger.info(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
 
         url = f"{self.base_url}/embeddings"
         headers = {
@@ -42,13 +45,22 @@ class DashScopeEmbeddings(Embeddings):
             "input": valid_texts,
         }
 
-        try:
-            with httpx.Client(timeout=60.0) as client:
+        def _do_request():
+            with httpx.Client(timeout=120.0) as client:
                 response = client.post(url, headers=headers, json=data)
                 response.raise_for_status()
-                result = response.json()
+                return response.json()
+
+        try:
+            # 在线程中执行同步请求，避免阻塞事件循环
+            result = asyncio.get_event_loop().run_in_executor(None, _do_request)
+            # 如果已经在异步上下文中，等待结果
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                result = executor.submit(_do_request).result(timeout=120)
 
             embeddings = [item["embedding"] for item in result["data"]]
+            logger.info(f"[RAG] 获得 {len(embeddings)} 个嵌入向量")
             return embeddings
         except Exception as e:
             logger.error(f"[RAG] DashScope Embedding 失败: {e}")
@@ -282,7 +294,7 @@ class RAGEngine:
         logger.info(f"[RAG] 有效文档数: {len(documents)}")
 
         # 分批索引，避免一次提交太多
-        batch_size = 50
+        batch_size = 10  # 减小批量避免 API 超时
         total_indexed = 0
 
         for i in range(0, len(documents), batch_size):
