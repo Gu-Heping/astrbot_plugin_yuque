@@ -4,7 +4,7 @@
   "last_wake": "2026-03-26T08:00:00+08:00",
   "wake_count": 12,
   
-  "phase": "idle",
+  "phase": "developing",
   "phase_entered": "2026-03-26T08:00:00+08:00",
   "phase_history": [
     {"phase": "idle", "entered": "2026-03-26T02:40:00", "exited": "2026-03-26T03:30:00"},
@@ -12,24 +12,26 @@
     {"phase": "developing", "entered": "2026-03-26T03:35:00", "exited": "2026-03-26T03:45:00"},
     {"phase": "testing", "entered": "2026-03-26T03:45:00", "exited": "2026-03-26T03:47:00"},
     {"phase": "committing", "entered": "2026-03-26T03:47:00", "exited": "2026-03-26T03:48:00"},
-    {"phase": "pushing", "entered": "2026-03-26T03:48:00", "exited": "2026-03-26T03:50:00"}
+    {"phase": "pushing", "entered": "2026-03-26T03:48:00", "exited": "2026-03-26T03:50:00"},
+    {"phase": "idle", "entered": "2026-03-26T03:50:00", "exited": "2026-03-26T08:00:00"},
+    {"phase": "planning", "entered": "2026-03-26T08:00:00", "exited": "2026-03-26T08:00:00"}
   ],
   
-  "current_task": null,
+  "current_task": "T004",
   "task_queue": [
     {
       "id": "T004",
       "title": "实现内置语雀同步模块",
       "priority": 0,
       "status": "pending",
-      "description": "实现语雀文档全量同步，存储到插件 data 目录"
+      "description": "实现语雀文档全量同步，自动获取知识库列表，存储到插件 data 目录"
     },
     {
       "id": "T005",
       "title": "集成 LangChain + ChromaDB RAG",
       "priority": 1,
       "status": "pending",
-      "description": "纯 Python RAG 方案，替代 gno MCP"
+      "description": "纯 Python RAG，使用 API embedding（OpenAI/兼容服务）"
     },
     {
       "id": "T006",
@@ -76,10 +78,7 @@
   ],
   "blocked": [],
   
-  "questions": [
-    "embedding 用 OpenAI API 还是本地模型？",
-    "知识库 ID 如何配置？管理员设置还是自动发现？"
-  ],
+  "questions": [],
   "ideas": [
     {
       "idea": "画像可以用 LLM 分析提高准确度",

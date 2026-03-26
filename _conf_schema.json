@@ -1,17 +1,28 @@
 {
   "yuque_token": {
-    "description": "语雀团队 Token（用于访问团队知识库）",
+    "description": "语雀 Token（用于同步知识库文档）",
     "type": "string",
-    "hint": "从语雀团队设置中获取"
+    "hint": "从语雀个人设置中获取"
   },
   "yuque_base_url": {
     "description": "语雀 API 地址",
     "type": "string",
     "default": "https://nova.yuque.com/api/v2"
   },
-  "docs_path": {
-    "description": "本地语雀文档目录（yuque2git 同步目录）",
+  "embedding_api_key": {
+    "description": "Embedding API Key",
     "type": "string",
-    "default": "/home/admin/yuque-docs"
+    "hint": "OpenAI 或兼容服务的 API Key"
+  },
+  "embedding_base_url": {
+    "description": "Embedding API 地址（可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用 OpenAI，或填入兼容服务地址"
+  },
+  "embedding_model": {
+    "description": "Embedding 模型名称",
+    "type": "string",
+    "default": "text-embedding-3-small"
   }
 }

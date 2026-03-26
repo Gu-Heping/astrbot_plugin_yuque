@@ -161,9 +161,12 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 | 配置项 | 说明 |
 |--------|------|
-| `yuque_token` | 语雀团队 Token（管理员配置，用于同步知识库） |
+| `yuque_token` | 语雀 Token（用于同步知识库） |
 | `yuque_base_url` | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
-| `knowledge_bases` | 要同步的知识库 ID 列表 |
+| `embedding_api_key` | Embedding API Key（OpenAI 或兼容服务） |
+| `embedding_base_url` | Embedding API 地址（可选，默认 OpenAI） |
+
+**知识库自动发现**：同步模块会自动获取 Token 有权限的所有知识库，无需手动配置。
 
 ### 3. 初始同步
 
@@ -226,8 +229,11 @@ class YuqueSync:
 class RAGEngine:
     """内置 RAG 检索引擎"""
     
-    def __init__(self, docs_path: str, db_path: str):
-        self.embeddings = OpenAIEmbeddings()  # 或本地模型
+    def __init__(self, docs_path: str, db_path: str, api_key: str, base_url: str = None):
+        self.embeddings = OpenAIEmbeddings(
+            openai_api_key=api_key,
+            openai_api_base=base_url  # 支持兼容服务
+        )
         self.vectorstore = Chroma(
             persist_directory=db_path,
             embedding_function=self.embeddings
@@ -248,11 +254,11 @@ class RAGEngine:
 # 现有依赖
 httpx>=0.24.0
 
-# 新增依赖 - RAG
+# RAG 依赖
 langchain>=0.1.0
 langchain-community>=0.0.10
+langchain-openai>=0.0.5
 chromadb>=0.4.0
-sentence-transformers>=2.2.0  # 本地 embedding
 ```
 
 ---
