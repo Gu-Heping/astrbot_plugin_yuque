@@ -4,6 +4,22 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.9.0] - 2026-03-26
+
+### 重构
+- **模块拆分**：将语雀同步功能拆分到独立模块
+  - `novabot/yuque_client.py`：语雀 API 客户端（限流、重试）
+  - `novabot/sync.py`：文档同步器（TOC 层级处理）
+- 基于 yuque2git 实现完整的 TOC 处理逻辑
+  - TITLE 类型：创建目录，不写文件
+  - DOC 类型：写入 Markdown 文件
+  - 支持按层级创建目录结构
+
+### 新增
+- `toc_list_children()` 函数：按链表顺序遍历 TOC 子节点
+- `DocSyncer` 类：完整文档同步器
+- `sync_all_repos()` 函数：同步所有知识库
+
 ## [v0.8.0] - 2026-03-26
 
 ### 新增
