@@ -82,9 +82,23 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
 
-        if not slug:
-            logger.info(f"[Webhook] slug 为空，尝试从 TOC 解析...")
-            slug = await self._resolve_slug_from_toc(repo_id, doc_id)
+        # 获取语雀客户端
+        client = self.plugin._get_client()
+
+        # 获取 TOC（用于解析 slug 和更新 .toc.json）
+        toc_list = None
+        try:
+            toc_list = await client.get_repo_toc(repo_id)
+            logger.info(f"[Webhook] 获取 TOC 成功: {len(toc_list)} 个节点")
+        except Exception as e:
+            logger.warning(f"[Webhook] 获取 TOC 失败: {e}")
+
+        # 解析 slug
+        if not slug and toc_list:
+            for item in toc_list:
+                if item.get("id") == doc_id:
+                    slug = item.get("url") or item.get("slug") or item.get("uuid", "")
+                    break
 
         if not slug:
             logger.warning(f"[Webhook] 无法解析 slug: doc_id={doc_id}")
@@ -92,8 +106,7 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 文档 slug: {slug}")
 
-        # 获取文档详情（使用 repo_id）
-        client = self.plugin._get_client()
+        # 获取文档详情
         logger.info(f"[Webhook] 获取文档详情: repo_id={repo_id}, slug={slug}")
 
         try:
@@ -112,19 +125,24 @@ class WebhookHandler:
         logger.info(f"[Webhook] 知识库 namespace: {namespace or '(无)'}")
 
         # 写入 Markdown
-        logger.info(f"[Webhook] 步骤 1/4: 写入 Markdown 文件")
+        logger.info(f"[Webhook] 步骤 1/5: 写入 Markdown 文件")
         repo_dir, rel_path = self._write_markdown(detail, repo_name, namespace)
 
         # 更新 SQLite
-        logger.info(f"[Webhook] 步骤 2/4: 更新 SQLite 索引")
+        logger.info(f"[Webhook] 步骤 2/5: 更新 SQLite 索引")
         self._update_doc_index(detail, rel_path)
 
         # 更新 ChromaDB
-        logger.info(f"[Webhook] 步骤 3/4: 更新 ChromaDB 向量")
+        logger.info(f"[Webhook] 步骤 3/5: 更新 ChromaDB 向量")
         self._update_rag(detail, rel_path)
 
+        # 更新 .toc.json（参考 yuque2git）
+        logger.info(f"[Webhook] 步骤 4/5: 更新 .toc.json")
+        if toc_list:
+            self._update_toc_json(repo_dir, toc_list)
+
         # Git commit
-        logger.info(f"[Webhook] 步骤 4/4: Git 提交")
+        logger.info(f"[Webhook] 步骤 5/5: Git 提交")
         commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""))
         if commit_hash:
             logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
@@ -143,6 +161,7 @@ class WebhookHandler:
         """处理文档删除事件"""
         data = payload.get("data", {})
         doc_id = data.get("id")
+        book = data.get("book", {})
 
         logger.info(f"[Webhook] → 处理文档删除事件")
 
@@ -160,12 +179,14 @@ class WebhookHandler:
         doc_record = doc_index.get_doc_by_yuque_id(doc_id)
 
         deleted_files = []
+        repo_dir = None
 
         if doc_record:
             file_path = doc_record.get("file_path", "")
             logger.info(f"[Webhook] 找到文档记录: {file_path}")
             if file_path:
                 full_path = self.docs_dir / file_path
+                repo_dir = full_path.parent  # 知识库目录
                 if full_path.exists():
                     try:
                         full_path.unlink()
@@ -179,20 +200,25 @@ class WebhookHandler:
             logger.warning(f"[Webhook] 索引中未找到文档: doc_id={doc_id}")
 
         # 删除 SQLite 记录
-        logger.info(f"[Webhook] 步骤 1/3: 删除 SQLite 记录")
+        logger.info(f"[Webhook] 步骤 1/4: 删除 SQLite 记录")
         doc_index.delete_doc(doc_id)
         logger.info(f"[Webhook] SQLite 记录已删除")
 
         # 删除 ChromaDB 向量
-        logger.info(f"[Webhook] 步骤 2/3: 删除 ChromaDB 向量")
+        logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
         if self.plugin.rag:
             self.plugin.rag.delete_doc(doc_id)
             logger.info(f"[Webhook] ChromaDB 向量已删除")
         else:
             logger.info(f"[Webhook] RAG 未初始化，跳过")
 
+        # 更新 .toc.json
+        logger.info(f"[Webhook] 步骤 3/4: 更新 .toc.json")
+        if repo_dir:
+            self._remove_from_toc_json(repo_dir, doc_id)
+
         # Git commit
-        logger.info(f"[Webhook] 步骤 3/3: Git 提交")
+        logger.info(f"[Webhook] 步骤 4/4: Git 提交")
         if deleted_files:
             commit_hash = self._git_commit(deleted_files, "delete", f"doc_id={doc_id}")
             if commit_hash:
@@ -436,3 +462,35 @@ class WebhookHandler:
 
         message = f"yuque: {action} {title}"
         return git.add_commit(files, message)
+
+    def _update_toc_json(self, repo_dir: Path, toc_list: list):
+        """更新知识库的 .toc.json 文件"""
+        toc_file = repo_dir / ".toc.json"
+        try:
+            toc_file.write_text(
+                json.dumps(toc_list, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            logger.info(f"[Webhook] 更新 .toc.json: {toc_file.relative_to(self.docs_dir)}")
+        except Exception as e:
+            logger.warning(f"[Webhook] 更新 .toc.json 失败: {e}")
+
+    def _remove_from_toc_json(self, repo_dir: Path, doc_id: int):
+        """从 .toc.json 中移除已删除的文档"""
+        toc_file = repo_dir / ".toc.json"
+        if not toc_file.exists():
+            return
+
+        try:
+            toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
+            # 过滤掉已删除的文档
+            new_toc = [item for item in toc_list if item.get("id") != doc_id]
+
+            if len(new_toc) != len(toc_list):
+                toc_file.write_text(
+                    json.dumps(new_toc, ensure_ascii=False, indent=2),
+                    encoding="utf-8"
+                )
+                logger.info(f"[Webhook] 从 .toc.json 移除文档: doc_id={doc_id}")
+        except Exception as e:
+            logger.warning(f"[Webhook] 更新 .toc.json 失败: {e}")
