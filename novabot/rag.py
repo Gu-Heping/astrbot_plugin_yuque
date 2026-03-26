@@ -101,13 +101,28 @@ class RAGEngine:
 
     def _force_reset(self):
         """强制重置向量库"""
+        import time
         logger.info("[RAG] 强制重置向量库...")
+
+        # 0. 清除 ChromaDB 全局缓存
+        try:
+            from chromadb.api.client import SharedSystemClient
+            cache = SharedSystemClient._identifier_to_system
+            keys_to_remove = [k for k in cache.keys() if str(self.persist_directory) in str(k)]
+            for k in keys_to_remove:
+                del cache[k]
+            if keys_to_remove:
+                logger.info(f"[RAG] 清除缓存: {len(keys_to_remove)} 个")
+        except Exception as e:
+            logger.warning(f"[RAG] 清除缓存失败: {e}")
 
         # 1. 如果有客户端，尝试 reset
         if self._client is not None:
             try:
                 self._client.reset()
                 logger.info("[RAG] 客户端 reset 成功")
+                self._vectorstore = None
+                self._client = None
                 return
             except Exception as e:
                 logger.warning(f"[RAG] 客户端 reset 失败: {e}")
@@ -117,19 +132,31 @@ class RAGEngine:
         self._client = None
         gc.collect()
 
-        # 3. 删除目录
+        # 3. 重命名旧目录（避免 ChromaDB 缓存冲突）
         if self.persist_directory.exists():
             try:
-                shutil.rmtree(self.persist_directory)
-                logger.info("[RAG] 目录删除成功")
-            except PermissionError:
-                import time
-                time.sleep(1)
-                shutil.rmtree(self.persist_directory)
-                logger.info("[RAG] 目录删除成功（重试）")
+                old_path = self.persist_directory.with_suffix(f".old_{int(time.time())}")
+                self.persist_directory.rename(old_path)
+                logger.info(f"[RAG] 目录已重命名: {old_path}")
+
+                # 异步删除旧目录（不阻塞）
+                import threading
+                def cleanup():
+                    try:
+                        shutil.rmtree(old_path)
+                    except:
+                        pass
+                threading.Thread(target=cleanup, daemon=True).start()
+
             except Exception as e:
-                logger.error(f"[RAG] 目录删除失败: {e}")
-                raise
+                logger.warning(f"[RAG] 重命名目录失败: {e}")
+                # 尝试直接删除
+                try:
+                    shutil.rmtree(self.persist_directory)
+                    logger.info("[RAG] 目录删除成功")
+                except Exception as e2:
+                    logger.error(f"[RAG] 目录删除失败: {e2}")
+                    raise
 
     def index_docs(self, docs: list[dict]) -> int:
         """索引文档到向量库"""
