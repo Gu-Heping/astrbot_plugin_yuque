@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.5.8] - 2026-03-26
+
+### 修复
+- **DashScope Embedding 兼容**：自定义 Embedding 类处理阿里云 API 格式
+- 自动检测 DashScope URL 并使用专用封装
+
 ## [v0.5.7] - 2026-03-26
 
 ### 修复

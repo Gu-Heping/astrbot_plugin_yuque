@@ -6,15 +6,58 @@ NovaBot RAG 检索模块
 import gc
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import chromadb
 from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
 
 from astrbot.api import logger
+
+
+class DashScopeEmbeddings(Embeddings):
+    """DashScope Embedding 封装（兼容 OpenAI 格式）"""
+
+    def __init__(self, api_key: str, base_url: str, model: str):
+        self.api_key = api_key
+        self.base_url = base_url.rstrip('/')
+        self.model = model
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """批量嵌入"""
+        import httpx
+
+        # 过滤空文本
+        valid_texts = [t if t and t.strip() else " " for t in texts]
+
+        url = f"{self.base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": self.model,
+            "input": valid_texts,
+        }
+
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(url, headers=headers, json=data)
+                response.raise_for_status()
+                result = response.json()
+
+            embeddings = [item["embedding"] for item in result["data"]]
+            return embeddings
+        except Exception as e:
+            logger.error(f"[RAG] DashScope Embedding 失败: {e}")
+            raise
+
+    def embed_query(self, text: str) -> List[float]:
+        """单个查询嵌入"""
+        result = self.embed_documents([text])
+        return result[0]
 
 
 class RAGEngine:
@@ -33,13 +76,24 @@ class RAGEngine:
         self.embedding_model = embedding_model
 
         # 初始化 embedding
-        embedding_kwargs = {
-            "openai_api_key": embedding_api_key,
-            "model": embedding_model,
-        }
-        if embedding_base_url:
-            embedding_kwargs["openai_api_base"] = embedding_base_url
-        self.embeddings = OpenAIEmbeddings(**embedding_kwargs)
+        if embedding_base_url and "dashscope" in embedding_base_url.lower():
+            # DashScope 使用自定义封装
+            logger.info("[RAG] 使用 DashScope Embedding")
+            self.embeddings = DashScopeEmbeddings(
+                api_key=embedding_api_key,
+                base_url=embedding_base_url,
+                model=embedding_model,
+            )
+        else:
+            # 其他使用 LangChain OpenAIEmbeddings
+            from langchain_openai import OpenAIEmbeddings
+            embedding_kwargs = {
+                "openai_api_key": embedding_api_key,
+                "model": embedding_model,
+            }
+            if embedding_base_url:
+                embedding_kwargs["openai_api_base"] = embedding_base_url
+            self.embeddings = OpenAIEmbeddings(**embedding_kwargs)
 
         # 延迟初始化
         self._vectorstore: Optional[Chroma] = None
