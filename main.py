@@ -959,12 +959,16 @@ class NovaBotPlugin(Star):
                 profile = await self.profile_gen.generate_with_llm(docs, provider)
                 self.storage.save_profile(yuque_id, profile)
 
+                level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
                 p = profile.get("profile", {})
+                skills = p.get("skills", {})
+                skill_lines = [f"• {k} ({level_map.get(v, v)})" for k, v in skills.items()]
+
                 yield event.plain_result(
                     f"✅ 画像已生成\n"
                     f"━━━━━━━━━━━━━━━\n"
                     f"兴趣: {', '.join(p.get('interests', []))}\n"
-                    f"水平: {p.get('level', '未知')}\n"
+                    f"水平: {level_map.get(p.get('level', ''), '未知')}\n"
                     f"标签: {', '.join(p.get('tags', []))}\n"
                     f"\n"
                     f"📝 {p.get('summary', '')}"
