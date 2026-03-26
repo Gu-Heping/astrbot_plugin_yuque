@@ -317,7 +317,7 @@ class RAGEngine:
         return total_indexed
 
     def index_from_sync(self, docs_dir: str) -> int:
-        """从同步目录读取 Markdown 并索引"""
+        """从同步目录读取 Markdown 并索引（全量重建）"""
         import re
         import yaml
 
@@ -327,6 +327,13 @@ class RAGEngine:
         if not docs_path.exists():
             logger.warning(f"[RAG] 文档目录不存在: {docs_dir}")
             return 0
+
+        # 全量重建：先清空向量库
+        logger.info("[RAG] 清空旧索引...")
+        try:
+            self.clear()
+        except Exception as e:
+            logger.warning(f"[RAG] 清空索引失败，继续: {e}")
 
         all_docs = []
 
@@ -387,7 +394,7 @@ class RAGEngine:
         return self.index_docs(all_docs)
 
     def search(self, query: str, k: int = 5) -> list[dict]:
-        """语义检索"""
+        """语义检索（按文档去重）"""
         if not query or not isinstance(query, str):
             return []
 
@@ -396,16 +403,30 @@ class RAGEngine:
             return []
 
         try:
-            results = self.vectorstore.similarity_search(query, k=k)
-            return [
-                {
-                    "content": doc.page_content[:300] if doc.page_content else "",
-                    "title": doc.metadata.get("title", ""),
+            # 获取更多结果用于去重
+            raw_results = self.vectorstore.similarity_search(query, k=k * 3)
+
+            # 按文档标题去重，保留分数最高的
+            seen_titles = set()
+            unique_results = []
+            for doc in raw_results:
+                title = doc.metadata.get("title", "")
+                if title and title in seen_titles:
+                    continue
+                if title:
+                    seen_titles.add(title)
+
+                unique_results.append({
+                    "content": doc.page_content[:500] if doc.page_content else "",
+                    "title": title,
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
-                }
-                for doc in results
-            ]
+                })
+
+                if len(unique_results) >= k:
+                    break
+
+            return unique_results
         except Exception as e:
             logger.error(f"[RAG] 搜索失败: {e}")
             return []
