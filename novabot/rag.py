@@ -210,8 +210,8 @@ class RAGEngine:
                 def cleanup():
                     try:
                         shutil.rmtree(old_path)
-                    except:
-                        pass
+                    except OSError as e:
+                        logger.debug(f"清理旧目录失败: {e}")
                 threading.Thread(target=cleanup, daemon=True).start()
 
             except Exception as e:
@@ -345,8 +345,8 @@ class RAGEngine:
                         try:
                             metadata = yaml.safe_load(content[3:end].strip()) or {}
                             body = content[end + 4:].strip()
-                        except:
-                            pass
+                        except yaml.YAMLError as e:
+                            logger.debug(f"YAML 解析失败: {e}")
 
                 # 2. 去掉文档开头的元信息表格
                 # 删除开头所有以 | 开头的行（直到遇到非表格行）

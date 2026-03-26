@@ -188,8 +188,8 @@ class YuqueSync:
                         try:
                             metadata = yaml.safe_load(content[3:end].strip()) or {}
                             body = content[end + 4:].strip()
-                        except:
-                            pass
+                        except yaml.YAMLError as e:
+                            logger.debug(f"YAML 解析失败: {e}")
 
                 # 匹配作者
                 doc_author = metadata.get("author", "")
@@ -642,8 +642,8 @@ class NovaBotPlugin(Star):
                                 matched_repo = repo
                                 matched_dir = docs_dir / ns.replace("/", "_")
                                 break
-                    except:
-                        pass
+                    except (json.JSONDecodeError, OSError) as e:
+                        logger.warning(f"读取知识库列表失败: {e}")
 
                 if not matched_dir:
                     # 备选：从目录名模糊匹配
@@ -658,8 +658,8 @@ class NovaBotPlugin(Star):
                         try:
                             repos = json.loads(repos_file.read_text(encoding="utf-8"))
                             available = [r.get("name", "") for r in repos[:10]]
-                        except:
-                            pass
+                        except (json.JSONDecodeError, OSError) as e:
+                            logger.debug(f"读取知识库列表失败: {e}")
                     if not available:
                         available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
                     return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
@@ -692,7 +692,8 @@ class NovaBotPlugin(Star):
                                 title = line[2:].strip()
                                 break
                         output.append(f"📄 {title}")
-                    except:
+                    except OSError as e:
+                        logger.debug(f"读取文件失败 {md_file}: {e}")
                         output.append(f"📄 {md_file.stem}")
                 if len(md_files) > 30:
                     output.append(f"\n... 还有 {len(md_files) - 30} 篇文档")

@@ -11,7 +11,29 @@
       "Bash(python:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git revert:*)",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/user\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/groups/66330942/repos\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/nie2y4/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/itk1a0/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/qx1y5t/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/lplocr/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/hfw6ip/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/uqneg2/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/bgftae/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/vrcby6/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/ia1d8q/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/oficgi/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/ly1v7d/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/bfxgug/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/az5wqg/docs\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/wg5tth/ble0dg/docs\")",
+      "Bash(find . -name *.md -path */yuque_docs/*)",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76480492/toc\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76763686/toc\")",
+      "Bash(curl -s -H 'X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP' https://www.yuque.com/api/v2/repos/76763687/toc)",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76763690/toc\")"
     ]
   }
 }
