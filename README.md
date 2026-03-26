@@ -133,15 +133,14 @@ AstrBot 服务器 (另一台机器)
 
 ## 当前进度
 
-| 任务 | 状态 | 备注 |
+| 功能 | 状态 | 说明 |
 |------|:----:|------|
-| 仓库创建 | ✅ | git@github.com:Gu-Heping/astrbot_plugin_yuque.git |
-| 设计文档 | ✅ | 本文件 |
-| /bind 指令 | ✅ | 已实现 |
-| 用户画像 | ✅ | 已实现 |
-| 语雀同步模块 | 🔲 | 待开发 |
-| RAG 检索模块 | 🔲 | 待开发 |
-| Webhook 接收 | 🔲 | 待开发 |
+| /bind 绑定 | ✅ | 支持用户名/login/模糊匹配 |
+| 用户画像 | ✅ | 基于文档关键词生成 |
+| 语雀同步 | ✅ | 全量同步 + 团队成员缓存 |
+| RAG 检索 | ✅ | LangChain + ChromaDB |
+| /sync members | ✅ | 单独同步团队成员 |
+| Webhook 增量 | 🔲 | 待开发 |
 
 ---
 
@@ -161,89 +160,34 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 | 配置项 | 说明 |
 |--------|------|
-| `yuque_token` | 语雀团队 Token（用于同步知识库和用户绑定验证） |
+| `yuque_token` | 语雀团队 Token（用于同步知识库和用户绑定） |
 | `yuque_base_url` | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
 | `embedding_api_key` | Embedding API Key（OpenAI 或兼容服务） |
 | `embedding_base_url` | Embedding API 地址（可选，默认 OpenAI） |
+| `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
 
-**绑定方式**：用户使用 `/bind <用户名>` 绑定，系统通过团队 Token 验证用户身份。
-
-### 3. 初始同步
-
-```bash
-# 在插件目录执行
-python -m novabot.sync --init
-```
-
-或通过 WebUI 触发同步。
-
-### 4. 配置 Webhook（可选）
-
-在语雀后台配置 Webhook URL 指向 AstrBot 服务器：
-
-```
-http://your-astrbot-server:6185/plugins/novabot/webhook
-```
-
-实现增量同步。
-
-### 5. 使用指令
+### 3. 使用指令
 
 | 指令 | 说明 |
 |------|------|
-| `/bind <Token>` | 绑定语雀账号 |
+| `/bind <用户名>` | 绑定语雀账号（支持模糊匹配） |
 | `/unbind` | 解除绑定 |
 | `/profile` | 查看用户画像 |
-| `/sync` | 手动触发同步（管理员） |
+| `/sync` | 同步知识库 + 团队成员 |
+| `/sync status` | 查看同步状态 |
+| `/sync members` | 仅同步团队成员 |
+| `/rag status` | 查看 RAG 状态 |
+| `/rag search <关键词>` | 搜索文档 |
 | `/novabot` | 帮助信息 |
 
-### 6. 直接提问
+### 4. 绑定流程
 
-绑定后，直接在对话中提问即可，NovaBot 会自动从语雀知识库检索答案。
-
----
-
-## 内置模块设计
-
-### 语雀同步模块 (`novabot/sync.py`)
-
-```python
-class YuqueSync:
-    """内置语雀文档同步"""
-    
-    async def full_sync(self):
-        """全量同步知识库文档"""
-        # 1. 获取知识库列表
-        # 2. 遍历文档，下载 Markdown
-        # 3. 存储到 data/plugins/novabot/docs/
-        # 4. 触发 RAG 索引
-        
-    async def incremental_sync(self, doc_id: int):
-        """增量同步单个文档"""
-        # Webhook 触发时调用
 ```
+管理员: /sync members  → 同步团队成员到缓存
 
-### RAG 检索模块 (`novabot/rag.py`)
-
-```python
-class RAGEngine:
-    """内置 RAG 检索引擎"""
-    
-    def __init__(self, docs_path: str, db_path: str, api_key: str, base_url: str = None):
-        self.embeddings = OpenAIEmbeddings(
-            openai_api_key=api_key,
-            openai_api_base=base_url  # 支持兼容服务
-        )
-        self.vectorstore = Chroma(
-            persist_directory=db_path,
-            embedding_function=self.embeddings
-        )
-        
-    async def index_docs(self):
-        """索引文档到向量库"""
-        
-    async def search(self, query: str, k: int = 5) -> list[Document]:
-        """语义检索"""
+用户:   /bind 谷和平      → 精确匹配 name
+     或 /bind heping-qcbue → 精确匹配 login  
+     或 /bind 和平        → 模糊匹配
 ```
 
 ---
@@ -251,10 +195,7 @@ class RAGEngine:
 ## 依赖 (requirements.txt)
 
 ```
-# 现有依赖
 httpx>=0.24.0
-
-# RAG 依赖
 langchain>=0.1.0
 langchain-community>=0.0.10
 langchain-openai>=0.0.5
@@ -263,60 +204,13 @@ chromadb>=0.4.0
 
 ---
 
-## 每次唤醒检查项
-
-**流程定义**：见 `DEVFLOW.md`
-
-**状态文件**：`state.json`
-
-### 执行步骤
-
-```
-1. 读取 state.json，获取当前阶段和任务
-2. 根据阶段执行动作（参考 DEVFLOW.md）
-3. 更新 state.json，记录进度
-4. 如有阻塞或问题，主动提出
-```
-
----
-
-## 状态文件说明
-
-| 字段 | 说明 |
-|------|------|
-| `task_queue` | 待做任务，按优先级排序 |
-| `completed` | 已完成任务 |
-| `blocked` | 卡住的任务 |
-| `questions` | 待讨论的问题 |
-| `ideas` | 新想法 |
-| `next_focus` | 下次重点 |
-
----
-
-## 参考案例
-
-### 类似产品
-
-- OpenClaw Peacebot：个人 AI 助手
-- yuque-sync-platform：语雀同步 + RAG
-- astrbot_plugin_self_learning：自主学习、社交关系
-
-### 设计参考
-
-- Dieter Rams：少即是多
-- Rob Pike：清晰胜于 clever
-- Bret Victor：工具应该让你看见自己在做什么
-
----
-
 ## 版本历史
 
-| 日期 | 变更 |
-|------|------|
-| 2026-03-26 | 创建仓库、设计文档 |
-| 2026-03-26 | 加入人性化设计层 |
-| 2026-03-26 | 设置 cron 定时唤醒 |
-| 2026-03-26 | **修正架构认知**：AstrBot 独立部署，改为内置同步 + RAG |
+| 版本 | 日期 | 变更 |
+|------|------|------|
+| v0.3.0 | 2026-03-26 | 添加 `/sync members`，支持 login 和模糊匹配绑定 |
+| v0.2.0 | 2026-03-26 | 自包含架构：内置同步 + RAG，废弃 gno MCP |
+| v0.1.0 | 2026-03-26 | 初始版本：/bind、用户画像、gno MCP |
 
 ---
 
