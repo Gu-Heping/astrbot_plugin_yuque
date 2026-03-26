@@ -821,7 +821,7 @@ class NovaBotPlugin(Star):
                     f"📊 同步状态",
                     "━━━━━━━━━━━━━━━",
                     f"上次同步: {state['last_sync'][:19]}",
-                    f"知识库数: {len(state.get('repos', {}))}",
+                    f"知识库数: {state.get('repos_count', 0)}",
                     f"文档总数: {state.get('docs_count', 0)}",
                     f"Token 类型: {state.get('token_type', '未知')}",
                 ]
@@ -870,6 +870,7 @@ class NovaBotPlugin(Star):
                 "last_sync": datetime.now().isoformat(),
                 "repos_count": result.get("repos_count", 0) if result else 0,
                 "docs_count": result.get("docs", 0) if result else 0,
+                "token_type": result.get("token_type", "未知") if result else "未知",
                 "in_progress": False,
                 "progress": None
             }

@@ -308,4 +308,8 @@ async def sync_all_repos(
     repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles")
-    return {"repos_count": len(repos), **total_stats}
+    return {
+        "repos_count": len(repos),
+        "token_type": "团队" if is_group else "个人",
+        **total_stats
+    }
