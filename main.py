@@ -639,8 +639,7 @@ class NovaBotPlugin(Star):
 
         client = self._get_client()
         try:
-            # with_content=False 快速同步，不获取正文
-            result = await self.yuque_sync.sync_all_repos(client, with_content=False)
+            result = await self.yuque_sync.sync_all_repos(client, with_content=True)
 
             # RAG 索引
             rag_msg = ""
