@@ -41,10 +41,19 @@ class RAGEngine:
     def _load_vectorstore(self) -> Chroma:
         """加载向量库"""
         if self.vectorstore is None:
-            self.vectorstore = Chroma(
-                persist_directory=str(self.persist_directory),
-                embedding_function=self.embeddings,
-            )
+            try:
+                self.vectorstore = Chroma(
+                    persist_directory=str(self.persist_directory),
+                    embedding_function=self.embeddings,
+                )
+            except Exception as e:
+                print(f"加载向量库失败: {e}")
+                # 尝试重新初始化
+                self.clear()
+                self.vectorstore = Chroma(
+                    persist_directory=str(self.persist_directory),
+                    embedding_function=self.embeddings,
+                )
         return self.vectorstore
 
     def index_docs(self, docs: list[dict]) -> int:
@@ -260,11 +269,21 @@ class RAGEngine:
 
     def clear(self):
         """清空向量库"""
+        # 先释放连接
+        self.vectorstore = None
+
+        # 删除整个目录
         if self.persist_directory.exists():
             import shutil
-            shutil.rmtree(self.persist_directory)
-            self.persist_directory.mkdir(parents=True, exist_ok=True)
-            self.vectorstore = None
+            try:
+                shutil.rmtree(self.persist_directory)
+            except Exception as e:
+                print(f"清空向量库失败: {e}")
+                return False
+
+        # 重新创建目录
+        self.persist_directory.mkdir(parents=True, exist_ok=True)
+        return True
 
     def get_stats(self) -> dict:
         """获取向量库统计信息"""

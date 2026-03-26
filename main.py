@@ -573,17 +573,25 @@ class NovaBotPlugin(Star):
         self.rag: Optional[RAGEngine] = None
         if self.embedding_api_key:
             try:
+                rag_dir = self.storage.data_dir / "chroma_db"
                 self.rag = RAGEngine(
-                    persist_directory=str(self.storage.data_dir / "chroma_db"),
+                    persist_directory=str(rag_dir),
                     embedding_api_key=self.embedding_api_key,
                     embedding_base_url=self.embedding_base_url or None,
                     embedding_model=self.embedding_model,
                 )
-                logger.info(f"RAG 引擎初始化完成，模型: {self.embedding_model}")
+                # 验证数据库是否可用
+                try:
+                    self.rag.get_stats()
+                    logger.info(f"RAG 引擎初始化完成，模型: {self.embedding_model}")
+                except Exception as e:
+                    logger.warning(f"RAG 数据库损坏，尝试重建: {e}")
+                    self.rag.clear()
+                    logger.info("RAG 数据库已重置")
             except Exception as e:
                 logger.error(f"RAG 引擎初始化失败: {e}")
 
-        logger.info("NovaBot 插件初始化完成 (v0.5.0)")
+        logger.info("NovaBot 插件初始化完成 (v0.5.1)")
 
     def _get_client(self) -> YuqueClient:
         """获取语雀客户端（懒加载）"""
@@ -835,32 +843,47 @@ class NovaBotPlugin(Star):
             return
 
         if action.lower() == "status":
-            stats = self.rag.get_stats()
-            yield event.plain_result(
-                f"📊 RAG 状态\n"
-                f"模型: {self.embedding_model}\n"
-                f"文档数: {stats.get('docs_count', 0)}"
-            )
+            try:
+                stats = self.rag.get_stats()
+                yield event.plain_result(
+                    f"📊 RAG 状态\n"
+                    f"模型: {self.embedding_model}\n"
+                    f"文档数: {stats.get('docs_count', 0)}"
+                )
+            except Exception as e:
+                logger.error(f"获取 RAG 状态失败: {e}")
+                yield event.plain_result(f"⚠️ RAG 状态异常: {e}")
             return
 
         if action.lower() == "search" and query:
-            results = self.rag.search(query, k=5)
-            if not results:
-                yield event.plain_result(f"未找到相关文档: {query}")
-                return
+            try:
+                results = self.rag.search(query, k=5)
+                if not results:
+                    yield event.plain_result(f"未找到相关文档: {query}")
+                    return
 
-            lines = [f"🔍 搜索: {query}", "━━━━━━━━━━━━━━━"]
-            for i, doc in enumerate(results, 1):
-                lines.append(f"{i}. {doc['title']}")
-                lines.append(f"   {doc['content'][:80]}...")
+                lines = [f"🔍 搜索: {query}", "━━━━━━━━━━━━━━━"]
+                for i, doc in enumerate(results, 1):
+                    lines.append(f"{i}. {doc['title']}")
+                    lines.append(f"   {doc['content'][:80]}...")
 
-            yield event.plain_result("\n".join(lines))
+                yield event.plain_result("\n".join(lines))
+            except Exception as e:
+                logger.error(f"RAG 搜索失败: {e}")
+                yield event.plain_result(f"❌ 搜索失败: {e}")
             return
 
         if action.lower() == "rebuild":
-            self.rag.clear()
-            indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
-            yield event.plain_result(f"✅ 重建完成，索引 {indexed} 篇文档")
+            try:
+                yield event.plain_result("🔄 重建 RAG 索引...")
+                if not self.rag.clear():
+                    yield event.plain_result("❌ 清空向量库失败")
+                    return
+                indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+                yield event.plain_result(f"✅ 重建完成，索引 {indexed} 篇文档")
+            except Exception as e:
+                logger.error(f"RAG 重建失败: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 重建失败: {e}")
             return
 
         yield event.plain_result(
