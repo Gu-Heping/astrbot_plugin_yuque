@@ -533,9 +533,9 @@ class ProfileGenerator:
 
 1. **技术领域**：识别用户涉足的技术领域（不限于此列表，自由发现）
 2. **认知水平**：评估用户在各领域的理解深度
-   - 入门：刚开始接触，学习基础概念
-   - 进阶：能独立完成项目，理解原理
-   - 高级：深入底层，能优化和创新
+   - beginner：刚开始接触，学习基础概念
+   - intermediate：能独立完成项目，理解原理
+   - advanced：深入底层，能优化和创新
 3. **特点标签**：用户的学习风格、产出特点
 
 ## 用户文档信息
@@ -550,11 +550,11 @@ class ProfileGenerator:
 {{
   "interests": ["领域1", "领域2", "领域3"],
   "skills": {{
-    "领域1": "进阶",
-    "领域2": "入门",
-    "领域3": "高级"
+    "领域1": "intermediate",
+    "领域2": "beginner",
+    "领域3": "advanced"
   }},
-  "level": "进阶",
+  "level": "intermediate",
   "tags": ["标签1", "标签2"],
   "summary": "一句话概括这个用户的技术特点"
 }}
@@ -562,8 +562,8 @@ class ProfileGenerator:
 
 注意：
 - interests 最多 5 个领域
+- skills 和 level 的值必须用英文：beginner / intermediate / advanced
 - tags 最多 3 个标签
-- level 是整体水平
 - 所有字段必须有值"""
 
     def build_docs_info(self, docs: list) -> str:
@@ -581,6 +581,15 @@ class ProfileGenerator:
                 lines.append(f"   摘要: {content[:100]}...")
 
         return "\n".join(lines)
+
+    def _normalize_level(self, level: str) -> str:
+        """标准化水平值（支持中英文）"""
+        mapping = {
+            "beginner": "beginner", "入门": "beginner", "初级": "beginner",
+            "intermediate": "intermediate", "进阶": "intermediate", "中级": "intermediate",
+            "advanced": "advanced", "高级": "advanced", "高级": "advanced",
+        }
+        return mapping.get(level.lower() if level else "", "beginner")
 
     async def generate_with_llm(self, docs: list, provider) -> dict:
         """使用 LLM 生成用户画像
@@ -621,12 +630,18 @@ class ProfileGenerator:
 
             profile_data = json.loads(result_text)
 
+            # 标准化水平值
+            normalized_skills = {
+                k: self._normalize_level(v)
+                for k, v in profile_data.get("skills", {}).items()
+            }
+
             # 构建返回格式
             return {
                 "profile": {
                     "interests": profile_data.get("interests", []),
-                    "level": profile_data.get("level", "beginner"),
-                    "skills": profile_data.get("skills", {}),
+                    "level": self._normalize_level(profile_data.get("level", "beginner")),
+                    "skills": normalized_skills,
                     "tags": profile_data.get("tags", []),
                     "summary": profile_data.get("summary", ""),
                 },
@@ -642,7 +657,7 @@ class ProfileGenerator:
 
     def _empty_profile(self) -> dict:
         return {
-            "profile": {"interests": [], "level": "beginner", "skills": {}},
+            "profile": {"interests": [], "level": "beginner", "skills": {}, "tags": [], "summary": ""},
             "stats": {"docs_count": 0, "repos": []}
         }
 
