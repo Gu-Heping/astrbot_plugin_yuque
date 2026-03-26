@@ -136,24 +136,41 @@ class YuqueClient:
         data = await self._get(f"/groups/{group_id}/repos", {"limit": limit})
         return data.get("data", [])
 
-    async def get_repo(self, namespace: str) -> Dict:
-        """获取知识库详情"""
-        data = await self._get(f"/repos/{namespace}")
+    async def get_repo(self, repo_id_or_namespace) -> Dict:
+        """获取知识库详情
+
+        Args:
+            repo_id_or_namespace: 知识库 ID (int) 或 namespace (str)
+        """
+        data = await self._get(f"/repos/{repo_id_or_namespace}")
         return data.get("data", {})
 
-    async def get_repo_toc(self, namespace: str) -> List[Dict]:
-        """获取知识库目录结构"""
-        data = await self._get(f"/repos/{namespace}/toc")
+    async def get_repo_toc(self, repo_id_or_namespace) -> List[Dict]:
+        """获取知识库目录结构
+
+        Args:
+            repo_id_or_namespace: 知识库 ID (int) 或 namespace (str)
+        """
+        data = await self._get(f"/repos/{repo_id_or_namespace}/toc")
         return data.get("data", [])
 
-    async def get_repo_docs(self, namespace: str, limit: int = 100) -> List[Dict]:
-        """获取知识库的文档列表"""
-        data = await self._get(f"/repos/{namespace}/docs", {"limit": limit})
+    async def get_repo_docs(self, repo_id_or_namespace, limit: int = 100) -> List[Dict]:
+        """获取知识库的文档列表
+
+        Args:
+            repo_id_or_namespace: 知识库 ID (int) 或 namespace (str)
+        """
+        data = await self._get(f"/repos/{repo_id_or_namespace}/docs", {"limit": limit})
         return data.get("data", [])
 
-    async def get_doc_detail(self, namespace: str, slug: str) -> Dict:
-        """获取文档详情（含正文）"""
-        data = await self._get(f"/repos/{namespace}/docs/{slug}", {"include_content": "true"})
+    async def get_doc_detail(self, repo_id_or_namespace, slug: str) -> Dict:
+        """获取文档详情（含正文）
+
+        Args:
+            repo_id_or_namespace: 知识库 ID (int) 或 namespace (str)
+            slug: 文档 slug
+        """
+        data = await self._get(f"/repos/{repo_id_or_namespace}/docs/{slug}", {"include_content": "true"})
         return data.get("data", {})
 
     async def get_group_members(self, group_id: int) -> List[Dict]:

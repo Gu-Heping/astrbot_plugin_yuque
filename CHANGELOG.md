@@ -4,6 +4,34 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.11.0] - 2026-03-26
+
+### 新增
+- **Webhook 实时同步**：语雀文档变更实时同步到本地
+  - 支持 `publish`、`update`、`delete` 三种事件
+  - 三层数据同步：本地 Markdown + SQLite + ChromaDB
+  - 内嵌 aiohttp HTTP 服务，无需独立进程
+- **Git 版本控制**：每次文档变更自动 commit，保留完整历史
+  - `git_enabled`: 启用 Git 版本控制
+  - `git_auto_push`: 自动推送到远程仓库
+- **`/webhook` 指令**：查看 Webhook 服务状态
+- **增量更新 API**：
+  - `RAG.upsert_doc()`: 更新或插入单个文档向量
+  - `RAG.delete_doc()`: 删除指定文档向量
+  - `DocIndex.delete_doc()`: 删除索引记录
+  - `DocIndex.get_doc_by_yuque_id()`: 按语雀 ID 查询
+
+### 架构
+- `novabot/webhook.py`：Webhook 处理器，处理语雀事件
+- `novabot/git_ops.py`：Git 操作封装（init、add、commit、push）
+- `main.py`：内嵌 aiohttp 服务器，生命周期与 AstrBot 同步
+
+### 配置
+- `webhook_enabled`: 启用 Webhook 服务（默认 false）
+- `webhook_port`: Webhook 服务端口（默认 8766）
+- `git_enabled`: 启用 Git 版本控制（默认 true）
+- `git_auto_push`: 自动推送到远程仓库（默认 false）
+
 ## [v0.10.0] - 2026-03-26
 
 ### 新增

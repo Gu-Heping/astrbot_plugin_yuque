@@ -22,6 +22,10 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `embedding_api_key` | Embedding API Key |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
+| `webhook_enabled` | 启用 Webhook 服务（实时同步语雀文档变更） |
+| `webhook_port` | Webhook 服务端口，默认 `8766` |
+| `git_enabled` | 启用 Git 版本控制（保留文档变更历史） |
+| `git_auto_push` | 自动推送到远程仓库（需先配置 git remote） |
 
 ## 指令
 
@@ -36,7 +40,44 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/sync members` | 同步团队成员 |
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
+| `/webhook` | Webhook 服务状态 |
 | `/novabot` | 帮助信息 |
+
+## Webhook 配置
+
+启用 Webhook 后，语雀文档变更将实时同步到本地，无需手动 `/sync`。
+
+### 配置步骤
+
+1. 在 AstrBot 管理面板启用 `webhook_enabled`
+2. 设置 `webhook_port`（默认 8766）
+3. 在语雀知识库设置中添加 Webhook URL：
+   ```
+   http://your-server:8766/yuque/webhook
+   ```
+4. 选择触发事件：`publish`、`update`、`delete`
+
+### 数据同步流程
+
+```
+语雀 Webhook → WebhookHandler
+                   ↓
+        ┌─────────┼─────────┐
+        ↓         ↓         ↓
+   本地 MD    SQLite    ChromaDB
+   写入/删除  upsert   upsert
+        ↓
+   Git commit（可选）
+```
+
+### Git 版本控制
+
+启用 `git_enabled` 后，每次文档变更自动提交到本地 Git 仓库，保留完整历史。
+
+如需推送到远程仓库：
+1. 进入 `data/nova/yuque_docs/` 目录
+2. 执行 `git remote add origin <repo-url>`
+3. 在配置中启用 `git_auto_push`
 
 ## 使用流程
 
@@ -135,7 +176,9 @@ astrbot_plugin_yuque/
 │   ├── rag.py           # RAG 检索引擎
 │   ├── yuque_client.py  # 语雀 API 客户端
 │   ├── sync.py          # 文档同步
-│   └── doc_index.py     # SQLite 元数据索引
+│   ├── doc_index.py     # SQLite 元数据索引
+│   ├── webhook.py       # Webhook 处理器
+│   └── git_ops.py       # Git 操作封装
 ├── metadata.yaml        # 插件元数据
 └── requirements.txt     # Python 依赖
 ```
@@ -146,6 +189,7 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.11.0 | Webhook 实时同步、Git 版本控制 |
 | v0.10.0 | 元数据索引（SQLite）、按作者/知识库查询 |
 | v0.9.x | grep 优化、read_doc 工具、孤儿文件清理 |
 | v0.8.0 | LLM 工具调用、Agentic RAG |

@@ -68,23 +68,21 @@ class WebhookHandler:
             logger.warning(f"[Webhook] 无法解析 slug: doc_id={doc_id}")
             return {"status": "error", "message": "cannot resolve slug"}
 
-        # 获取文档详情
+        # 获取文档详情（使用 repo_id）
         client = self.plugin._get_client()
-        namespace = await self._get_namespace(client, repo_id, repo_slug)
-
-        if not namespace:
-            logger.warning(f"[Webhook] 无法获取 namespace: repo_id={repo_id}")
-            return {"status": "error", "message": "cannot get namespace"}
 
         try:
-            detail = await client.get_doc_detail(namespace, slug)
+            detail = await client.get_doc_detail(repo_id, slug)
         except Exception as e:
             logger.error(f"[Webhook] 获取文档详情失败: {e}")
             return {"status": "error", "message": str(e)}
 
         if not detail:
-            logger.warning(f"[Webhook] 文档详情为空: {namespace}/{slug}")
+            logger.warning(f"[Webhook] 文档详情为空: repo_id={repo_id}, slug={slug}")
             return {"status": "error", "message": "empty detail"}
+
+        # 获取 namespace（用于目录名，可选）
+        namespace = await self._get_namespace(client, repo_id, repo_slug)
 
         # 写入 Markdown
         repo_dir, rel_path = self._write_markdown(detail, repo_name, namespace)
@@ -179,16 +177,16 @@ class WebhookHandler:
             except Exception:
                 pass
 
-        # 从 API 获取
+        # 从 API 获取（使用 repo_id）
         try:
-            repo_detail = await client.get_repo_detail(repo_id)
+            repo_detail = await client.get_repo(repo_id)
             return repo_detail.get("namespace", "")
         except Exception as e:
             logger.warning(f"[Webhook] 获取知识库详情失败: {e}")
 
         return None
 
-    def _write_markdown(self, detail: dict, repo_name: str, namespace: str) -> tuple:
+    def _write_markdown(self, detail: dict, repo_name: str, namespace: Optional[str]) -> tuple:
         """写入 Markdown 文件
 
         Returns:
@@ -198,8 +196,13 @@ class WebhookHandler:
 
         self.docs_dir.mkdir(parents=True, exist_ok=True)
 
-        # 知识库目录名
-        dir_name = YuqueClient.slug_safe(repo_name) or namespace.replace("/", "_")
+        # 知识库目录名：优先用 repo_name，备选用 namespace
+        if repo_name:
+            dir_name = YuqueClient.slug_safe(repo_name)
+        elif namespace:
+            dir_name = namespace.replace("/", "_")
+        else:
+            dir_name = "unknown"
         repo_dir = self.docs_dir / dir_name
         repo_dir.mkdir(parents=True, exist_ok=True)
 
@@ -259,20 +262,10 @@ class WebhookHandler:
 
     def _resolve_author(self, detail: dict) -> str:
         """解析文档作者名"""
-        # 优先从 .yuque-members.json 查找
-        members_file = self.docs_dir / ".yuque-members.json"
-        members = {}
-        if members_file.exists():
-            try:
-                members = json.loads(members_file.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-
         # 从 detail 的 creator/user/last_editor 获取
         for key in ("creator", "user", "last_editor"):
             obj = detail.get(key)
             if isinstance(obj, dict):
-                user_id = str(obj.get("id", ""))
                 name = obj.get("name", "") or obj.get("login", "")
                 if name:
                     return name
