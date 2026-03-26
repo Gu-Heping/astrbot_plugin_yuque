@@ -536,6 +536,7 @@ class NovaBotPlugin(Star):
         用法: 
         - /sync - 全量同步当前绑定用户的知识库
         - /sync status - 查看同步状态
+        - /sync members - 仅同步团队成员
         """
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
@@ -581,6 +582,35 @@ class NovaBotPlugin(Star):
                     f"尚未同步\n"
                     f"使用 /sync 开始同步"
                 )
+            return
+        
+        # 仅同步团队成员
+        if action.lower() == "members":
+            if not self.yuque_token:
+                yield event.plain_result("无法同步：团队 Token 未配置")
+                return
+            
+            yield event.plain_result("🔄 开始同步团队成员...")
+            
+            try:
+                client = YuqueClient(self.yuque_token, self.yuque_base_url)
+                count = await self.yuque_sync._sync_team_members(client, self.storage)
+                await client.close()
+                
+                if count > 0:
+                    yield event.plain_result(
+                        f"✅ 团队成员同步完成\n"
+                        f"共 {count} 人\n"
+                        f"用户可使用 /bind <用户名> 绑定"
+                    )
+                else:
+                    yield event.plain_result(
+                        "⚠️ 未获取到成员数据\n"
+                        "请检查 Token 是否有团队权限"
+                    )
+            except Exception as e:
+                logger.error(f"同步团队成员失败: {e}")
+                yield event.plain_result(f"❌ 同步失败：{str(e)}")
             return
         
         # 执行全量同步（使用团队 Token）
@@ -952,11 +982,12 @@ class NovaBotPlugin(Star):
             "🤖 NovaBot - NOVA 社团智能助手\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "指令列表：\n"
-            "• /bind <Token> - 绑定语雀账号\n"
+            "• /bind <用户名> - 绑定语雀账号\n"
             "• /unbind - 解除绑定\n"
             "• /profile - 查看用户画像\n"
             "• /sync - 同步语雀知识库\n"
             "• /sync status - 查看同步状态\n"
+            "• /sync members - 同步团队成员\n"
             "• /rag status - 查看 RAG 状态\n"
             "• /rag search <关键词> - 搜索文档\n"
             "• /novabot - 显示帮助\n"
