@@ -319,6 +319,7 @@ class RAGEngine:
 
     def index_from_sync(self, docs_dir: str) -> int:
         """从同步目录读取 Markdown 并索引"""
+        import re
         import yaml
 
         logger.info(f"[RAG] 从目录读取文档: {docs_dir}")
@@ -337,6 +338,7 @@ class RAGEngine:
                 metadata = {}
                 body = content
 
+                # 1. 去掉 YAML frontmatter
                 if content.startswith("---"):
                     end = content.find("\n---", 3)
                     if end != -1:
@@ -345,6 +347,15 @@ class RAGEngine:
                             body = content[end + 4:].strip()
                         except:
                             pass
+
+                # 2. 去掉元信息表格（| 作者 | 创建时间 | 更新时间 | ...）
+                # 匹配表格：| xxx | xxx | ... | 后跟分隔行 |---|---|... 和数据行
+                table_pattern = r'\| 作者 \| 创建时间 \| 更新时间 \|\n\|[-| ]+\|\n\|[^|]+\|[^|]+\|[^|]+\|\n*'
+                body = re.sub(table_pattern, '', body).strip()
+
+                # 3. 去掉其他可能的元信息表格
+                # 匹配以 | 开头的表格块（连续多行）
+                body = re.sub(r'(\|[^\n]+\|\n){3,}', '', body).strip()
 
                 if not body or not body.strip():
                     continue
@@ -379,7 +390,7 @@ class RAGEngine:
             results = self.vectorstore.similarity_search(query, k=k)
             return [
                 {
-                    "content": doc.page_content[:500] if doc.page_content else "",
+                    "content": doc.page_content[:300] if doc.page_content else "",
                     "title": doc.metadata.get("title", ""),
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
