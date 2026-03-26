@@ -112,16 +112,24 @@ class YuqueSync:
         logger.info(f"同步知识库列表完成，共 {len(repos)} 个知识库")
         return repos
 
-    async def sync_repo_docs(self, client: YuqueClient, repo_namespace: str, with_content: bool = False) -> list:
-        """同步知识库文档"""
+    async def sync_repo_docs(self, client: YuqueClient, repo_namespace: str, with_content: bool = False, members: dict = None) -> list:
+        """同步知识库文档为 Markdown 文件"""
         docs = await client.get_repo_docs(repo_namespace, limit=100)
+        
+        # 创建知识库目录
+        repo_dir = self.docs_dir / repo_namespace.replace("/", "_")
+        repo_dir.mkdir(parents=True, exist_ok=True)
         
         synced_docs = []
         for doc in docs:
+            doc_id = doc.get("id")
+            slug = doc.get("slug", str(doc_id))
+            title = doc.get("title", "Untitled")
+            
             doc_info = {
-                "id": doc.get("id"),
-                "slug": doc.get("slug"),
-                "title": doc.get("title"),
+                "id": doc_id,
+                "slug": slug,
+                "title": title,
                 "description": doc.get("description", ""),
                 "updated_at": doc.get("updated_at"),
                 "created_at": doc.get("created_at"),
@@ -129,26 +137,86 @@ class YuqueSync:
                 "repo_namespace": repo_namespace,
             }
             
-            # 可选：同步正文内容
+            # 获取正文内容
             if with_content:
                 try:
-                    detail = await client.get_doc_detail(repo_namespace, doc["slug"])
+                    detail = await client.get_doc_detail(repo_namespace, slug)
                     doc_info["content"] = detail.get("content", "")
                     doc_info["content_html"] = detail.get("content_html", "")
+                    doc_info["book"] = detail.get("book", {})
+                    doc_info["user_id"] = detail.get("user_id")
+                    
+                    # 从成员缓存获取作者姓名
+                    if members and doc_info.get("user_id"):
+                        member_info = members.get(str(doc_info["user_id"]), {})
+                        doc_info["author"] = member_info.get("name", "")
+                    else:
+                        doc_info["author"] = ""
+                    
+                    # 写入 Markdown 文件
+                    md_content = self._build_md(doc_info)
+                    md_file = repo_dir / f"{self._safe_filename(title, slug)}.md"
+                    md_file.write_text(md_content, encoding="utf-8")
+                    
                 except Exception as e:
-                    logger.warning(f"获取文档正文失败 {doc['slug']}: {e}")
+                    logger.warning(f"获取文档正文失败 {slug}: {e}")
             
             synced_docs.append(doc_info)
         
-        # 保存文档列表
-        docs_file = self.docs_dir / f"{repo_namespace.replace('/', '_')}_docs.json"
-        docs_file.write_text(
-            json.dumps(synced_docs, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        
         logger.info(f"同步知识库 {repo_namespace} 完成，共 {len(synced_docs)} 篇文档")
         return synced_docs
+
+    def _build_md(self, doc: dict) -> str:
+        """构建带 frontmatter 的 Markdown"""
+        # Frontmatter 字段
+        fm = {
+            "id": doc.get("id"),
+            "title": doc.get("title", ""),
+            "slug": doc.get("slug", ""),
+            "created_at": doc.get("created_at", ""),
+            "updated_at": doc.get("updated_at", ""),
+        }
+        
+        if doc.get("author"):
+            fm["author"] = doc["author"]
+        
+        book = doc.get("book", {})
+        if book and book.get("name"):
+            fm["book_name"] = book["name"]
+        
+        if doc.get("description"):
+            fm["description"] = doc["description"]
+        
+        # YAML frontmatter
+        import yaml
+        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
+        
+        # 构建 Markdown
+        md = f"---\n{yaml_block}\n---\n\n"
+        
+        # 作者信息表格
+        author = doc.get("author", "") or str(doc.get("user_id", ""))
+        created = doc.get("created_at", "")
+        updated = doc.get("updated_at", "")
+        
+        md += "| 作者 | 创建时间 | 更新时间 |\n"
+        md += "|------|----------|----------|\n"
+        md += f"| {author} | {created} | {updated} |\n\n"
+        
+        # 正文
+        content = doc.get("content", "")
+        if content:
+            md += content
+        
+        return md
+
+    def _safe_filename(self, title: str, slug: str) -> str:
+        """生成安全的文件名"""
+        import re
+        # 移除不安全字符
+        safe_title = re.sub(r'[<>:"/\\|?*]', '', title)
+        safe_title = safe_title.strip()[:50]  # 限制长度
+        return safe_title if safe_title else slug
 
     async def full_sync(self, client: YuqueClient, user_id: int, with_content: bool = True, storage=None) -> dict:
         """全量同步用户所有知识库
@@ -162,8 +230,10 @@ class YuqueSync:
         state = self.load_sync_state()
         
         # 同步团队成员（如果有 storage）
+        members = {}
         if storage and client:
             await self._sync_team_members(client, storage)
+            members = storage.load_members()
         
         # 同步知识库列表
         repos = await self.sync_user_repos(client, user_id)
@@ -177,7 +247,7 @@ class YuqueSync:
                 continue
             
             try:
-                docs = await self.sync_repo_docs(client, namespace, with_content=with_content)
+                docs = await self.sync_repo_docs(client, namespace, with_content=with_content, members=members)
                 total_docs += len(docs)
                 repo_stats[namespace] = {
                     "name": repo.get("name", ""),

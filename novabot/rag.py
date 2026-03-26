@@ -75,9 +75,12 @@ class RAGEngine:
                 "id": doc.get("id", ""),
                 "title": doc.get("title", ""),
                 "slug": doc.get("slug", ""),
-                "repo_namespace": doc.get("repo_namespace", ""),
                 "author": doc.get("author", ""),
+                "book_name": doc.get("book_name", ""),
+                "repo_namespace": doc.get("repo_namespace", ""),
                 "source": f"yuque:{doc.get('repo_namespace', '')}/{doc.get('slug', '')}",
+                "created_at": doc.get("created_at", ""),
+                "updated_at": doc.get("updated_at", ""),
                 "word_count": doc.get("word_count", len(content)),
             }
 
@@ -95,7 +98,7 @@ class RAGEngine:
 
     def index_from_sync(self, docs_dir: str) -> int:
         """
-        从同步目录读取文档并索引
+        从同步目录读取 Markdown 文件并索引
 
         Args:
             docs_dir: YuqueSync 同步的文档目录
@@ -109,15 +112,60 @@ class RAGEngine:
 
         all_docs = []
 
-        # 遍历所有 *_docs.json 文件
-        for docs_file in docs_path.glob("*_docs.json"):
+        # 遍历所有 .md 文件
+        for md_file in docs_path.rglob("*.md"):
             try:
-                data = json.loads(docs_file.read_text(encoding="utf-8"))
-                all_docs.extend(data)
+                content = md_file.read_text(encoding="utf-8")
+                metadata = self._parse_frontmatter(content)
+                
+                if metadata:
+                    # 移除 frontmatter 后的正文
+                    body = self._remove_frontmatter(content)
+                    
+                    all_docs.append({
+                        "content": body,
+                        "id": metadata.get("id"),
+                        "title": metadata.get("title", ""),
+                        "slug": metadata.get("slug", ""),
+                        "author": metadata.get("author", ""),
+                        "book_name": metadata.get("book_name", ""),
+                        "repo_namespace": str(md_file.parent.relative_to(docs_path)),
+                        "created_at": metadata.get("created_at", ""),
+                        "updated_at": metadata.get("updated_at", ""),
+                    })
             except Exception as e:
-                print(f"读取 {docs_file} 失败: {e}")
+                print(f"读取 {md_file} 失败: {e}")
 
         return self.index_docs(all_docs)
+
+    def _parse_frontmatter(self, content: str) -> Optional[dict]:
+        """解析 Markdown frontmatter"""
+        import yaml
+        
+        if not content.startswith("---"):
+            return None
+        
+        # 找到 frontmatter 结束位置
+        end = content.find("\n---", 3)
+        if end == -1:
+            return None
+        
+        yaml_content = content[3:end].strip()
+        try:
+            return yaml.safe_load(yaml_content)
+        except Exception:
+            return None
+
+    def _remove_frontmatter(self, content: str) -> str:
+        """移除 frontmatter，返回正文"""
+        if not content.startswith("---"):
+            return content
+        
+        end = content.find("\n---", 3)
+        if end == -1:
+            return content
+        
+        return content[end + 4:].strip()
 
     def search(self, query: str, k: int = 5) -> list[dict]:
         """
