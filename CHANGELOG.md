@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.9.3] - 2026-03-26
+
+### 修复
+- **知识库列表路径**：同步时同时保存 `yuque_repos.json` 供 LLM 工具读取
+- **知识库名称为空**：name 为空时使用 namespace 作为备选
+- **目录名无效**：确保目录名不为空，空时使用 namespace
+
 ## [v0.9.2] - 2026-03-26
 
 ### 修复

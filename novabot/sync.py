@@ -88,7 +88,9 @@ class DocSyncer:
         Returns:
             同步统计信息
         """
-        repo_dir = self.output_dir / YuqueClient.slug_safe(repo_name)
+        # 确保目录名不为空
+        dir_name = YuqueClient.slug_safe(repo_name) or namespace.replace("/", "_")
+        repo_dir = self.output_dir / dir_name
         repo_dir.mkdir(parents=True, exist_ok=True)
 
         # 获取 TOC
@@ -286,7 +288,7 @@ async def sync_all_repos(
 
     for i, repo in enumerate(repos):
         namespace = repo.get("namespace", "")
-        name = repo.get("name", "")
+        name = repo.get("name", "") or namespace  # 如果 name 为空，使用 namespace
         if not namespace:
             continue
 
@@ -309,9 +311,13 @@ async def sync_all_repos(
             "items_count": repo.get("items_count", 0),
         })
 
-    # 保存知识库列表
+    # 保存知识库列表（同时保存两份：一份在 docs 目录，一份在 data 根目录供工具读取）
     repos_file = output_dir / ".repos.json"
     repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # 额外保存一份到 data 根目录，供 LLM 工具读取
+    repos_cache = output_dir.parent / "yuque_repos.json"
+    repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles")
     return {
