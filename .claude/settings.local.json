@@ -33,7 +33,8 @@
       "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76480492/toc\")",
       "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76763686/toc\")",
       "Bash(curl -s -H 'X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP' https://www.yuque.com/api/v2/repos/76763687/toc)",
-      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76763690/toc\")"
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://www.yuque.com/api/v2/repos/76763690/toc\")",
+      "Bash(wc:*)"
     ]
   }
 }

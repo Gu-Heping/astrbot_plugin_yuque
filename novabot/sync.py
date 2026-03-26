@@ -232,8 +232,8 @@ class DocSyncer:
                     "author": author,
                     "book_name": book.get("name", "") if book else "",
                     "book_namespace": namespace,
-                    "created_at": detail.get("created_at", ""),
-                    "updated_at": detail.get("updated_at", ""),
+                    "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
+                    "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
                     "word_count": len(body),
                     "file_path": rel_path,
                 })

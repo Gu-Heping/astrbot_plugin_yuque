@@ -355,7 +355,7 @@ class ProfileGenerator:
 # 主插件类
 # ============================================================================
 
-@register("novabot", "谷和平", "NOVA 社团智能助手", "0.5.0")
+@register("novabot", "peace", "NOVA 社团智能助手", "0.5.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
