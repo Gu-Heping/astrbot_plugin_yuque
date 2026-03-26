@@ -311,14 +311,7 @@ class NovaBotPlugin(Star):
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
 
                 # 计算有效的目录名
-                valid_dirs = set()
-                for r in repos:
-                    name = r.get("name", "")
-                    ns = r.get("namespace", "")
-                    if name:
-                        valid_dirs.add(YuqueClient.slug_safe(name))
-                    if ns:
-                        valid_dirs.add(ns.replace("/", "_"))
+                valid_dirs = {YuqueClient.slug_safe(r.get("name", "")) for r in repos if r.get("name")}
 
                 # 找出孤儿目录并删除
                 deleted = []
