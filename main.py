@@ -149,26 +149,57 @@ class NovaBotPlugin(Star):
                 await self._webhook_runner.setup()
                 self._webhook_site = web.TCPSite(self._webhook_runner, "0.0.0.0", port)
                 await self._webhook_site.start()
-                logger.info(f"Webhook 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
+                logger.info(f"[Webhook] 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
+                logger.info(f"[Webhook] 健康检查: http://0.0.0.0:{port}/health")
             except Exception as e:
-                logger.error(f"Webhook 服务启动失败: {e}")
+                logger.error(f"[Webhook] 服务启动失败: {e}", exc_info=True)
+
+    async def terminate(self):
+        """插件卸载时的清理"""
+        # 关闭 Webhook 服务
+        if self._webhook_site:
+            try:
+                await self._webhook_site.stop()
+                logger.info("[Webhook] 服务已停止")
+            except Exception as e:
+                logger.warning(f"[Webhook] 停止服务失败: {e}")
+
+        if self._webhook_runner:
+            try:
+                await self._webhook_runner.cleanup()
+            except Exception as e:
+                logger.warning(f"[Webhook] 清理 runner 失败: {e}")
+
+        # 关闭语雀客户端
+        await self._close_client()
+        logger.info("NovaBot 插件已卸载")
 
     async def _handle_webhook_request(self, request: web.Request) -> web.Response:
         """处理语雀 Webhook 请求"""
+        # 请求基本信息
+        client_host = request.remote or "unknown"
+        logger.info(f"[Webhook] 收到请求: {client_host} -> {request.path}")
+
         if not self.webhook_handler:
+            logger.error("[Webhook] 处理器未初始化")
             return web.Response(status=503, text="Webhook not initialized")
 
+        # 解析 JSON
         try:
             payload = await request.json()
-        except Exception:
+            logger.debug(f"[Webhook] 请求体大小: {len(str(payload))} 字符")
+        except Exception as e:
+            logger.error(f"[Webhook] JSON 解析失败: {e}")
             return web.Response(status=400, text="Invalid JSON")
 
+        # 处理请求
         try:
             result = await self.webhook_handler.handle(payload)
-            logger.info(f"[Webhook] 处理结果: {result}")
+            status_code = 200 if result.get("status") == "ok" else 500
+            logger.info(f"[Webhook] 响应: {status_code}, 结果: {result}")
             return web.Response(status=200, text="OK")
         except Exception as e:
-            logger.error(f"[Webhook] 处理失败: {e}")
+            logger.error(f"[Webhook] 处理失败: {e}", exc_info=True)
             return web.Response(status=500, text=str(e))
 
     async def _health_check(self, request: web.Request) -> web.Response:

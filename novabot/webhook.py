@@ -33,23 +33,43 @@ class WebhookHandler:
         Returns:
             处理结果
         """
+        # 详细日志：记录原始 payload
+        logger.info(f"[Webhook] ========== 开始处理 ==========")
+
         data = payload.get("data", {})
         action = data.get("action_type", "")
+        doc_id = data.get("id")
+        book = data.get("book", {})
 
-        logger.info(f"[Webhook] 收到事件: {action} (id={data.get('id')})")
+        # 基本信息
+        logger.info(f"[Webhook] 事件类型: {action}")
+        logger.info(f"[Webhook] 文档ID: {doc_id}")
+        logger.info(f"[Webhook] 文档标题: {data.get('title', '(无标题)')}")
+        logger.info(f"[Webhook] 文档slug: {data.get('slug', '(无)')}")
+        logger.info(f"[Webhook] 知识库: {book.get('name', '(无)')} (id={book.get('id')})")
+
+        # Debug: 完整 payload（仅在需要时启用）
+        logger.debug(f"[Webhook] 完整payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
         if action in ("publish", "update"):
-            return await self._handle_doc_change(payload)
+            result = await self._handle_doc_change(payload)
         elif action == "delete":
-            return await self._handle_doc_delete(payload)
+            result = await self._handle_doc_delete(payload)
+        else:
+            logger.info(f"[Webhook] 忽略事件类型: {action}")
+            result = {"status": "ignored", "action": action}
 
-        return {"status": "ignored", "action": action}
+        logger.info(f"[Webhook] 处理结果: {result}")
+        logger.info(f"[Webhook] ========== 处理完成 ==========")
+        return result
 
     async def _handle_doc_change(self, payload: dict) -> dict:
         """处理文档发布/更新事件"""
         data = payload.get("data", {})
         doc_id = data.get("id")
         book = data.get("book", {})
+
+        logger.info(f"[Webhook] → 处理文档变更事件")
 
         if not book:
             logger.error("[Webhook] 文档事件缺少 book 信息")
@@ -60,21 +80,27 @@ class WebhookHandler:
         repo_slug = book.get("slug", "")
         slug = data.get("slug", "")
 
+        logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
+
         if not slug:
-            # 尝试从 TOC 获取 slug
+            logger.info(f"[Webhook] slug 为空，尝试从 TOC 解析...")
             slug = await self._resolve_slug_from_toc(repo_id, doc_id)
 
         if not slug:
             logger.warning(f"[Webhook] 无法解析 slug: doc_id={doc_id}")
             return {"status": "error", "message": "cannot resolve slug"}
 
+        logger.info(f"[Webhook] 文档 slug: {slug}")
+
         # 获取文档详情（使用 repo_id）
         client = self.plugin._get_client()
+        logger.info(f"[Webhook] 获取文档详情: repo_id={repo_id}, slug={slug}")
 
         try:
             detail = await client.get_doc_detail(repo_id, slug)
+            logger.info(f"[Webhook] 获取文档详情成功，标题: {detail.get('title', '(无)')}")
         except Exception as e:
-            logger.error(f"[Webhook] 获取文档详情失败: {e}")
+            logger.error(f"[Webhook] 获取文档详情失败: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
         if not detail:
@@ -83,18 +109,27 @@ class WebhookHandler:
 
         # 获取 namespace（用于目录名，可选）
         namespace = await self._get_namespace(client, repo_id, repo_slug)
+        logger.info(f"[Webhook] 知识库 namespace: {namespace or '(无)'}")
 
         # 写入 Markdown
+        logger.info(f"[Webhook] 步骤 1/4: 写入 Markdown 文件")
         repo_dir, rel_path = self._write_markdown(detail, repo_name, namespace)
 
         # 更新 SQLite
+        logger.info(f"[Webhook] 步骤 2/4: 更新 SQLite 索引")
         self._update_doc_index(detail, rel_path)
 
         # 更新 ChromaDB
+        logger.info(f"[Webhook] 步骤 3/4: 更新 ChromaDB 向量")
         self._update_rag(detail, rel_path)
 
         # Git commit
+        logger.info(f"[Webhook] 步骤 4/4: Git 提交")
         commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""))
+        if commit_hash:
+            logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
+        else:
+            logger.info(f"[Webhook] Git 提交跳过（未启用或失败）")
 
         return {
             "status": "ok",
@@ -109,8 +144,13 @@ class WebhookHandler:
         data = payload.get("data", {})
         doc_id = data.get("id")
 
+        logger.info(f"[Webhook] → 处理文档删除事件")
+
         if not doc_id:
+            logger.error("[Webhook] 删除事件缺少 doc_id")
             return {"status": "error", "message": "missing doc_id"}
+
+        logger.info(f"[Webhook] 查找文档: doc_id={doc_id}")
 
         # 从索引查找文件路径
         from .doc_index import DocIndex
@@ -123,26 +163,40 @@ class WebhookHandler:
 
         if doc_record:
             file_path = doc_record.get("file_path", "")
+            logger.info(f"[Webhook] 找到文档记录: {file_path}")
             if file_path:
                 full_path = self.docs_dir / file_path
                 if full_path.exists():
                     try:
                         full_path.unlink()
                         deleted_files.append(file_path)
-                        logger.info(f"[Webhook] 删除文件: {file_path}")
+                        logger.info(f"[Webhook] 删除文件成功: {file_path}")
                     except Exception as e:
                         logger.warning(f"[Webhook] 删除文件失败: {e}")
+                else:
+                    logger.warning(f"[Webhook] 文件不存在: {file_path}")
+        else:
+            logger.warning(f"[Webhook] 索引中未找到文档: doc_id={doc_id}")
 
         # 删除 SQLite 记录
+        logger.info(f"[Webhook] 步骤 1/3: 删除 SQLite 记录")
         doc_index.delete_doc(doc_id)
+        logger.info(f"[Webhook] SQLite 记录已删除")
 
         # 删除 ChromaDB 向量
+        logger.info(f"[Webhook] 步骤 2/3: 删除 ChromaDB 向量")
         if self.plugin.rag:
             self.plugin.rag.delete_doc(doc_id)
+            logger.info(f"[Webhook] ChromaDB 向量已删除")
+        else:
+            logger.info(f"[Webhook] RAG 未初始化，跳过")
 
         # Git commit
+        logger.info(f"[Webhook] 步骤 3/3: Git 提交")
         if deleted_files:
-            self._git_commit(deleted_files, "delete", f"doc_id={doc_id}")
+            commit_hash = self._git_commit(deleted_files, "delete", f"doc_id={doc_id}")
+            if commit_hash:
+                logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
 
         return {
             "status": "ok",
