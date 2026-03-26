@@ -308,12 +308,14 @@ class YuqueSync:
         # 获取知识库列表
         if is_group:
             group_id = user_info.get("id")
+            logger.info(f"团队 Token，ID: {group_id}")
             repos = await client.get_group_repos(group_id)
-            logger.info(f"团队 Token，获取到 {len(repos)} 个知识库")
         else:
             user_id = user_info.get("id")
+            logger.info(f"个人 Token，ID: {user_id}")
             repos = await client.get_user_repos(user_id)
-            logger.info(f"个人 Token，获取到 {len(repos)} 个知识库")
+
+        logger.info(f"获取到 {len(repos)} 个知识库，开始同步...")
 
         # 获取成员映射（用于填充作者名）
         members = self.storage.load_members()
@@ -322,22 +324,24 @@ class YuqueSync:
         total_docs = 0
         repo_stats = {}
 
-        for repo in repos:
+        for i, repo in enumerate(repos):
             namespace = repo.get("namespace", "")
+            repo_name = repo.get("name", "")
             if not namespace:
                 continue
 
+            logger.info(f"[{i+1}/{len(repos)}] 同步: {repo_name}")
             try:
                 docs = await self._sync_repo_docs(client, namespace, with_content, members)
                 total_docs += len(docs)
                 repo_stats[namespace] = {
-                    "name": repo.get("name", ""),
+                    "name": repo_name,
                     "docs_count": len(docs),
                     "synced_at": datetime.now().isoformat()
                 }
             except Exception as e:
-                logger.error(f"同步知识库 {namespace} 失败: {e}")
-                repo_stats[namespace] = {"error": str(e)}
+                logger.error(f"同步知识库 {namespace} 失败: {e}", exc_info=True)
+                repo_stats[namespace] = {"name": repo_name, "error": str(e)}
 
         # 保存同步状态
         state = {
@@ -347,6 +351,7 @@ class YuqueSync:
             "token_type": "group" if is_group else "user"
         }
         self.storage.save_sync_state(state)
+        logger.info(f"同步完成，共 {total_docs} 篇文档")
 
         return {
             "repos_count": len(repos),
@@ -651,6 +656,12 @@ class NovaBotPlugin(Star):
                 f"文档: {result['docs_count']} 篇"
                 f"{rag_msg}"
             )
+        except httpx.HTTPStatusError as e:
+            logger.error(f"同步失败 HTTP: {e}")
+            yield event.plain_result(f"❌ API 错误: {e.response.status_code}")
+        except httpx.RequestError as e:
+            logger.error(f"同步失败 网络: {e}")
+            yield event.plain_result(f"❌ 网络错误: {e}")
         except Exception as e:
             logger.error(f"同步失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 同步失败: {e}")

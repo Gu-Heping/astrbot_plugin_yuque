@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://nova.yuque.com/api/v2/user\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://nova.yuque.com/api/v2/groups/66330942/statistics/members?page=1\")",
+      "Bash(curl -s -H \"X-Auth-Token: S7Eig1qGClaKWWHBCeiQ9N7iHOHrzhNgnUAVadjP\" \"https://nova.yuque.com/api/v2/groups/66330942/repos\")",
+      "Bash(python -m py_compile main.py)",
+      "Bash(python:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
