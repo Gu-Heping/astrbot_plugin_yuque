@@ -35,6 +35,12 @@
     "type": "int",
     "default": 8766
   },
+  "webhook_secret": {
+    "description": "Webhook 访问密钥（通过 X-Webhook-Secret 请求头校验）",
+    "type": "string",
+    "default": "",
+    "hint": "建议配置为高强度随机字符串"
+  },
   "git_enabled": {
     "description": "启用 Git 版本控制（保留文档变更历史）",
     "type": "bool",

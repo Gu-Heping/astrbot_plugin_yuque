@@ -4,6 +4,28 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.0] - 2026-03-26
+
+### 安全修复
+- **Webhook 鉴权**：新增 `webhook_secret` 配置项，通过 `X-Webhook-Secret` 请求头校验
+- **HTTP 返回码修正**：处理失败时正确返回 4xx/5xx 状态码，而非固定 200
+- **Git 配置安全**：禁止 GitOps 自动修改 git 用户配置，未配置身份时跳过 commit
+
+### 一致性修复
+- **路径生成统一**：Webhook 增量同步与全量同步使用相同的路径解析逻辑
+  - 新增 `_find_toc_item_path()` 按 TOC 解析文档子目录
+  - 新增 `_resolve_doc_output()` 统一输出路径决策
+- **作者解析统一**：Webhook 和全量同步共用 `YuqueClient.author_name_from_detail()`
+- **时间格式统一**：统一使用 `YuqueClient.normalize_timestamp()` 标准化时间
+
+### 性能优化
+- **索引查询优化**：用 SQLite 索引替代全盘扫描查找旧文档（`_get_old_record()`）
+- **RAG 去重优化**：按文档 ID 去重而非标题，避免标题相同误杀
+- **删除时 TOC 更新**：优先重新拉取完整 TOC 覆盖，避免本地修补导致结构破坏
+
+### 配置
+- `webhook_secret`: Webhook 访问密钥（强烈建议配置）
+
 ## [v0.11.0] - 2026-03-26
 
 ### 新增

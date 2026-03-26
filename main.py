@@ -175,31 +175,64 @@ class NovaBotPlugin(Star):
 
     async def _handle_webhook_request(self, request: web.Request) -> web.Response:
         """处理语雀 Webhook 请求"""
-        # 请求基本信息
         client_host = request.remote or "unknown"
         logger.info(f"[Webhook] 收到请求: {client_host} -> {request.path}")
 
         if not self.webhook_handler:
             logger.error("[Webhook] 处理器未初始化")
-            return web.Response(status=503, text="Webhook not initialized")
+            return web.json_response(
+                {"status": "error", "message": "handler not initialized"},
+                status=503,
+            )
+
+        # 鉴权
+        secret = self.config.get("webhook_secret", "")
+        if secret:
+            provided = request.headers.get("X-Webhook-Secret", "")
+            if not provided:
+                logger.warning(f"[Webhook] 缺少 Secret，来源: {client_host}")
+                return web.json_response(
+                    {"status": "error", "message": "missing secret"},
+                    status=401,
+                )
+            if provided != secret:
+                logger.warning(f"[Webhook] Secret 校验失败，来源: {client_host}")
+                return web.json_response(
+                    {"status": "error", "message": "invalid secret"},
+                    status=403,
+                )
+        elif not secret:
+            logger.warning("[Webhook] 未配置 webhook_secret，建议配置以防止伪造请求")
 
         # 解析 JSON
         try:
             payload = await request.json()
-            logger.debug(f"[Webhook] 请求体大小: {len(str(payload))} 字符")
         except Exception as e:
             logger.error(f"[Webhook] JSON 解析失败: {e}")
-            return web.Response(status=400, text="Invalid JSON")
+            return web.json_response(
+                {"status": "error", "message": "invalid json"},
+                status=400,
+            )
 
         # 处理请求
         try:
             result = await self.webhook_handler.handle(payload)
-            status_code = 200 if result.get("status") == "ok" else 500
-            logger.info(f"[Webhook] 响应: {status_code}, 结果: {result}")
-            return web.Response(status=200, text="OK")
+            action = payload.get("data", {}).get("action_type", "unknown")
+            logger.info(f"[Webhook] 处理完成 [{action}]: status={result.get('status')}")
+
+            if result.get("status") == "ok":
+                return web.json_response(result, status=200)
+            elif result.get("status") == "ignored":
+                return web.json_response(result, status=200)
+            else:
+                return web.json_response(result, status=500)
+
         except Exception as e:
-            logger.error(f"[Webhook] 处理失败: {e}", exc_info=True)
-            return web.Response(status=500, text=str(e))
+            logger.error(f"[Webhook] 处理异常: {e}", exc_info=True)
+            return web.json_response(
+                {"status": "error", "message": str(e)},
+                status=500,
+            )
 
     async def _health_check(self, request: web.Request) -> web.Response:
         """健康检查端点"""

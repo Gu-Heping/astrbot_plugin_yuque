@@ -13,6 +13,8 @@ import yaml
 from astrbot.api import logger
 
 from .git_ops import GitOps
+from .sync import toc_list_children
+from .yuque_client import YuqueClient
 
 if TYPE_CHECKING:
     from ..main import NovaBotPlugin
@@ -24,6 +26,63 @@ class WebhookHandler:
     def __init__(self, plugin: "NovaBotPlugin"):
         self.plugin = plugin
         self.docs_dir = plugin.storage.data_dir / "yuque_docs"
+
+    def _resolve_author(self, detail: dict) -> str:
+        """解析文档作者名"""
+        return YuqueClient.author_name_from_detail(detail)
+
+    def _find_toc_item_path(self, toc_list: list, doc_id: int) -> Optional[str]:
+        """根据 TOC 解析文档所在的相对子目录"""
+        if not toc_list or not doc_id:
+            return None
+
+        toc_by_uuid = {item["uuid"]: item for item in toc_list if item.get("uuid")}
+
+        def walk(parent_uuid: Optional[str], parent_path: str) -> Optional[str]:
+            for item in toc_list_children(parent_uuid, toc_by_uuid):
+                item_type = item.get("type", "DOC")
+                title = item.get("title", "无标题")
+                if item_type == "TITLE":
+                    segment = YuqueClient.slug_safe(title)
+                    next_path = f"{parent_path}/{segment}" if parent_path else segment
+                    result = walk(item.get("uuid"), next_path)
+                    if result is not None:
+                        return result
+                    continue
+
+                if item.get("id") == doc_id:
+                    return parent_path
+
+            return None
+
+        return walk(None, "")
+
+    def _resolve_doc_output(self, detail: dict, repo_name: str, namespace: Optional[str], toc_list: Optional[list]) -> tuple[Path, Path, str]:
+        """统一解析文档输出目录与相对路径"""
+        self.docs_dir.mkdir(parents=True, exist_ok=True)
+
+        if repo_name:
+            dir_name = YuqueClient.slug_safe(repo_name)
+        elif namespace:
+            dir_name = namespace.replace("/", "_")
+        else:
+            dir_name = "unknown"
+
+        repo_dir = self.docs_dir / dir_name
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        title = detail.get("title", "无标题")
+        slug = detail.get("slug", "")
+        doc_id = detail.get("id", 0)
+        base = YuqueClient.doc_basename(title, slug) or "untitled"
+
+        relative_parent = self._find_toc_item_path(toc_list or [], doc_id) or ""
+        target_dir = repo_dir / relative_parent if relative_parent else repo_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        out_file = target_dir / f"{base}.md"
+        rel_path = str(out_file.relative_to(self.docs_dir))
+        return repo_dir, out_file, rel_path
 
     async def handle(self, payload: dict) -> dict:
         """处理 Webhook 事件
@@ -83,10 +142,9 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
 
-        # 获取语雀客户端
         client = self.plugin._get_client()
 
-        # 获取 TOC（用于解析 slug 和更新 .toc.json）
+        # 获取 TOC
         toc_list = None
         try:
             toc_list = await client.get_repo_toc(repo_id)
@@ -108,8 +166,6 @@ class WebhookHandler:
         logger.info(f"[Webhook] 文档 slug: {slug}")
 
         # 获取文档详情
-        logger.info(f"[Webhook] 获取文档详情: repo_id={repo_id}, slug={slug}")
-
         try:
             detail = await client.get_doc_detail(repo_id, slug)
             logger.info(f"[Webhook] 获取文档详情成功，标题: {detail.get('title', '(无)')}")
@@ -121,34 +177,48 @@ class WebhookHandler:
             logger.warning(f"[Webhook] 文档详情为空: repo_id={repo_id}, slug={slug}")
             return {"status": "error", "message": "empty detail"}
 
-        # 获取 namespace（用于目录名，可选）
+        # 获取 namespace
         namespace = await self._get_namespace(client, repo_id, repo_slug)
         logger.info(f"[Webhook] 知识库 namespace: {namespace or '(无)'}")
 
+        # 统一路径解析（与全量同步保持一致）
+        logger.info(f"[Webhook] 步骤 1/5: 解析文档路径")
+        repo_dir, out_file, rel_path = self._resolve_doc_output(detail, repo_name, namespace, toc_list)
+
+        # 处理文档移动（删除旧路径文件）
+        old_record = self._get_old_record(doc_id)
+        if old_record:
+            old_path = old_record.get("file_path")
+            if old_path and old_path != rel_path:
+                old_file = self.docs_dir / old_path
+                if old_file.exists():
+                    try:
+                        old_file.unlink()
+                        logger.info(f"[Webhook] 删除旧路径文件: {old_path}")
+                    except Exception as e:
+                        logger.warning(f"[Webhook] 删除旧文件失败: {e}")
+
         # 写入 Markdown
-        logger.info(f"[Webhook] 步骤 1/5: 写入 Markdown 文件")
-        repo_dir, rel_path = self._write_markdown(detail, repo_name, namespace)
+        logger.info(f"[Webhook] 步骤 2/5: 写入 Markdown 文件")
+        self._write_markdown_file(out_file, detail, repo_dir)
 
         # 更新 SQLite
-        logger.info(f"[Webhook] 步骤 2/5: 更新 SQLite 索引")
+        logger.info(f"[Webhook] 步骤 3/5: 更新 SQLite 索引")
         self._update_doc_index(detail, rel_path)
 
         # 更新 ChromaDB
-        logger.info(f"[Webhook] 步骤 3/5: 更新 ChromaDB 向量")
+        logger.info(f"[Webhook] 步骤 4/5: 更新 ChromaDB 向量")
         self._update_rag(detail, rel_path)
 
-        # 更新 .toc.json（参考 yuque2git）
-        logger.info(f"[Webhook] 步骤 4/5: 更新 .toc.json")
+        # 更新 .toc.json
+        logger.info(f"[Webhook] 步骤 5/5: 更新 .toc.json")
         if toc_list:
             self._update_toc_json(repo_dir, toc_list)
 
         # Git commit
-        logger.info(f"[Webhook] 步骤 5/5: Git 提交")
         commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""))
         if commit_hash:
             logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
-        else:
-            logger.info(f"[Webhook] Git 提交跳过（未启用或失败）")
 
         return {
             "status": "ok",
@@ -162,6 +232,7 @@ class WebhookHandler:
         """处理文档删除事件"""
         data = payload.get("data", {})
         doc_id = data.get("id")
+        book = data.get("book", {})
 
         logger.info(f"[Webhook] → 处理文档删除事件")
 
@@ -169,24 +240,15 @@ class WebhookHandler:
             logger.error("[Webhook] 删除事件缺少 doc_id")
             return {"status": "error", "message": "missing doc_id"}
 
-        logger.info(f"[Webhook] 查找文档: doc_id={doc_id}")
-
-        # 从索引查找文件路径
-        from .doc_index import DocIndex
-
-        db_path = self.plugin.storage.data_dir / "doc_index.db"
-        doc_index = DocIndex(str(db_path))
-        doc_record = doc_index.get_doc_by_yuque_id(doc_id)
-
+        old_record = self._get_old_record(doc_id)
         deleted_files = []
         repo_dir = None
 
-        if doc_record:
-            file_path = doc_record.get("file_path", "")
+        if old_record:
+            file_path = old_record.get("file_path", "")
             logger.info(f"[Webhook] 找到文档记录: {file_path}")
             if file_path:
                 full_path = self.docs_dir / file_path
-                repo_dir = full_path.parent  # 知识库目录
                 if full_path.exists():
                     try:
                         full_path.unlink()
@@ -194,31 +256,43 @@ class WebhookHandler:
                         logger.info(f"[Webhook] 删除文件成功: {file_path}")
                     except Exception as e:
                         logger.warning(f"[Webhook] 删除文件失败: {e}")
-                else:
-                    logger.warning(f"[Webhook] 文件不存在: {file_path}")
+
+                try:
+                    repo_dir = self.docs_dir / Path(file_path).parts[0]
+                except Exception:
+                    repo_dir = full_path.parent
         else:
             logger.warning(f"[Webhook] 索引中未找到文档: doc_id={doc_id}")
 
         # 删除 SQLite 记录
         logger.info(f"[Webhook] 步骤 1/4: 删除 SQLite 记录")
+        from .doc_index import DocIndex
+
+        db_path = self.plugin.storage.data_dir / "doc_index.db"
+        doc_index = DocIndex(str(db_path))
         doc_index.delete_doc(doc_id)
-        logger.info(f"[Webhook] SQLite 记录已删除")
 
         # 删除 ChromaDB 向量
         logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
         if self.plugin.rag:
             self.plugin.rag.delete_doc(doc_id)
-            logger.info(f"[Webhook] ChromaDB 向量已删除")
-        else:
-            logger.info(f"[Webhook] RAG 未初始化，跳过")
 
-        # 更新 .toc.json
+        # 更新 .toc.json：优先重新拉取完整 TOC 覆盖
         logger.info(f"[Webhook] 步骤 3/4: 更新 .toc.json")
-        if repo_dir:
+        if repo_dir and book.get("id"):
+            try:
+                client = self.plugin._get_client()
+                toc_list = await client.get_repo_toc(book.get("id"))
+                self._update_toc_json(repo_dir, toc_list)
+            except Exception as e:
+                logger.warning(f"[Webhook] 重新获取 TOC 失败，回退到本地删除: {e}")
+                self._remove_from_toc_json(repo_dir, doc_id)
+        elif repo_dir:
             self._remove_from_toc_json(repo_dir, doc_id)
 
         # Git commit
         logger.info(f"[Webhook] 步骤 4/4: Git 提交")
+        commit_hash = None
         if deleted_files:
             commit_hash = self._git_commit(deleted_files, "delete", f"doc_id={doc_id}")
             if commit_hash:
@@ -228,7 +302,55 @@ class WebhookHandler:
             "status": "ok",
             "doc_id": doc_id,
             "deleted_files": deleted_files,
+            "commit": commit_hash,
         }
+
+    def _get_old_record(self, doc_id: int) -> Optional[dict]:
+        """从 SQLite 索引获取文档旧记录"""
+        if not doc_id:
+            return None
+
+        from .doc_index import DocIndex
+
+        try:
+            db_path = self.plugin.storage.data_dir / "doc_index.db"
+            doc_index = DocIndex(str(db_path))
+            return doc_index.get_doc_by_yuque_id(doc_id)
+        except Exception as e:
+            logger.debug(f"[Webhook] 读取旧索引失败: {e}")
+            return None
+
+    def _write_markdown_file(self, out_file: Path, detail: dict, repo_dir: Path):
+        """写入 Markdown 文件"""
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+
+        author = self._resolve_author(detail)
+        book = detail.get("book", {})
+        fm = {
+            "id": detail.get("id", 0),
+            "title": detail.get("title", "无标题"),
+            "slug": detail.get("slug", ""),
+            "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
+            "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
+        }
+        if author:
+            fm["author"] = author
+        if book.get("name"):
+            fm["book_name"] = book["name"]
+        if detail.get("description"):
+            fm["description"] = detail["description"]
+
+        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
+        body = detail.get("body", "") or detail.get("content", "") or ""
+        meta_table = (
+            "| 作者 | 创建时间 | 更新时间 |\n"
+            "|------|----------|----------|\n"
+            f"| {author or '未知'} | {fm['created_at']} | {fm['updated_at']} |\n\n"
+        )
+
+        content = f"---\n{yaml_block}\n---\n\n{meta_table}{body}"
+        out_file.write_text(content, encoding="utf-8")
+        logger.info(f"[Webhook] 写入文件: {out_file.relative_to(self.docs_dir)}")
 
     async def _get_namespace(self, client, repo_id: int, repo_slug: str) -> Optional[str]:
         """获取知识库 namespace"""
@@ -252,111 +374,6 @@ class WebhookHandler:
 
         return None
 
-    def _write_markdown(self, detail: dict, repo_name: str, namespace: Optional[str]) -> tuple:
-        """写入 Markdown 文件
-
-        Returns:
-            (repo_dir, rel_path)
-        """
-        from .yuque_client import YuqueClient
-
-        self.docs_dir.mkdir(parents=True, exist_ok=True)
-
-        # 知识库目录名：优先用 repo_name，备选用 namespace
-        if repo_name:
-            dir_name = YuqueClient.slug_safe(repo_name)
-        elif namespace:
-            dir_name = namespace.replace("/", "_")
-        else:
-            dir_name = "unknown"
-        repo_dir = self.docs_dir / dir_name
-        repo_dir.mkdir(parents=True, exist_ok=True)
-
-        # 文档标题和 slug
-        title = detail.get("title", "无标题")
-        slug = detail.get("slug", "")
-        doc_id = detail.get("id", 0)
-
-        # 文件名
-        base = YuqueClient.doc_basename(title, slug) or "untitled"
-        out_file = repo_dir / f"{base}.md"
-
-        # 检查是否有同 ID 的旧文件（文档移动/重命名）
-        old_file = self._find_doc_file(doc_id)
-        if old_file and old_file != out_file:
-            # 删除旧文件
-            try:
-                old_file.unlink()
-                logger.info(f"[Webhook] 删除旧文件: {old_file.relative_to(self.docs_dir)}")
-            except Exception:
-                pass
-
-        # 构建作者名
-        author = self._resolve_author(detail)
-
-        # 构建 YAML frontmatter
-        book = detail.get("book", {})
-        fm = {
-            "id": doc_id,
-            "title": title,
-            "slug": slug,
-            "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-            "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-        }
-        if author:
-            fm["author"] = author
-        if book.get("name"):
-            fm["book_name"] = book["name"]
-        if detail.get("description"):
-            fm["description"] = detail["description"]
-
-        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-
-        # 正文
-        body = detail.get("body", "") or detail.get("content", "") or ""
-
-        # 元信息表格
-        meta_table = f"| 作者 | 创建时间 | 更新时间 |\n|------|----------|----------|\n| {author or '未知'} | {fm['created_at']} | {fm['updated_at']} |\n\n"
-
-        content = f"---\n{yaml_block}\n---\n\n{meta_table}{body}"
-        out_file.write_text(content, encoding="utf-8")
-
-        rel_path = str(out_file.relative_to(self.docs_dir))
-        logger.info(f"[Webhook] 写入文件: {rel_path}")
-
-        return repo_dir, rel_path
-
-    def _resolve_author(self, detail: dict) -> str:
-        """解析文档作者名"""
-        # 从 detail 的 creator/user/last_editor 获取
-        for key in ("creator", "user", "last_editor"):
-            obj = detail.get(key)
-            if isinstance(obj, dict):
-                name = obj.get("name", "") or obj.get("login", "")
-                if name:
-                    return name
-
-        return ""
-
-    def _find_doc_file(self, doc_id: int) -> Optional[Path]:
-        """根据文档 ID 查找文件"""
-        if not doc_id:
-            return None
-
-        for md_file in self.docs_dir.rglob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                if content.startswith("---"):
-                    end = content.find("\n---", 3)
-                    if end != -1:
-                        fm = yaml.safe_load(content[3:end].strip())
-                        if fm and fm.get("id") == doc_id:
-                            return md_file
-            except Exception:
-                continue
-
-        return None
-
     def _update_doc_index(self, detail: dict, rel_path: str):
         """更新 SQLite 元数据索引"""
         from .doc_index import DocIndex
@@ -377,8 +394,8 @@ class WebhookHandler:
                 "author": author,
                 "book_name": book.get("name", "") if book else "",
                 "book_namespace": book.get("namespace", "") if book else "",
-                "created_at": detail.get("created_at", ""),
-                "updated_at": detail.get("updated_at", ""),
+                "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
+                "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
                 "word_count": len(body),
                 "file_path": rel_path,
             })

@@ -27,8 +27,6 @@ class GitOps:
             是否成功（True 表示仓库已存在或初始化成功）
         """
         if self.is_git_repo():
-            # 确保用户身份已配置
-            self._ensure_user_identity()
             return True
 
         try:
@@ -40,12 +38,9 @@ class GitOps:
             )
             if result.returncode == 0:
                 logger.info(f"[GitOps] Git 仓库初始化成功: {self.repo_dir}")
-                # 配置默认用户身份
-                self._ensure_user_identity()
                 return True
-            else:
-                logger.warning(f"[GitOps] Git init 失败: {result.stderr}")
-                return False
+            logger.warning(f"[GitOps] Git init 失败: {result.stderr}")
+            return False
         except FileNotFoundError:
             logger.error("[GitOps] Git 未安装，请先安装 Git")
             return False
@@ -53,32 +48,25 @@ class GitOps:
             logger.error(f"[GitOps] Git init 异常: {e}")
             return False
 
-    def _ensure_user_identity(self):
-        """确保 Git 用户身份已配置（Docker 容器内通常未配置）"""
+    def has_user_identity(self) -> bool:
+        """检查当前仓库是否已配置 Git 用户身份"""
         try:
-            # 检查是否已配置 user.name
             name_result = subprocess.run(
                 ["git", "config", "user.name"],
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
             )
-
-            if not name_result.stdout.strip():
-                # 未配置，设置默认值
-                subprocess.run(
-                    ["git", "config", "user.name", "NovaBot"],
-                    cwd=self.repo_dir,
-                    capture_output=True,
-                )
-                subprocess.run(
-                    ["git", "config", "user.email", "novabot@example.com"],
-                    cwd=self.repo_dir,
-                    capture_output=True,
-                )
-                logger.info("[GitOps] 已配置默认 Git 用户: NovaBot <novabot@example.com>")
+            email_result = subprocess.run(
+                ["git", "config", "user.email"],
+                cwd=self.repo_dir,
+                capture_output=True,
+                text=True,
+            )
+            return bool(name_result.stdout.strip() and email_result.stdout.strip())
         except Exception as e:
-            logger.debug(f"[GitOps] 配置用户身份失败: {e}")
+            logger.debug(f"[GitOps] 检查用户身份失败: {e}")
+            return False
 
     def add_commit(self, files: List[str], message: str) -> Optional[str]:
         """添加文件并提交
@@ -97,8 +85,11 @@ class GitOps:
         if not files:
             return None
 
+        if not self.has_user_identity():
+            logger.warning("[GitOps] 未配置 user.name/user.email，跳过 commit")
+            return None
+
         try:
-            # git add
             add_result = subprocess.run(
                 ["git", "add", *files],
                 cwd=self.repo_dir,
@@ -109,7 +100,6 @@ class GitOps:
                 logger.warning(f"[GitOps] git add 失败: {add_result.stderr}")
                 return None
 
-            # git commit
             commit_result = subprocess.run(
                 ["git", "commit", "-m", message],
                 cwd=self.repo_dir,
@@ -117,15 +107,15 @@ class GitOps:
                 text=True,
             )
 
-            # commit 可能因为没有变更而失败（nothing to commit）
             if commit_result.returncode != 0:
-                if "nothing to commit" in commit_result.stdout:
+                stdout = commit_result.stdout or ""
+                stderr = commit_result.stderr or ""
+                if "nothing to commit" in stdout or "nothing to commit" in stderr:
                     logger.debug("[GitOps] 没有变更需要提交")
                 else:
-                    logger.warning(f"[GitOps] git commit 失败: {commit_result.stderr}")
+                    logger.warning(f"[GitOps] git commit 失败: {stderr or stdout}")
                 return None
 
-            # 获取 commit hash
             hash_result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=self.repo_dir,

@@ -463,7 +463,7 @@ class RAGEngine:
         return self.index_docs(all_docs, progress_callback)
 
     def search(self, query: str, k: int = 5) -> list[dict]:
-        """语义检索（按文档去重）"""
+        """语义检索（按文档ID去重）"""
         if not query or not isinstance(query, str):
             return []
 
@@ -475,22 +475,26 @@ class RAGEngine:
             # 获取更多结果用于去重
             raw_results = self.vectorstore.similarity_search(query, k=k * 3)
 
-            # 按文档标题去重，保留分数最高的
-            seen_titles = set()
+            # 按文档 ID 去重，保留分数最高的
+            seen_ids = set()
             unique_results = []
             for doc in raw_results:
-                title = doc.metadata.get("title", "")
-                if title and title in seen_titles:
+                doc_id = doc.metadata.get("id", "")
+                # 如果没有 ID，回退到 title
+                dedup_key = doc_id if doc_id else doc.metadata.get("title", "")
+
+                if dedup_key and dedup_key in seen_ids:
                     continue
-                if title:
-                    seen_titles.add(title)
+                if dedup_key:
+                    seen_ids.add(dedup_key)
 
                 unique_results.append({
                     "content": doc.page_content[:500] if doc.page_content else "",
-                    "title": title,
+                    "title": doc.metadata.get("title", ""),
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
                     "book_name": doc.metadata.get("book_name", ""),
+                    "id": doc_id,
                 })
 
                 if len(unique_results) >= k:
