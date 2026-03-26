@@ -6,7 +6,7 @@ NovaBot 文档同步模块
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 import yaml
 

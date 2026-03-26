@@ -4,8 +4,9 @@ NovaBot Webhook 处理器
 """
 
 import json
+import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 
@@ -161,7 +162,6 @@ class WebhookHandler:
         """处理文档删除事件"""
         data = payload.get("data", {})
         doc_id = data.get("id")
-        book = data.get("book", {})
 
         logger.info(f"[Webhook] → 处理文档删除事件")
 
@@ -229,20 +229,6 @@ class WebhookHandler:
             "doc_id": doc_id,
             "deleted_files": deleted_files,
         }
-
-    async def _resolve_slug_from_toc(self, repo_id: int, doc_id: int) -> Optional[str]:
-        """从 TOC 中解析文档 slug"""
-        try:
-            client = self.plugin._get_client()
-            toc_list = await client.get_repo_toc(repo_id)
-
-            for item in toc_list:
-                if item.get("id") == doc_id:
-                    return item.get("url") or item.get("slug") or item.get("uuid", "")
-        except Exception as e:
-            logger.warning(f"[Webhook] 获取 TOC 失败: {e}")
-
-        return None
 
     async def _get_namespace(self, client, repo_id: int, repo_slug: str) -> Optional[str]:
         """获取知识库 namespace"""
@@ -418,7 +404,6 @@ class WebhookHandler:
                     body = content[end + 4:].strip()
 
             # 去掉元信息表格
-            import re
             lines = body.split('\n')
             content_start = 0
             for i, line in enumerate(lines):

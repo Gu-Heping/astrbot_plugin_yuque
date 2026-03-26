@@ -4,7 +4,6 @@ NovaBot - NOVA 社团智能助手
 """
 
 import asyncio
-import json
 from datetime import datetime
 from typing import Optional
 
@@ -14,7 +13,7 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .novabot import RAGEngine, YuqueClient, DocSyncer, sync_all_repos, Storage, ProfileGenerator, WebhookHandler
+from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler
 from .novabot.tools import ALL_TOOLS
 
 
