@@ -619,7 +619,7 @@ class NovaBotPlugin(Star):
         if action.lower() == "status":
             state = self.storage.load_sync_state()
             if state.get("last_sync"):
-                lines = [f"📊 同步状态", "━" * 15]
+                lines = [f"📊 同步状态", "━━━━━━━━━━━━━━━"]
                 lines.append(f"上次同步: {state['last_sync'][:19]}")
                 lines.append(f"知识库数: {len(state.get('repos', {}))}")
                 lines.append(f"文档总数: {state.get('docs_count', 0)}")
@@ -743,7 +743,7 @@ class NovaBotPlugin(Star):
             p = profile.get("profile", {})
             yield event.plain_result(
                 f"📋 用户画像\n"
-                f"━" * 15 + "\n"
+                f"━━━━━━━━━━━━━━━\n"
                 f"账号: @{binding.get('yuque_login', '')}\n"
                 f"兴趣: {', '.join(p.get('interests', [])) or '暂无'}\n"
                 f"水平: {level_map.get(p.get('level', ''), '未知')}"
@@ -783,7 +783,7 @@ class NovaBotPlugin(Star):
                 yield event.plain_result(f"未找到相关文档: {query}")
                 return
 
-            lines = [f"🔍 搜索: {query}", "━" * 15]
+            lines = [f"🔍 搜索: {query}", "━━━━━━━━━━━━━━━"]
             for i, doc in enumerate(results, 1):
                 lines.append(f"{i}. {doc['title']}")
                 lines.append(f"   {doc['content'][:80]}...")
@@ -809,7 +809,7 @@ class NovaBotPlugin(Star):
         """帮助信息"""
         yield event.plain_result(
             "🤖 NovaBot - NOVA 社团智能助手\n"
-            "━" * 20 + "\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             "• /sync - 同步知识库\n"
             "• /sync members - 同步团队成员\n"
             "• /sync status - 查看状态\n"
