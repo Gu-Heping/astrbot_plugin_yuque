@@ -1,7 +1,7 @@
 name: astrbot_plugin_yuque
 display_name: NovaBot
 desc: NOVA 社团智能助手，以语雀知识库为核心（自包含 RAG）
-version: v0.5.0
+version: v0.5.1
 author: peace
 repo: https://github.com/Gu-Heping/astrbot_plugin_yuque
 astrbot_version: ">=4.16,<5"

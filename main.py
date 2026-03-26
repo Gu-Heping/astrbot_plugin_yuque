@@ -234,13 +234,36 @@ class Storage:
     def load_sync_state(self) -> dict:
         if self.sync_state_file.exists():
             return json.loads(self.sync_state_file.read_text(encoding="utf-8"))
-        return {"last_sync": None, "repos": {}, "docs_count": 0}
+        return {
+            "last_sync": None,
+            "repos": {},
+            "docs_count": 0,
+            "in_progress": False,
+            "progress": None,  # {"current": 5, "total": 45, "current_repo": "知识库名"}
+        }
 
     def save_sync_state(self, state: dict):
         self.sync_state_file.write_text(
             json.dumps(state, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+
+    def update_progress(self, current: int, total: int, current_repo: str):
+        """更新同步进度"""
+        state = self.load_sync_state()
+        state["in_progress"] = True
+        state["progress"] = {
+            "current": current,
+            "total": total,
+            "current_repo": current_repo
+        }
+        self.save_sync_state(state)
+
+    def finish_sync(self, state: dict):
+        """标记同步完成"""
+        state["in_progress"] = False
+        state["progress"] = None
+        self.save_sync_state(state)
 
     # ========== 用户画像 ==========
 
@@ -315,7 +338,8 @@ class YuqueSync:
             logger.info(f"个人 Token，ID: {user_id}")
             repos = await client.get_user_repos(user_id)
 
-        logger.info(f"获取到 {len(repos)} 个知识库，开始同步...")
+        total_repos = len(repos)
+        logger.info(f"获取到 {total_repos} 个知识库，开始同步...")
 
         # 获取成员映射（用于填充作者名）
         members = self.storage.load_members()
@@ -330,7 +354,10 @@ class YuqueSync:
             if not namespace:
                 continue
 
-            logger.info(f"[{i+1}/{len(repos)}] 同步: {repo_name}")
+            # 更新进度
+            self.storage.update_progress(i + 1, total_repos, repo_name)
+            logger.info(f"[{i+1}/{total_repos}] 同步: {repo_name}")
+
             try:
                 docs = await self._sync_repo_docs(client, namespace, with_content, members)
                 total_docs += len(docs)
@@ -348,7 +375,9 @@ class YuqueSync:
             "last_sync": datetime.now().isoformat(),
             "repos": repo_stats,
             "docs_count": total_docs,
-            "token_type": "group" if is_group else "user"
+            "token_type": "group" if is_group else "user",
+            "in_progress": False,
+            "progress": None
         }
         self.storage.save_sync_state(state)
         logger.info(f"同步完成，共 {total_docs} 篇文档")
@@ -592,9 +621,9 @@ class NovaBotPlugin(Star):
         """同步语雀知识库
 
         用法:
-        - /sync - 同步所有知识库
+        - /sync - 同步所有知识库（后台运行）
         - /sync members - 同步团队成员
-        - /sync status - 查看同步状态
+        - /sync status - 查看同步状态/进度
         """
         if not self.yuque_token:
             yield event.plain_result("❌ 未配置语雀 Token")
@@ -623,48 +652,74 @@ class NovaBotPlugin(Star):
         # 查看状态
         if action.lower() == "status":
             state = self.storage.load_sync_state()
+
+            # 检查是否正在同步
+            if state.get("in_progress") and state.get("progress"):
+                p = state["progress"]
+                yield event.plain_result(
+                    f"⏳ 同步进行中\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"进度: {p['current']}/{p['total']}\n"
+                    f"当前: {p['current_repo']}\n\n"
+                    f"使用 /sync status 刷新进度"
+                )
+                return
+
             if state.get("last_sync"):
-                lines = [f"📊 同步状态", "━━━━━━━━━━━━━━━"]
-                lines.append(f"上次同步: {state['last_sync'][:19]}")
-                lines.append(f"知识库数: {len(state.get('repos', {}))}")
-                lines.append(f"文档总数: {state.get('docs_count', 0)}")
-                lines.append(f"Token 类型: {state.get('token_type', '未知')}")
+                lines = [
+                    f"📊 同步状态",
+                    "━━━━━━━━━━━━━━━",
+                    f"上次同步: {state['last_sync'][:19]}",
+                    f"知识库数: {len(state.get('repos', {}))}",
+                    f"文档总数: {state.get('docs_count', 0)}",
+                    f"Token 类型: {state.get('token_type', '未知')}",
+                ]
                 yield event.plain_result("\n".join(lines))
             else:
                 yield event.plain_result("尚未同步，使用 /sync 开始")
             return
 
-        # 执行同步
-        yield event.plain_result("🔄 开始同步知识库...")
+        # 检查是否已在同步
+        state = self.storage.load_sync_state()
+        if state.get("in_progress"):
+            p = state.get("progress", {})
+            yield event.plain_result(
+                f"⏳ 同步已在进行中\n"
+                f"进度: {p.get('current', 0)}/{p.get('total', 0)}\n"
+                f"使用 /sync status 查看进度"
+            )
+            return
 
+        # 启动后台同步
+        asyncio.create_task(self._background_sync())
+        yield event.plain_result(
+            "🔄 同步已启动（后台运行）\n"
+            "使用 /sync status 查看进度"
+        )
+
+    async def _background_sync(self):
+        """后台同步任务"""
         client = self._get_client()
         try:
             result = await self.yuque_sync.sync_all_repos(client, with_content=True)
 
             # RAG 索引
-            rag_msg = ""
             if self.rag:
                 try:
                     indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
-                    rag_msg = f"\n📚 RAG 索引: {indexed} 篇"
+                    logger.info(f"RAG 索引完成: {indexed} 篇")
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
 
-            yield event.plain_result(
-                f"✅ 同步完成\n"
-                f"知识库: {result['repos_count']} 个\n"
-                f"文档: {result['docs_count']} 篇"
-                f"{rag_msg}"
-            )
-        except httpx.HTTPStatusError as e:
-            logger.error(f"同步失败 HTTP: {e}")
-            yield event.plain_result(f"❌ API 错误: {e.response.status_code}")
-        except httpx.RequestError as e:
-            logger.error(f"同步失败 网络: {e}")
-            yield event.plain_result(f"❌ 网络错误: {e}")
+            logger.info(f"后台同步完成: {result['docs_count']} 篇文档")
+
         except Exception as e:
-            logger.error(f"同步失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 同步失败: {e}")
+            logger.error(f"后台同步失败: {e}", exc_info=True)
+            # 标记同步结束
+            state = self.storage.load_sync_state()
+            state["in_progress"] = False
+            state["progress"] = None
+            self.storage.save_sync_state(state)
 
     @filter.command("bind")
     async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):
