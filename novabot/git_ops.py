@@ -27,6 +27,8 @@ class GitOps:
             是否成功（True 表示仓库已存在或初始化成功）
         """
         if self.is_git_repo():
+            # 确保用户身份已配置
+            self._ensure_user_identity()
             return True
 
         try:
@@ -38,6 +40,8 @@ class GitOps:
             )
             if result.returncode == 0:
                 logger.info(f"[GitOps] Git 仓库初始化成功: {self.repo_dir}")
+                # 配置默认用户身份
+                self._ensure_user_identity()
                 return True
             else:
                 logger.warning(f"[GitOps] Git init 失败: {result.stderr}")
@@ -48,6 +52,33 @@ class GitOps:
         except Exception as e:
             logger.error(f"[GitOps] Git init 异常: {e}")
             return False
+
+    def _ensure_user_identity(self):
+        """确保 Git 用户身份已配置（Docker 容器内通常未配置）"""
+        try:
+            # 检查是否已配置 user.name
+            name_result = subprocess.run(
+                ["git", "config", "user.name"],
+                cwd=self.repo_dir,
+                capture_output=True,
+                text=True,
+            )
+
+            if not name_result.stdout.strip():
+                # 未配置，设置默认值
+                subprocess.run(
+                    ["git", "config", "user.name", "NovaBot"],
+                    cwd=self.repo_dir,
+                    capture_output=True,
+                )
+                subprocess.run(
+                    ["git", "config", "user.email", "novabot@example.com"],
+                    cwd=self.repo_dir,
+                    capture_output=True,
+                )
+                logger.info("[GitOps] 已配置默认 Git 用户: NovaBot <novabot@example.com>")
+        except Exception as e:
+            logger.debug(f"[GitOps] 配置用户身份失败: {e}")
 
     def add_commit(self, files: List[str], message: str) -> Optional[str]:
         """添加文件并提交
