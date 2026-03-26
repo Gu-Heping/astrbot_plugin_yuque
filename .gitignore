@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Development plans (not for public)
+plans/
+
 # C extensions
 *.so
 
