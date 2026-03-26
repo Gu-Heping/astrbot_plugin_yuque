@@ -840,17 +840,126 @@ class NovaBotPlugin(Star):
 
                 return "\n".join(output)
 
+        @dataclass
+        class ListKnowledgeBasesTool(FunctionTool):
+            """列出知识库工具"""
+            name: str = "list_knowledge_bases"
+            description: str = "列出 NOVA 社团所有语雀知识库。了解有哪些知识库可以帮助你决定去哪个知识库搜索。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {},
+                "required": []
+            })
+            plugin: object = None
+
+            async def run(self, event):
+                repos_file = self.plugin.storage.data_dir / "yuque_repos.json"
+                docs_dir = self.plugin.storage.data_dir / "yuque_docs"
+
+                # 优先从缓存的 repos 文件读取
+                if repos_file.exists():
+                    try:
+                        import json
+                        repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                        output = ["📚 NOVA 知识库列表:\n"]
+                        for repo in repos:
+                            name = repo.get("name", "未知")
+                            desc = repo.get("description", "") or ""
+                            items = repo.get("items_count", 0)
+                            output.append(f"• {name} ({items} 篇文档)")
+                            if desc:
+                                output.append(f"  {desc[:50]}{'...' if len(desc) > 50 else ''}")
+                        return "\n".join(output)
+                    except Exception as e:
+                        logger.warning(f"读取知识库列表失败: {e}")
+
+                # 备选：从目录结构读取
+                if docs_dir.exists():
+                    output = ["📚 NOVA 知识库列表:\n"]
+                    for repo_dir in sorted(docs_dir.iterdir()):
+                        if repo_dir.is_dir():
+                            md_count = len(list(repo_dir.glob("*.md")))
+                            output.append(f"• {repo_dir.name} ({md_count} 篇文档)")
+                    return "\n".join(output)
+
+                return "知识库列表为空，请先执行 /sync 同步"
+
+        @dataclass
+        class ListRepoDocsTool(FunctionTool):
+            """列出知识库文档结构工具"""
+            name: str = "list_repo_docs"
+            description: str = "列出某个知识库下的所有文档。了解知识库结构后可以更有针对性地搜索。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {
+                    "repo_name": {
+                        "type": "string",
+                        "description": "知识库名称，如 'astrbot搭建'、'AI Agent试水'"
+                    }
+                },
+                "required": ["repo_name"]
+            })
+            plugin: object = None
+
+            async def run(self, event, repo_name: str):
+                docs_dir = self.plugin.storage.data_dir / "yuque_docs"
+                if not docs_dir.exists():
+                    return "文档目录不存在，请先执行 /sync 同步"
+
+                # 模糊匹配知识库目录
+                matched_dir = None
+                for d in docs_dir.iterdir():
+                    if d.is_dir() and repo_name.lower() in d.name.lower():
+                        matched_dir = d
+                        break
+
+                if not matched_dir:
+                    # 列出可用的知识库
+                    available = [d.name for d in docs_dir.iterdir() if d.is_dir()]
+                    return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available[:10])}"
+
+                # 读取文档列表
+                output = [f"📖 {matched_dir.name} 文档列表:\n"]
+                md_files = sorted(matched_dir.glob("*.md"))
+
+                for md_file in md_files[:30]:  # 最多显示30篇
+                    try:
+                        content = md_file.read_text(encoding="utf-8")
+                        # 提取标题
+                        title = md_file.stem
+                        for line in content.split("\n")[:10]:
+                            if line.startswith("# "):
+                                title = line[2:].strip()
+                                break
+                        output.append(f"• {title}")
+                    except:
+                        output.append(f"• {md_file.stem}")
+
+                if len(md_files) > 30:
+                    output.append(f"\n... 还有 {len(md_files) - 30} 篇文档")
+
+                output.append(f"\n共 {len(md_files)} 篇文档")
+                return "\n".join(output)
+
         # 实例化并注册工具
         rag_tool = SearchKnowledgeBaseTool()
         rag_tool.plugin = self
         self.context.add_llm_tools(rag_tool)
+
+        list_repos_tool = ListKnowledgeBasesTool()
+        list_repos_tool.plugin = self
+        self.context.add_llm_tools(list_repos_tool)
+
+        list_docs_tool = ListRepoDocsTool()
+        list_docs_tool.plugin = self
+        self.context.add_llm_tools(list_docs_tool)
 
         if self.storage.data_dir.exists():
             grep_tool = GrepLocalDocsTool()
             grep_tool.plugin = self
             self.context.add_llm_tools(grep_tool)
 
-        logger.info("LLM 工具注册完成: search_knowledge_base, grep_local_docs")
+        logger.info("LLM 工具注册完成: search_knowledge_base, list_knowledge_bases, list_repo_docs, grep_local_docs")
 
     def _get_client(self) -> YuqueClient:
         """获取语雀客户端（懒加载）"""
