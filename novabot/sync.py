@@ -79,6 +79,7 @@ class DocSyncer:
         self.members = members or {}
         self.used_basenames: Dict[tuple, set] = {}  # (repo_name, parent_path) -> set of basenames
         self.global_index = global_index or {}  # yuque_id -> path (跨知识库)
+        self.doc_metadata: List[Dict] = []  # 收集文档元数据
 
     async def sync_repo(self, namespace: str, repo_name: str) -> Dict:
         """同步单个知识库
@@ -220,6 +221,22 @@ class DocSyncer:
                 # 更新索引
                 if yuque_id:
                     repo_index[str(yuque_id)] = rel_path
+
+                # 收集元数据（用于构建搜索索引）
+                book = detail.get("book", {})
+                body = detail.get("body", "") or detail.get("content", "") or ""
+                self.doc_metadata.append({
+                    "yuque_id": yuque_id,
+                    "title": detail.get("title", title),
+                    "slug": detail.get("slug", slug),
+                    "author": author,
+                    "book_name": book.get("name", "") if book else "",
+                    "book_namespace": namespace,
+                    "created_at": detail.get("created_at", ""),
+                    "updated_at": detail.get("updated_at", ""),
+                    "word_count": len(body),
+                    "file_path": rel_path,
+                })
 
                 stats["docs"] += 1
                 logger.debug(f"[Sync] 写入文档: {title}")
@@ -373,6 +390,15 @@ async def sync_all_repos(
 
     # 保存全局索引
     _write_global_index(output_dir, syncer.global_index)
+
+    # 构建元数据索引（SQLite）
+    if syncer.doc_metadata:
+        from .doc_index import DocIndex
+        db_path = output_dir.parent / "doc_index.db"
+        doc_index = DocIndex(str(db_path))
+        doc_index.clear()
+        doc_index.add_docs(syncer.doc_metadata)
+        logger.info(f"[Sync] 元数据索引完成: {len(syncer.doc_metadata)} 篇文档")
 
     # 保存知识库列表（同时保存两份：一份在 docs 目录，一份在 data 根目录供工具读取）
     repos_file = output_dir / ".repos.json"

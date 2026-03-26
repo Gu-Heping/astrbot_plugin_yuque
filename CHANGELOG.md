@@ -4,6 +4,22 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.10.0] - 2026-03-26
+
+### 新增
+- **元数据索引**：同步时构建 SQLite 索引，支持高效元数据查询
+- **`search_docs` 工具**：按作者、知识库、标题搜索文档
+- **`list_authors` 工具**：列出所有作者及贡献统计
+- **`doc_stats` 工具**：获取文档统计（总数、字数、知识库数）
+
+### 架构
+- `novabot/doc_index.py`：SQLite 元数据索引模块
+- 同步时自动收集 frontmatter 元数据
+- 支持按作者、知识库、标题、时间、字数查询和排序
+
+### 数据存储
+- `data/nova/doc_index.db`：SQLite 元数据索引
+
 ## [v0.9.7] - 2026-03-26
 
 ### 新增

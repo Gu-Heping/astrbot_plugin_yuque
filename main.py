@@ -598,6 +598,165 @@ class NovaBotPlugin(Star):
                     return f"读取失败: {e}"
 
         @dataclass
+        class SearchDocsTool(FunctionTool):
+            """元数据搜索工具"""
+            name: str = "search_docs"
+            description: str = "按元数据搜索文档：作者、知识库、标题等。比 grep 更适合「查看某人的所有文档」「某知识库的最新文档」这类查询。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {
+                    "author": {
+                        "type": "string",
+                        "description": "作者名（模糊匹配）"
+                    },
+                    "book": {
+                        "type": "string",
+                        "description": "知识库名（模糊匹配）"
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "文档标题（模糊匹配）"
+                    },
+                    "order_by": {
+                        "type": "string",
+                        "description": "排序方式：updated_at（更新时间）、created_at（创建时间）、word_count（字数）",
+                        "default": "updated_at"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回数量，默认 10",
+                        "default": 10
+                    }
+                },
+                "required": []
+            })
+            plugin: object = None
+
+            async def run(self, event, author: str = "", book: str = "", title: str = "", order_by: str = "updated_at", limit: int = 10):
+                from .novabot.doc_index import DocIndex
+
+                db_path = self.plugin.storage.data_dir / "doc_index.db"
+                if not db_path.exists():
+                    return "元数据索引不存在，请先执行 /sync 同步"
+
+                try:
+                    doc_index = DocIndex(str(db_path))
+                    results = doc_index.search(
+                        author=author or None,
+                        book=book or None,
+                        title=title or None,
+                        order_by=order_by,
+                        limit=limit,
+                    )
+
+                    if not results:
+                        filters = []
+                        if author:
+                            filters.append(f"作者={author}")
+                        if book:
+                            filters.append(f"知识库={book}")
+                        if title:
+                            filters.append(f"标题={title}")
+                        return f"未找到匹配的文档（筛选: {', '.join(filters) if filters else '无'}）"
+
+                    output = [f"找到 {len(results)} 篇文档:\n"]
+                    for r in results:
+                        output.append(f"📄 {r['title']}")
+                        if r.get('author'):
+                            output.append(f"   作者: {r['author']}")
+                        if r.get('book_name'):
+                            output.append(f"   知识库: {r['book_name']}")
+                        if r.get('updated_at'):
+                            output.append(f"   更新: {r['updated_at'][:10]}")
+                        if r.get('word_count'):
+                            output.append(f"   字数: {r['word_count']}")
+                        if r.get('file_path'):
+                            output.append(f"   路径: {r['file_path']}")
+                        output.append("")
+
+                    return "\n".join(output)
+                except Exception as e:
+                    return f"搜索失败: {e}"
+
+        @dataclass
+        class ListAuthorsTool(FunctionTool):
+            """列出作者工具"""
+            name: str = "list_authors"
+            description: str = "列出所有文档作者及其贡献统计（文档数、总字数）。适合「看看有哪些作者」「谁写的最多」这类查询。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {},
+                "required": []
+            })
+            plugin: object = None
+
+            async def run(self, event):
+                from .novabot.doc_index import DocIndex
+
+                db_path = self.plugin.storage.data_dir / "doc_index.db"
+                if not db_path.exists():
+                    return "元数据索引不存在，请先执行 /sync 同步"
+
+                try:
+                    doc_index = DocIndex(str(db_path))
+                    authors = doc_index.list_authors()
+
+                    if not authors:
+                        return "没有找到作者信息"
+
+                    output = [f"👥 作者列表（共 {len(authors)} 人）:\n"]
+                    for i, a in enumerate(authors[:20], 1):
+                        output.append(f"{i}. {a['author']}")
+                        output.append(f"   📄 {a['doc_count']} 篇文档, 📝 {a['total_words'] or 0} 字")
+                    if len(authors) > 20:
+                        output.append(f"\n... 还有 {len(authors) - 20} 位作者")
+
+                    return "\n".join(output)
+                except Exception as e:
+                    return f"查询失败: {e}"
+
+        @dataclass
+        class DocStatsTool(FunctionTool):
+            """文档统计工具"""
+            name: str = "doc_stats"
+            description: str = "获取文档统计信息：总文档数、总字数、知识库数。可按作者筛选。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {
+                    "author": {
+                        "type": "string",
+                        "description": "作者名（可选，用于查看某人的统计）"
+                    }
+                },
+                "required": []
+            })
+            plugin: object = None
+
+            async def run(self, event, author: str = ""):
+                from .novabot.doc_index import DocIndex
+
+                db_path = self.plugin.storage.data_dir / "doc_index.db"
+                if not db_path.exists():
+                    return "元数据索引不存在，请先执行 /sync 同步"
+
+                try:
+                    doc_index = DocIndex(str(db_path))
+                    stats = doc_index.get_stats(author=author or None)
+
+                    if author:
+                        output = [f"📊 {author} 的贡献统计:\n"]
+                    else:
+                        output = ["📊 NOVA 知识库统计:\n"]
+
+                    output.append(f"📄 文档数: {stats['doc_count']}")
+                    output.append(f"📝 总字数: {stats['total_words'] or 0}")
+                    output.append(f"📚 知识库数: {stats['book_count']}")
+
+                    return "\n".join(output)
+                except Exception as e:
+                    return f"查询失败: {e}"
+
+        @dataclass
         class ListKnowledgeBasesTool(FunctionTool):
             """列出知识库工具"""
             name: str = "list_knowledge_bases"
@@ -789,7 +948,19 @@ class NovaBotPlugin(Star):
             read_doc_tool.plugin = self
             self.context.add_llm_tools(read_doc_tool)
 
-        logger.info("LLM 工具注册完成: search_knowledge_base, list_knowledge_bases, list_repo_docs, grep_local_docs, read_doc")
+            search_docs_tool = SearchDocsTool()
+            search_docs_tool.plugin = self
+            self.context.add_llm_tools(search_docs_tool)
+
+            list_authors_tool = ListAuthorsTool()
+            list_authors_tool.plugin = self
+            self.context.add_llm_tools(list_authors_tool)
+
+            doc_stats_tool = DocStatsTool()
+            doc_stats_tool.plugin = self
+            self.context.add_llm_tools(doc_stats_tool)
+
+        logger.info("LLM 工具注册完成: search_knowledge_base, list_knowledge_bases, list_repo_docs, grep_local_docs, read_doc, search_docs, list_authors, doc_stats")
 
     def _get_client(self) -> YuqueClient:
         """获取语雀客户端（懒加载）"""
