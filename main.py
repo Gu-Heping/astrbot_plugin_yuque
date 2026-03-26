@@ -606,9 +606,40 @@ class NovaBotPlugin(Star):
         用法: 
         - /sync - 全量同步当前绑定用户的知识库
         - /sync status - 查看同步状态
-        - /sync members - 仅同步团队成员
+        - /sync members - 仅同步团队成员（无需绑定）
         """
         platform_id = event.get_sender_id()
+        
+        # 仅同步团队成员（无需绑定）
+        if action.lower() == "members":
+            if not self.yuque_token:
+                yield event.plain_result("无法同步：团队 Token 未配置")
+                return
+            
+            yield event.plain_result("🔄 开始同步团队成员...")
+            
+            try:
+                client = YuqueClient(self.yuque_token, self.yuque_base_url)
+                count = await self.yuque_sync._sync_team_members(client, self.storage)
+                await client.close()
+                
+                if count > 0:
+                    yield event.plain_result(
+                        f"✅ 团队成员同步完成\n"
+                        f"共 {count} 人\n"
+                        f"用户可使用 /bind <用户名> 绑定"
+                    )
+                else:
+                    yield event.plain_result(
+                        "⚠️ 未获取到成员数据\n"
+                        "请检查 Token 是否有团队权限"
+                    )
+            except Exception as e:
+                logger.error(f"同步团队成员失败: {e}")
+                yield event.plain_result(f"❌ 同步失败：{str(e)}")
+            return
+        
+        # 以下操作需要绑定
         binding = self.storage.get_binding(platform_id)
         
         if not binding:
@@ -620,7 +651,6 @@ class NovaBotPlugin(Star):
         
         yuque_id = binding.get("yuque_id")
         yuque_login = binding.get("yuque_login", "未知")
-        token = binding.get("token", "")
         
         # 查看同步状态
         if action.lower() == "status":
@@ -653,10 +683,6 @@ class NovaBotPlugin(Star):
                     f"使用 /sync 开始同步"
                 )
             return
-        
-        # 仅同步团队成员
-        if action.lower() == "members":
-            if not self.yuque_token:
                 yield event.plain_result("无法同步：团队 Token 未配置")
                 return
             
