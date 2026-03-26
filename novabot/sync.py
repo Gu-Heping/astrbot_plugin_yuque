@@ -259,8 +259,15 @@ async def sync_all_repos(
 
     # 获取用户信息
     user = await client.get_user()
+    if not user:
+        logger.error("[Sync] 获取用户信息失败，请检查 Token 配置")
+        return {"repos_count": 0, "docs": 0, "titles": 0, "errors": 1}
+
     is_group = user.get("type") == "Group"
     user_id = user.get("id")
+    if not user_id:
+        logger.error("[Sync] 无法获取用户 ID")
+        return {"repos_count": 0, "docs": 0, "titles": 0, "errors": 1}
 
     # 获取知识库列表
     if is_group:

@@ -868,22 +868,23 @@ class NovaBotPlugin(Star):
             # 更新同步状态
             state = {
                 "last_sync": datetime.now().isoformat(),
-                "repos_count": result.get("repos_count", 0),
-                "docs_count": result.get("docs", 0),
+                "repos_count": result.get("repos_count", 0) if result else 0,
+                "docs_count": result.get("docs", 0) if result else 0,
                 "in_progress": False,
                 "progress": None
             }
             self.storage.save_sync_state(state)
 
             # RAG 索引
-            if self.rag:
+            if self.rag and result and result.get("docs", 0) > 0:
                 try:
                     indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
                     logger.info(f"RAG 索引完成: {indexed} 篇")
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
 
-            logger.info(f"后台同步完成: {result.get('docs', 0)} 篇文档")
+            docs_count = result.get("docs", 0) if result else 0
+            logger.info(f"后台同步完成: {docs_count} 篇文档")
 
         except Exception as e:
             logger.error(f"后台同步失败: {e}", exc_info=True)
