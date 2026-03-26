@@ -546,15 +546,16 @@ class NovaBotPlugin(Star):
 
         # 检查是否是确认绑定
         if arg.lower() == "confirm":
-            # 从会话状态获取待确认的绑定信息
-            pending = getattr(self, f"_pending_bind_{platform_id}", None)
+            # 从会话状态获取待确认的绑定信息（使用 hash 避免中文属性名问题）
+            pending_key = f"_pb_{hash(platform_id)}"
+            pending = getattr(self, pending_key, None)
             if not pending:
                 yield event.plain_result("没有待确认的绑定请求，请重新执行 /bind")
                 return
             
             # 执行绑定
             self.storage.add_binding(platform_id, pending["yuque_info"])
-            delattr(self, f"_pending_bind_{platform_id}")
+            delattr(self, pending_key)
             
             yield event.plain_result(
                 f"✅ 绑定成功！\n"
@@ -567,12 +568,24 @@ class NovaBotPlugin(Star):
         # 检查参数
         if not arg:
             yield event.plain_result(
-                "请提供语雀 Token 或用户名：\n"
+                "请提供语雀 Token：\n"
                 "/bind <语雀 Token>\n"
                 "\n"
                 "Token 获取方式：\n"
                 "1. 登录语雀 → 个人设置 → Token\n"
                 "2. 创建一个有读取权限的 Token"
+            )
+            return
+        
+        # 简单验证：Token 通常是字母数字组成的长字符串
+        if len(arg) < 20 or not all(c.isalnum() or c in '-_' for c in arg):
+            yield event.plain_result(
+                "⚠️ 这看起来不像有效的语雀 Token\n"
+                "\n"
+                "Token 获取方式：\n"
+                "1. 登录语雀 → 个人设置 → Token\n"
+                "2. 创建一个有读取权限的 Token\n"
+                "3. Token 通常是一串字母和数字"
             )
             return
 
@@ -591,8 +604,9 @@ class NovaBotPlugin(Star):
             if existing_binding:
                 bound_platform_id, bound_info = existing_binding
                 if bound_platform_id != platform_id:
-                    # 需要确认
-                    setattr(self, f"_pending_bind_{platform_id}", {
+                    # 需要确认（使用 hash 避免中文属性名问题）
+                    pending_key = f"_pb_{hash(platform_id)}"
+                    setattr(self, pending_key, {
                         "yuque_info": {
                             "yuque_id": yuque_id,
                             "yuque_login": yuque_login,
@@ -650,6 +664,9 @@ class NovaBotPlugin(Star):
         except httpx.HTTPStatusError as e:
             logger.error(f"语雀 Token 验证失败: {e}")
             yield event.plain_result("❌ Token 验证失败，请检查 Token 是否正确")
+        except UnicodeEncodeError as e:
+            logger.error(f"编码错误: {e}")
+            yield event.plain_result("❌ 处理过程中出现编码错误，请检查输入是否包含特殊字符")
         except Exception as e:
             logger.error(f"绑定过程出错: {e}", exc_info=True)
             yield event.plain_result(f"❌ 绑定失败：{str(e)}")
