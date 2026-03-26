@@ -126,6 +126,11 @@ class YuqueClient:
         data = await self._get(f"/repos/{namespace}/docs/{slug}", {"include_content": "true"})
         return data.get("data", {})
 
+    async def get_repo_toc(self, namespace: str) -> list:
+        """获取知识库目录结构（TOC）"""
+        data = await self._get(f"/repos/{namespace}/toc")
+        return data.get("data", [])
+
     async def get_group_members(self, group_id: int) -> list:
         """获取团队成员（分页）"""
         all_members = []
@@ -347,10 +352,12 @@ class YuqueSync:
         # 同步每个知识库
         total_docs = 0
         repo_stats = {}
+        repos_info = []  # 用于保存 .repos.json
 
         for i, repo in enumerate(repos):
             namespace = repo.get("namespace", "")
             repo_name = repo.get("name", "")
+            repo_id = repo.get("id")
             if not namespace:
                 continue
 
@@ -359,16 +366,34 @@ class YuqueSync:
             logger.info(f"[{i+1}/{total_repos}] 同步: {repo_name}")
 
             try:
-                docs = await self._sync_repo_docs(client, namespace, with_content, members)
+                # 获取 TOC 结构
+                toc = await client.get_repo_toc(namespace)
+                docs = await self._sync_repo_docs(client, namespace, with_content, members, toc)
                 total_docs += len(docs)
                 repo_stats[namespace] = {
                     "name": repo_name,
                     "docs_count": len(docs),
                     "synced_at": datetime.now().isoformat()
                 }
+                repos_info.append({
+                    "id": repo_id,
+                    "namespace": namespace,
+                    "name": repo_name,
+                    "slug": repo.get("slug", ""),
+                    "description": repo.get("description", ""),
+                    "items_count": repo.get("items_count", 0),
+                })
             except Exception as e:
                 logger.error(f"同步知识库 {namespace} 失败: {e}", exc_info=True)
                 repo_stats[namespace] = {"name": repo_name, "error": str(e)}
+
+        # 保存 repos 列表
+        repos_file = self.docs_dir / ".repos.json"
+        repos_file.write_text(
+            json.dumps(repos_info, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        logger.info(f"保存知识库列表: {repos_file}")
 
         # 保存同步状态
         state = {
@@ -389,12 +414,20 @@ class YuqueSync:
         }
 
     async def _sync_repo_docs(self, client: YuqueClient, namespace: str,
-                               with_content: bool, members: dict) -> list:
+                               with_content: bool, members: dict, toc: list = None) -> list:
         """同步单个知识库的文档"""
         docs = await client.get_repo_docs(namespace)
 
         repo_dir = self.docs_dir / namespace.replace("/", "_")
         repo_dir.mkdir(parents=True, exist_ok=True)
+
+        # 保存 TOC 结构
+        if toc:
+            toc_file = repo_dir / ".toc.json"
+            toc_file.write_text(
+                json.dumps(toc, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
 
         synced = []
         for doc in docs:
@@ -888,7 +921,7 @@ class NovaBotPlugin(Star):
         class ListRepoDocsTool(FunctionTool):
             """列出知识库文档结构工具"""
             name: str = "list_repo_docs"
-            description: str = "列出某个知识库下的所有文档。了解知识库结构后可以更有针对性地搜索。"
+            description: str = "列出某个知识库下的所有文档结构（含层级）。TITLE 是分组（无内容），DOC 是实际文档。了解知识库结构后可以更有针对性地搜索。"
             parameters: dict = field(default_factory=lambda: {
                 "type": "object",
                 "properties": {
@@ -901,44 +934,112 @@ class NovaBotPlugin(Star):
             })
             plugin: object = None
 
+            def _build_toc_tree(self, toc_list: list, parent_uuid: str = "") -> list:
+                """构建 TOC 树形结构"""
+                children = []
+                for item in toc_list:
+                    if (item.get("parent_uuid") or "") == parent_uuid:
+                        node = {
+                            "title": item.get("title", "无标题"),
+                            "type": item.get("type", "DOC"),
+                            "slug": item.get("slug") or item.get("url", ""),
+                            "depth": item.get("depth", 1),
+                        }
+                        # 递归获取子节点
+                        child_uuid = item.get("uuid", "")
+                        sub_children = self._build_toc_tree(toc_list, child_uuid)
+                        if sub_children:
+                            node["children"] = sub_children
+                        children.append(node)
+                return children
+
+            def _format_tree(self, nodes: list, indent: str = "") -> list:
+                """格式化树形结构为文本"""
+                lines = []
+                for node in nodes:
+                    title = node.get("title", "")
+                    doc_type = node.get("type", "DOC")
+                    icon = "📄" if doc_type == "DOC" else "📁"
+                    type_hint = "" if doc_type == "DOC" else " [分组]"
+                    lines.append(f"{indent}{icon} {title}{type_hint}")
+                    if node.get("children"):
+                        lines.extend(self._format_tree(node["children"], indent + "  "))
+                return lines
+
             async def run(self, event, repo_name: str):
                 docs_dir = self.plugin.storage.data_dir / "yuque_docs"
                 if not docs_dir.exists():
                     return "文档目录不存在，请先执行 /sync 同步"
 
-                # 模糊匹配知识库目录
+                # 从 .repos.json 查找知识库
+                repos_file = docs_dir / ".repos.json"
                 matched_dir = None
-                for d in docs_dir.iterdir():
-                    if d.is_dir() and repo_name.lower() in d.name.lower():
-                        matched_dir = d
-                        break
+                matched_repo = None
+
+                if repos_file.exists():
+                    try:
+                        repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                        for repo in repos:
+                            name = repo.get("name", "")
+                            ns = repo.get("namespace", "")
+                            if repo_name.lower() in name.lower() or repo_name.lower() in ns.lower():
+                                matched_repo = repo
+                                matched_dir = docs_dir / ns.replace("/", "_")
+                                break
+                    except:
+                        pass
 
                 if not matched_dir:
-                    # 列出可用的知识库
-                    available = [d.name for d in docs_dir.iterdir() if d.is_dir()]
-                    return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available[:10])}"
+                    # 备选：从目录名模糊匹配
+                    for d in docs_dir.iterdir():
+                        if d.is_dir() and repo_name.lower() in d.name.lower():
+                            matched_dir = d
+                            break
 
-                # 读取文档列表
+                if not matched_dir:
+                    available = []
+                    if repos_file.exists():
+                        try:
+                            repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                            available = [r.get("name", "") for r in repos[:10]]
+                        except:
+                            pass
+                    if not available:
+                        available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
+                    return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
+
+                # 读取 TOC
+                toc_file = matched_dir / ".toc.json"
+                if toc_file.exists():
+                    try:
+                        toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
+                        # 构建树形结构
+                        tree = self._build_toc_tree(toc_list)
+                        lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 目录结构:\n"]
+                        lines.extend(self._format_tree(tree))
+                        doc_count = sum(1 for item in toc_list if item.get("type") == "DOC")
+                        title_count = sum(1 for item in toc_list if item.get("type") == "TITLE")
+                        lines.append(f"\n共 {doc_count} 篇文档, {title_count} 个分组")
+                        return "\n".join(lines)
+                    except Exception as e:
+                        logger.warning(f"读取 TOC 失败: {e}")
+
+                # 备选：列出 md 文件
+                md_files = list(matched_dir.glob("*.md"))
                 output = [f"📖 {matched_dir.name} 文档列表:\n"]
-                md_files = sorted(matched_dir.glob("*.md"))
-
-                for md_file in md_files[:30]:  # 最多显示30篇
+                for md_file in sorted(md_files)[:30]:
                     try:
                         content = md_file.read_text(encoding="utf-8")
-                        # 提取标题
                         title = md_file.stem
                         for line in content.split("\n")[:10]:
                             if line.startswith("# "):
                                 title = line[2:].strip()
                                 break
-                        output.append(f"• {title}")
+                        output.append(f"📄 {title}")
                     except:
-                        output.append(f"• {md_file.stem}")
-
+                        output.append(f"📄 {md_file.stem}")
                 if len(md_files) > 30:
                     output.append(f"\n... 还有 {len(md_files) - 30} 篇文档")
-
-                output.append(f"\n共 {len(md_files)} 篇文档")
                 return "\n".join(output)
 
         # 实例化并注册工具

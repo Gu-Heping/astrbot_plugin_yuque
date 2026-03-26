@@ -11,11 +11,13 @@
   - `search_knowledge_base`：RAG 语义搜索
   - `grep_local_docs`：本地文档关键词精确匹配
   - `list_knowledge_bases`：列出所有知识库
-  - `list_repo_docs`：列出某知识库的文档结构
+  - `list_repo_docs`：列出某知识库的文档结构（支持 TITLE/DOC 层级）
 - **Agentic RAG**：AI 自主决定何时搜索、搜索什么
+- **TOC 同步**：同步时保存 `.toc.json` 和 `.repos.json`
 
 ### 改进
 - 优化文档表格过滤逻辑，跳过开头的元信息表格
+- `list_repo_docs` 区分 TITLE（分组）和 DOC（实际文档）
 
 ## [v0.7.1] - 2026-03-26
 
