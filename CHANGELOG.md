@@ -4,6 +4,18 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.9.7] - 2026-03-26
+
+### 新增
+- **`read_doc` 工具**：读取指定路径的文档完整内容（最长 8000 字符）
+- grep 结果显示文档路径，方便 AI 进一步读取
+
+### 改进
+- **grep 按匹配数排序**：匹配越多的文档越靠前
+- **grep 显示 2 个上下文**：更多信息帮助 AI 判断相关性
+- **grep 高亮匹配词**：用 `**keyword**` 标记匹配位置
+- 工具链更完整：`list_knowledge_bases` → `grep_local_docs` → `read_doc`
+
 ## [v0.9.6] - 2026-03-26
 
 ### 改进
