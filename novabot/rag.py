@@ -3,7 +3,8 @@ NovaBot RAG 检索模块
 基于 LangChain + ChromaDB
 """
 
-import json
+import gc
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -23,7 +24,9 @@ class RAGEngine:
         embedding_model: str = "text-embedding-3-small"
     ):
         self.persist_directory = Path(persist_directory)
-        self.persist_directory.mkdir(parents=True, exist_ok=True)
+        self.embedding_api_key = embedding_api_key
+        self.embedding_base_url = embedding_base_url
+        self.embedding_model = embedding_model
 
         # 初始化 embedding
         embedding_kwargs = {
@@ -32,176 +35,121 @@ class RAGEngine:
         }
         if embedding_base_url:
             embedding_kwargs["openai_api_base"] = embedding_base_url
-
         self.embeddings = OpenAIEmbeddings(**embedding_kwargs)
 
-        # 初始化向量库
-        self.vectorstore: Optional[Chroma] = None
+        # 延迟初始化向量库
+        self._vectorstore: Optional[Chroma] = None
 
-    def _load_vectorstore(self) -> Chroma:
-        """加载向量库"""
-        if self.vectorstore is None:
-            try:
-                self.vectorstore = Chroma(
-                    persist_directory=str(self.persist_directory),
-                    embedding_function=self.embeddings,
-                )
-            except Exception as e:
-                print(f"加载向量库失败: {e}")
-                # 尝试重新初始化
-                self.clear()
-                self.vectorstore = Chroma(
-                    persist_directory=str(self.persist_directory),
-                    embedding_function=self.embeddings,
-                )
-        return self.vectorstore
+    @property
+    def vectorstore(self) -> Chroma:
+        """延迟加载向量库"""
+        if self._vectorstore is None:
+            self._vectorstore = self._create_vectorstore()
+        return self._vectorstore
+
+    def _create_vectorstore(self) -> Chroma:
+        """创建新的向量库实例"""
+        # 确保目录存在
+        self.persist_directory.mkdir(parents=True, exist_ok=True)
+
+        return Chroma(
+            persist_directory=str(self.persist_directory),
+            embedding_function=self.embeddings,
+        )
 
     def index_docs(self, docs: list[dict]) -> int:
-        """
-        索引文档到向量库
-
-        Args:
-            docs: 文档列表，每个文档包含 title, content, source 等字段
-
-        Returns:
-            索引的文档数量
-        """
+        """索引文档到向量库"""
         if not docs:
             return 0
 
-        # 构建 LangChain Document
+        # 构建 Document 列表
         documents = []
         for doc in docs:
             content = doc.get("content", "")
 
-            # 跳过空内容
+            # 验证内容
             if not content or not isinstance(content, str):
                 continue
 
-            # 清理内容（移除过多空白，确保是有效字符串）
-            content = " ".join(content.split())
-            content = content.strip()
-
-            # 跳过清理后为空的内容
+            content = " ".join(content.split()).strip()
             if not content:
                 continue
 
-            # 限制内容长度（避免 API 限制）
+            # 限制长度
             if len(content) > 8000:
                 content = content[:8000]
 
-            # 构建元数据
-            metadata = {
-                "id": str(doc.get("id", "")),
-                "title": str(doc.get("title", "")),
-                "slug": str(doc.get("slug", "")),
-                "author": str(doc.get("author", "")),
-                "book_name": str(doc.get("book_name", "")),
-                "repo_namespace": str(doc.get("repo_namespace", "")),
-                "source": f"yuque:{doc.get('repo_namespace', '')}/{doc.get('slug', '')}",
-                "created_at": str(doc.get("created_at", "")),
-                "updated_at": str(doc.get("updated_at", "")),
-            }
-
-            documents.append(Document(page_content=content, metadata=metadata))
+            documents.append(Document(
+                page_content=content,
+                metadata={
+                    "id": str(doc.get("id", "")),
+                    "title": str(doc.get("title", "")),
+                    "slug": str(doc.get("slug", "")),
+                    "author": str(doc.get("author", "")),
+                    "book_name": str(doc.get("book_name", "")),
+                    "source": f"yuque:{doc.get('repo_namespace', '')}/{doc.get('slug', '')}",
+                }
+            ))
 
         if not documents:
             return 0
 
-        # 添加到向量库
-        vectorstore = self._load_vectorstore()
-        vectorstore.add_documents(documents)
-        vectorstore.persist()
-
-        return len(documents)
+        # 批量添加
+        try:
+            self.vectorstore.add_documents(documents)
+            return len(documents)
+        except Exception as e:
+            print(f"索引文档失败: {e}")
+            raise
 
     def index_from_sync(self, docs_dir: str) -> int:
-        """
-        从同步目录读取 Markdown 文件并索引
+        """从同步目录读取 Markdown 并索引"""
+        import yaml
 
-        Args:
-            docs_dir: YuqueSync 同步的文档目录
-
-        Returns:
-            索引的文档数量
-        """
         docs_path = Path(docs_dir)
         if not docs_path.exists():
+            print(f"文档目录不存在: {docs_dir}")
             return 0
 
         all_docs = []
 
-        # 遍历所有 .md 文件
         for md_file in docs_path.rglob("*.md"):
             try:
                 content = md_file.read_text(encoding="utf-8")
-                metadata = self._parse_frontmatter(content)
 
-                if metadata:
-                    # 移除 frontmatter 后的正文
-                    body = self._remove_frontmatter(content)
+                # 解析 frontmatter
+                metadata = {}
+                body = content
 
-                    # 跳过空正文
-                    if not body or not body.strip():
-                        continue
+                if content.startswith("---"):
+                    end = content.find("\n---", 3)
+                    if end != -1:
+                        try:
+                            metadata = yaml.safe_load(content[3:end].strip()) or {}
+                            body = content[end + 4:].strip()
+                        except:
+                            pass
 
-                    all_docs.append({
-                        "content": body,
-                        "id": metadata.get("id"),
-                        "title": metadata.get("title", ""),
-                        "slug": metadata.get("slug", ""),
-                        "author": metadata.get("author", ""),
-                        "book_name": metadata.get("book_name", ""),
-                        "repo_namespace": str(md_file.parent.relative_to(docs_path)),
-                        "created_at": metadata.get("created_at", ""),
-                        "updated_at": metadata.get("updated_at", ""),
-                    })
+                if not body.strip():
+                    continue
+
+                all_docs.append({
+                    "content": body,
+                    "id": metadata.get("id"),
+                    "title": metadata.get("title", ""),
+                    "slug": metadata.get("slug", ""),
+                    "author": metadata.get("author", ""),
+                    "book_name": metadata.get("book_name", ""),
+                    "repo_namespace": str(md_file.parent.relative_to(docs_path)),
+                })
+
             except Exception as e:
                 print(f"读取 {md_file} 失败: {e}")
 
         return self.index_docs(all_docs)
 
-    def _parse_frontmatter(self, content: str) -> Optional[dict]:
-        """解析 Markdown frontmatter"""
-        import yaml
-        
-        if not content.startswith("---"):
-            return None
-        
-        # 找到 frontmatter 结束位置
-        end = content.find("\n---", 3)
-        if end == -1:
-            return None
-        
-        yaml_content = content[3:end].strip()
-        try:
-            return yaml.safe_load(yaml_content)
-        except Exception:
-            return None
-
-    def _remove_frontmatter(self, content: str) -> str:
-        """移除 frontmatter，返回正文"""
-        if not content.startswith("---"):
-            return content
-        
-        end = content.find("\n---", 3)
-        if end == -1:
-            return content
-        
-        return content[end + 4:].strip()
-
     def search(self, query: str, k: int = 5) -> list[dict]:
-        """
-        语义检索
-
-        Args:
-            query: 查询文本
-            k: 返回结果数量
-
-        Returns:
-            检索结果列表
-        """
-        # 确保 query 是有效字符串
+        """语义检索"""
         if not query or not isinstance(query, str):
             return []
 
@@ -209,88 +157,54 @@ class RAGEngine:
         if not query:
             return []
 
-        vectorstore = self._load_vectorstore()
-
         try:
-            results = vectorstore.similarity_search(query, k=k)
+            results = self.vectorstore.similarity_search(query, k=k)
+            return [
+                {
+                    "content": doc.page_content[:500] if doc.page_content else "",
+                    "title": doc.metadata.get("title", ""),
+                    "source": doc.metadata.get("source", ""),
+                    "author": doc.metadata.get("author", ""),
+                }
+                for doc in results
+            ]
         except Exception as e:
             print(f"搜索失败: {e}")
             return []
 
-        return [
-            {
-                "content": doc.page_content[:500] if doc.page_content else "",
-                "title": doc.metadata.get("title", ""),
-                "source": doc.metadata.get("source", ""),
-                "author": doc.metadata.get("author", ""),
-                "word_count": doc.metadata.get("word_count", 0),
-            }
-            for doc in results
-        ]
-
-    def search_with_scores(self, query: str, k: int = 5) -> list[dict]:
-        """
-        语义检索（带相似度分数）
-
-        Args:
-            query: 查询文本
-            k: 返回结果数量
-
-        Returns:
-            检索结果列表（含 score 字段）
-        """
-        # 确保 query 是有效字符串
-        if not query or not isinstance(query, str):
-            return []
-
-        query = query.strip()
-        if not query:
-            return []
-
-        vectorstore = self._load_vectorstore()
-
-        try:
-            results = vectorstore.similarity_search_with_score(query, k=k)
-        except Exception as e:
-            print(f"搜索失败: {e}")
-            return []
-
-        return [
-            {
-                "content": doc.page_content[:500] if doc.page_content else "",
-                "title": doc.metadata.get("title", ""),
-                "source": doc.metadata.get("source", ""),
-                "author": doc.metadata.get("author", ""),
-                "word_count": doc.metadata.get("word_count", 0),
-                "score": float(score),
-            }
-            for doc, score in results
-        ]
-
-    def clear(self):
+    def clear(self) -> bool:
         """清空向量库"""
-        # 先释放连接
-        self.vectorstore = None
+        # 1. 释放 ChromaDB 连接
+        if self._vectorstore is not None:
+            try:
+                # 关闭底层的 SQLite 连接
+                if hasattr(self._vectorstore, '_client'):
+                    del self._vectorstore._client
+            except:
+                pass
+            self._vectorstore = None
 
-        # 删除整个目录
+        # 2. 强制垃圾回收，释放文件句柄
+        gc.collect()
+
+        # 3. 删除目录
         if self.persist_directory.exists():
-            import shutil
             try:
                 shutil.rmtree(self.persist_directory)
+            except PermissionError:
+                # Windows 上可能文件被锁定，尝试延迟删除
+                print("警告：无法删除向量库目录，可能被其他进程占用")
+                return False
             except Exception as e:
-                print(f"清空向量库失败: {e}")
+                print(f"删除向量库目录失败: {e}")
                 return False
 
-        # 重新创建目录
-        self.persist_directory.mkdir(parents=True, exist_ok=True)
         return True
 
     def get_stats(self) -> dict:
-        """获取向量库统计信息"""
+        """获取向量库统计"""
         try:
-            vectorstore = self._load_vectorstore()
-            # Chroma 不直接提供文档数量 API，尝试获取
-            collection = vectorstore._collection
+            collection = self.vectorstore._collection
             count = collection.count()
             return {
                 "docs_count": count,
