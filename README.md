@@ -137,8 +137,8 @@ AstrBot 服务器 (另一台机器)
 |------|:----:|------|
 | /bind 绑定 | ✅ | 支持用户名/login/模糊匹配 |
 | 用户画像 | ✅ | 基于文档关键词生成 |
-| 语雀同步 | ✅ | 全量同步 + 团队成员缓存 |
-| RAG 检索 | ✅ | LangChain + ChromaDB |
+| 语雀同步 | ✅ | Markdown + YAML frontmatter |
+| RAG 检索 | ✅ | LangChain + ChromaDB + 元数据 |
 | /sync members | ✅ | 单独同步团队成员 |
 | Webhook 增量 | 🔲 | 待开发 |
 
@@ -208,6 +208,7 @@ chromadb>=0.4.0
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| v0.4.0 | 2026-03-26 | 同步输出 Markdown + frontmatter，支持元数据检索 |
 | v0.3.0 | 2026-03-26 | 添加 `/sync members`，支持 login 和模糊匹配绑定 |
 | v0.2.0 | 2026-03-26 | 自包含架构：内置同步 + RAG，废弃 gno MCP |
 | v0.1.0 | 2026-03-26 | 初始版本：/bind、用户画像、gno MCP |
