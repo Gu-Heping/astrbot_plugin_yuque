@@ -6,11 +6,13 @@ NovaBot - NOVA 社团智能助手
 import asyncio
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import httpx
+import jieba
 import yaml
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -528,23 +530,71 @@ class ProfileGenerator:
     """用户画像生成器"""
 
     INTEREST_KEYWORDS = {
-        "AI Agent": ["agent", "智能体", "autonomous", "agent开发"],
-        "Python": ["python", "pip", "django", "flask", "fastapi"],
-        "爬虫": ["爬虫", "crawler", "spider", "scrapy", "requests"],
-        "LLM": ["llm", "gpt", "claude", "prompt", "chatgpt", "大模型", "大语言模型"],
-        "数据分析": ["数据分析", "pandas", "numpy", "可视化", "matplotlib"],
-        "前端": ["前端", "react", "vue", "css", "javascript", "html"],
-        "后端": ["后端", "api", "server", "database", "mysql", "postgresql"],
-        "AstrBot": ["astrbot", "机器人", "bot", "qq机器人"],
-        "RAG": ["rag", "向量", "embedding", "检索", "chroma", "langchain"],
-        "Git": ["git", "github", "版本控制", "commit"],
-        "Docker": ["docker", "容器", "部署"],
+        # AI / LLM
+        "AI Agent": ["agent", "智能体", "autonomous", "agent开发", "助手", "助教"],
+        "LLM": ["llm", "gpt", "claude", "prompt", "chatgpt", "大模型", "大语言模型", "transformer", "nlp", "自然语言处理"],
+        "机器学习": ["机器学习", "ml", "machine learning", "监督学习", "无监督学习", "训练", "模型"],
+        "深度学习": ["深度学习", "dl", "deep learning", "神经网络", "cnn", "rnn", "transformer"],
+        "RAG": ["rag", "向量", "embedding", "检索", "chroma", "langchain", "知识库"],
+
+        # 编程语言
+        "Python": ["python", "pip", "django", "flask", "fastapi", "pandas", "numpy"],
+        "Java": ["java", "jdk", "jvm", "spring", "maven", "gradle", "kotlin"],
+        "C/C++": ["c++", "cpp", "c语言", "指针", "内存管理", "gcc"],
+        "Kotlin": ["kotlin", "kt", "android"],
+        "Verilog": ["verilog", "fpga", "hdl", "硬件描述", "逻辑设计"],
+        "MATLAB": ["matlab", "矩阵", "simulink", "数值计算"],
+
+        # Web & App 开发
+        "前端": ["前端", "react", "vue", "css", "javascript", "html", "typescript", "webpack"],
+        "后端": ["后端", "api", "server", "database", "mysql", "postgresql", "redis"],
+        "全栈": ["全栈", "fullstack", "前后端", "web开发"],
+        "Flutter": ["flutter", "dart", "移动开发", "app开发", "跨平台"],
+
+        # 工程 & 运维
+        "Git": ["git", "github", "版本控制", "commit", "branch", "merge", "repository"],
+        "Docker": ["docker", "容器", "部署", "kubernetes", "k8s", "devops"],
+        "爬虫": ["爬虫", "crawler", "spider", "scrapy", "requests", "selenium", "webclaw"],
+
+        # 数学 & 建模
+        "数学建模": ["数模", "数学建模", "建模", "国赛", "美赛", "优化", "规划"],
+        "算法": ["算法", "数据结构", "排序", "搜索", "动态规划", "图论", "leetcode"],
+        "统计学": ["统计", "概率", "分布", "回归", "假设检验"],
+
+        # 硬件 & 系统
+        "计算机体系结构": ["体系结构", "cpu", "处理器", "指令集", "流水线", "一生一芯", "cpu设计"],
+        "操作系统": ["操作系统", "os", "进程", "线程", "内存管理", "linux"],
+
+        # 学术 & 写作
+        "学术写作": ["论文", "学术", "查重", "文献", "引用", "latex"],
+        "数学物理": ["数学", "物理", "微积分", "线性代数", "力学", "电磁"],
+
+        # 产品 & 运营
+        "产品运营": ["运营", "小红书", "新媒体", "内容策划", "用户增长", "社群"],
+        "创业": ["创业", "企业家", "商业模式", "商赛", "路演", "pitch"],
+
+        # 游戏 & 娱乐
+        "游戏开发": ["游戏", "game", "unity", "unreal", "minecraft", "mod"],
+        "Java Mod": ["minecraft", "mod", "forge", "fabric", "java mod"],
+
+        # 其他工具
+        "AstrBot": ["astrbot", "机器人", "bot", "qq机器人", "聊天机器人"],
+        "浏览器插件": ["浏览器", "extension", "插件", "chrome", "madoka"],
     }
 
     LEVEL_KEYWORDS = {
         "advanced": ["原理", "源码", "架构", "优化", "性能", "深入", "底层", "内核"],
         "intermediate": ["项目", "实践", "实现", "开发", "实战", "应用", "部署"],
         "beginner": ["入门", "基础", "教程", "学习", "新手", "初学者", "快速上手"]
+    }
+
+    # 停用词（过滤掉无意义的词）
+    STOP_WORDS = {
+        "的", "是", "在", "了", "和", "与", "或", "有", "为", "中", "到", "对", "等",
+        "我", "你", "他", "她", "它", "我们", "你们", "他们", "这个", "那个", "什么",
+        "如何", "怎么", "为什么", "可以", "能", "会", "要", "就", "也", "都", "又",
+        "一个", "一些", "这些", "那些", "之", "以", "及", "其", "但", "而", "则",
+        "使用", "进行", "实现", "方法", "方式", "问题", "内容", "功能", "系统", "设计",
     }
 
     def generate_from_docs(self, docs: list) -> dict:
@@ -565,6 +615,8 @@ class ProfileGenerator:
         interest_docs = {k: [] for k in self.INTEREST_KEYWORDS}
         # 知识库集合
         repos = set()
+        # 用于动态发现新兴趣的关键词
+        all_keywords = []
 
         for doc in docs:
             # 合并标题、描述和正文前500字
@@ -579,24 +631,60 @@ class ProfileGenerator:
                 repos.add(book_name)
 
             # 匹配兴趣领域
+            matched_interests = set()
             for interest, keywords in self.INTEREST_KEYWORDS.items():
-                matched = False
                 for kw in keywords:
                     if kw.lower() in text:
                         interest_scores[interest] += 1
-                        matched = True
+                        matched_interests.add(interest)
                         break
-                if matched:
-                    interest_docs[interest].append(text)
+
+            for interest in matched_interests:
+                interest_docs[interest].append(text)
+
+            # 提取标题中的关键词（用于发现新兴趣）
+            if title:
+                keywords = self._extract_keywords(title)
+                all_keywords.extend(keywords)
 
         # 提取兴趣列表（出现2次以上）
         interests = [k for k, v in sorted(interest_scores.items(), key=lambda x: -x[1]) if v >= 2][:5]
 
+        # 动态发现新兴趣（标题中高频出现但不在预设列表中的关键词）
+        if all_keywords:
+            keyword_freq = Counter(all_keywords)
+            # 已匹配的兴趣关键词（用于排除）
+            matched_kw_set = set()
+            for interest in interests:
+                matched_kw_set.update(k.lower() for k in self.INTEREST_KEYWORDS.get(interest, []))
+
+            # 发现新兴趣
+            discovered = []
+            for kw, freq in keyword_freq.most_common(20):
+                if freq >= 2 and kw not in matched_kw_set and kw not in self.STOP_WORDS:
+                    # 检查是否是已匹配兴趣的关键词
+                    is_known = False
+                    for known_kws in self.INTEREST_KEYWORDS.values():
+                        if kw in [k.lower() for k in known_kws]:
+                            is_known = True
+                            break
+                    if not is_known and len(kw) >= 2:  # 过滤太短的词
+                        discovered.append(kw)
+                        if len(discovered) >= 2:  # 最多添加2个新兴趣
+                            break
+
+            # 将发现的新兴趣添加到列表
+            if discovered:
+                interests.extend(discovered[:2])
+                for kw in discovered[:2]:
+                    skills[kw] = "exploring"  # 探索中的新兴趣
+
         # 计算每个兴趣领域的技能水平
         skills = {}
         for interest in interests:
-            skill_level = self._assess_skill_level(interest_docs[interest])
-            skills[interest] = skill_level
+            if interest in interest_docs:
+                skill_level = self._assess_skill_level(interest_docs[interest])
+                skills[interest] = skill_level
 
         # 计算整体水平
         overall_level = self._calculate_overall_level(skills)
@@ -612,6 +700,24 @@ class ProfileGenerator:
                 "repos": list(repos),
             }
         }
+
+    def _extract_keywords(self, text: str) -> list[str]:
+        """从文本中提取关键词"""
+        # 使用jieba分词
+        words = jieba.cut(text)
+        # 过滤：只保留中文词（2-4字）和英文词（3+字符）
+        keywords = []
+        for w in words:
+            w = w.strip().lower()
+            if not w:
+                continue
+            # 中文词：2-4字
+            if re.match(r'^[\u4e00-\u9fa5]{2,4}$', w):
+                keywords.append(w)
+            # 英文词：3+字符
+            elif re.match(r'^[a-z]{3,}$', w):
+                keywords.append(w)
+        return keywords
 
     def _assess_skill_level(self, texts: list[str]) -> str:
         """评估某领域的技能水平"""
