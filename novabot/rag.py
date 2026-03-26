@@ -348,14 +348,24 @@ class RAGEngine:
                         except:
                             pass
 
-                # 2. 去掉元信息表格（| 作者 | 创建时间 | 更新时间 | ...）
-                # 匹配表格：| xxx | xxx | ... | 后跟分隔行 |---|---|... 和数据行
-                table_pattern = r'\| 作者 \| 创建时间 \| 更新时间 \|\n\|[-| ]+\|\n\|[^|]+\|[^|]+\|[^|]+\|\n*'
-                body = re.sub(table_pattern, '', body).strip()
+                # 2. 去掉文档开头的元信息表格
+                # 删除开头所有以 | 开头的行（直到遇到非表格行）
+                lines = body.split('\n')
+                content_start = 0
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    # 跳过空行
+                    if not stripped:
+                        content_start = i + 1
+                        continue
+                    # 跳过表格行（以 | 开头或 |---| 分隔行）
+                    if stripped.startswith('|') or re.match(r'^\|[-:\s|]+\|$', stripped):
+                        content_start = i + 1
+                        continue
+                    # 遇到非表格行，停止
+                    break
 
-                # 3. 去掉其他可能的元信息表格
-                # 匹配以 | 开头的表格块（连续多行）
-                body = re.sub(r'(\|[^\n]+\|\n){3,}', '', body).strip()
+                body = '\n'.join(lines[content_start:]).strip()
 
                 if not body or not body.strip():
                     continue

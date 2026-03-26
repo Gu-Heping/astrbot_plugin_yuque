@@ -711,6 +711,147 @@ class NovaBotPlugin(Star):
 
         logger.info("NovaBot 插件初始化完成 (v0.5.1)")
 
+        # 注册 FunctionTool
+        self._register_tools()
+
+    def _register_tools(self):
+        """注册 LLM 工具"""
+        from dataclasses import dataclass, field
+        from astrbot.api import FunctionTool
+
+        @dataclass
+        class SearchKnowledgeBaseTool(FunctionTool):
+            """知识库搜索工具"""
+            name: str = "search_knowledge_base"
+            description: str = "搜索 NOVA 社团语雀知识库。当用户询问技术问题、项目信息、文档内容时使用。返回相关文档片段。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索关键词或问题"
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回结果数量，默认 5",
+                        "default": 5
+                    }
+                },
+                "required": ["query"]
+            })
+            plugin: object = None
+
+            async def run(self, event, query: str, top_k: int = 5):
+                if not self.plugin or not self.plugin.rag:
+                    return "知识库未初始化，请检查 embedding 配置"
+
+                try:
+                    results = self.plugin.rag.search(query, k=top_k)
+                    if not results:
+                        return f"未找到与「{query}」相关的内容"
+
+                    output = []
+                    for i, r in enumerate(results, 1):
+                        title = r.get("title", "未知")
+                        author = r.get("author", "")
+                        content = r.get("content", "")[:300]
+                        output.append(f"【{i}】{title}" + (f" (by {author})" if author else ""))
+                        output.append(f"    {content}...")
+                        output.append("")
+
+                    return "\n".join(output)
+                except Exception as e:
+                    return f"搜索失败: {e}"
+
+        @dataclass
+        class GrepLocalDocsTool(FunctionTool):
+            """本地文档关键词搜索工具"""
+            name: str = "grep_local_docs"
+            description: str = "在本地同步的语雀文档中进行关键词精确匹配搜索。适合查找特定代码、配置、名称等。"
+            parameters: dict = field(default_factory=lambda: {
+                "type": "object",
+                "properties": {
+                    "keyword": {
+                        "type": "string",
+                        "description": "要搜索的关键词"
+                    },
+                    "max_results": {
+                        "type": "integer",
+                        "description": "最大返回结果数，默认 10",
+                        "default": 10
+                    }
+                },
+                "required": ["keyword"]
+            })
+            plugin: object = None
+
+            async def run(self, event, keyword: str, max_results: int = 10):
+                import re
+                from pathlib import Path
+
+                docs_dir = self.plugin.storage.data_dir / "yuque_docs"
+                if not docs_dir.exists():
+                    return "文档目录不存在，请先执行 /sync 同步"
+
+                results = []
+                pattern = re.compile(re.escape(keyword), re.IGNORECASE)
+
+                for md_file in docs_dir.rglob("*.md"):
+                    try:
+                        content = md_file.read_text(encoding="utf-8")
+                        matches = list(pattern.finditer(content))
+                        if matches:
+                            # 提取标题
+                            title = md_file.stem
+                            for line in content.split("\n")[:10]:
+                                if line.startswith("# "):
+                                    title = line[2:].strip()
+                                    break
+
+                            # 提取上下文
+                            contexts = []
+                            for m in matches[:3]:  # 每个文件最多3个匹配
+                                start = max(0, m.start() - 50)
+                                end = min(len(content), m.end() + 100)
+                                ctx = content[start:end].replace("\n", " ")
+                                contexts.append(f"...{ctx}...")
+
+                            results.append({
+                                "title": title,
+                                "file": str(md_file.relative_to(docs_dir)),
+                                "count": len(matches),
+                                "contexts": contexts
+                            })
+
+                            if len(results) >= max_results:
+                                break
+                    except Exception as e:
+                        continue
+
+                if not results:
+                    return f"未找到包含「{keyword}」的文档"
+
+                output = [f"找到 {len(results)} 个文档包含「{keyword}」:\n"]
+                for r in results:
+                    output.append(f"📄 {r['title']} ({r['count']} 处)")
+                    for ctx in r['contexts'][:1]:
+                        output.append(f"   {ctx}")
+                    output.append("")
+
+                return "\n".join(output)
+
+        # 实例化并注册工具
+        rag_tool = SearchKnowledgeBaseTool()
+        rag_tool.plugin = self
+        self.context.add_llm_tools(rag_tool)
+
+        if self.storage.data_dir.exists():
+            grep_tool = GrepLocalDocsTool()
+            grep_tool.plugin = self
+            self.context.add_llm_tools(grep_tool)
+
+        logger.info("LLM 工具注册完成: search_knowledge_base, grep_local_docs")
+
     def _get_client(self) -> YuqueClient:
         """获取语雀客户端（懒加载）"""
         if self.client is None:

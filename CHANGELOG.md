@@ -4,6 +4,17 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.8.0] - 2026-03-26
+
+### 新增
+- **LLM 工具调用**：AI 可自动调用知识库搜索工具
+  - `search_knowledge_base`：RAG 语义搜索
+  - `grep_local_docs`：本地文档关键词精确匹配
+- **Agentic RAG**：AI 自主决定何时搜索、搜索什么
+
+### 改进
+- 优化文档表格过滤逻辑，跳过开头的元信息表格
+
 ## [v0.7.1] - 2026-03-26
 
 ### 修复
