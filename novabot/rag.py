@@ -64,24 +64,34 @@ class RAGEngine:
         documents = []
         for doc in docs:
             content = doc.get("content", "")
+
+            # 跳过空内容
+            if not content or not isinstance(content, str):
+                continue
+
+            # 清理内容（移除过多空白，确保是有效字符串）
+            content = " ".join(content.split())
+            content = content.strip()
+
+            # 跳过清理后为空的内容
             if not content:
                 continue
 
-            # 清理内容（移除过多空白）
-            content = " ".join(content.split())
+            # 限制内容长度（避免 API 限制）
+            if len(content) > 8000:
+                content = content[:8000]
 
             # 构建元数据
             metadata = {
-                "id": doc.get("id", ""),
-                "title": doc.get("title", ""),
-                "slug": doc.get("slug", ""),
-                "author": doc.get("author", ""),
-                "book_name": doc.get("book_name", ""),
-                "repo_namespace": doc.get("repo_namespace", ""),
+                "id": str(doc.get("id", "")),
+                "title": str(doc.get("title", "")),
+                "slug": str(doc.get("slug", "")),
+                "author": str(doc.get("author", "")),
+                "book_name": str(doc.get("book_name", "")),
+                "repo_namespace": str(doc.get("repo_namespace", "")),
                 "source": f"yuque:{doc.get('repo_namespace', '')}/{doc.get('slug', '')}",
-                "created_at": doc.get("created_at", ""),
-                "updated_at": doc.get("updated_at", ""),
-                "word_count": doc.get("word_count", len(content)),
+                "created_at": str(doc.get("created_at", "")),
+                "updated_at": str(doc.get("updated_at", "")),
             }
 
             documents.append(Document(page_content=content, metadata=metadata))
@@ -117,11 +127,15 @@ class RAGEngine:
             try:
                 content = md_file.read_text(encoding="utf-8")
                 metadata = self._parse_frontmatter(content)
-                
+
                 if metadata:
                     # 移除 frontmatter 后的正文
                     body = self._remove_frontmatter(content)
-                    
+
+                    # 跳过空正文
+                    if not body or not body.strip():
+                        continue
+
                     all_docs.append({
                         "content": body,
                         "id": metadata.get("id"),
@@ -178,13 +192,25 @@ class RAGEngine:
         Returns:
             检索结果列表
         """
+        # 确保 query 是有效字符串
+        if not query or not isinstance(query, str):
+            return []
+
+        query = query.strip()
+        if not query:
+            return []
+
         vectorstore = self._load_vectorstore()
 
-        results = vectorstore.similarity_search(query, k=k)
+        try:
+            results = vectorstore.similarity_search(query, k=k)
+        except Exception as e:
+            print(f"搜索失败: {e}")
+            return []
 
         return [
             {
-                "content": doc.page_content[:500],  # 截取前 500 字
+                "content": doc.page_content[:500] if doc.page_content else "",
                 "title": doc.metadata.get("title", ""),
                 "source": doc.metadata.get("source", ""),
                 "author": doc.metadata.get("author", ""),
@@ -204,13 +230,25 @@ class RAGEngine:
         Returns:
             检索结果列表（含 score 字段）
         """
+        # 确保 query 是有效字符串
+        if not query or not isinstance(query, str):
+            return []
+
+        query = query.strip()
+        if not query:
+            return []
+
         vectorstore = self._load_vectorstore()
 
-        results = vectorstore.similarity_search_with_score(query, k=k)
+        try:
+            results = vectorstore.similarity_search_with_score(query, k=k)
+        except Exception as e:
+            print(f"搜索失败: {e}")
+            return []
 
         return [
             {
-                "content": doc.page_content[:500],
+                "content": doc.page_content[:500] if doc.page_content else "",
                 "title": doc.metadata.get("title", ""),
                 "source": doc.metadata.get("source", ""),
                 "author": doc.metadata.get("author", ""),
@@ -242,5 +280,6 @@ class RAGEngine:
         except Exception as e:
             return {
                 "docs_count": 0,
+                "persist_directory": str(self.persist_directory),
                 "error": str(e),
             }
