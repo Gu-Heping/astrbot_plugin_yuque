@@ -4,6 +4,15 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.5.3] - 2026-03-26
+
+### 重构
+- **RAG 模块重构**：精简代码从 300 行到 218 行
+  - 移除已弃用的 `persist()` 调用，ChromaDB 自动持久化
+  - 延迟初始化向量库，避免不必要的数据库连接
+  - `clear()` 添加 `gc.collect()` 释放 Windows 文件句柄
+  - 增强内容验证，跳过无效内容避免 Embedding API 错误
+
 ## [v0.5.2] - 2026-03-26
 
 ### 修复
