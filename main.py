@@ -6,13 +6,11 @@ NovaBot - NOVA 社团智能助手
 import asyncio
 import json
 import re
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import httpx
-import jieba
 import yaml
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -524,237 +522,123 @@ class YuqueSync:
 
 # ============================================================================
 # 用户画像生成器
-# ============================================================================
+# =============================================================================
 
 class ProfileGenerator:
-    """用户画像生成器"""
+    """用户画像生成器（LLM 驱动）"""
 
-    INTEREST_KEYWORDS = {
-        # AI / LLM
-        "AI Agent": ["agent", "智能体", "autonomous", "agent开发", "助手", "助教"],
-        "LLM": ["llm", "gpt", "claude", "prompt", "chatgpt", "大模型", "大语言模型", "transformer", "nlp", "自然语言处理"],
-        "机器学习": ["机器学习", "ml", "machine learning", "监督学习", "无监督学习", "训练", "模型"],
-        "深度学习": ["深度学习", "dl", "deep learning", "神经网络", "cnn", "rnn", "transformer"],
-        "RAG": ["rag", "向量", "embedding", "检索", "chroma", "langchain", "知识库"],
+    PROFILE_PROMPT = """你是一个专业的技术能力分析助手。请根据用户的文档信息，生成一份简洁的用户画像。
 
-        # 编程语言
-        "Python": ["python", "pip", "django", "flask", "fastapi", "pandas", "numpy"],
-        "Java": ["java", "jdk", "jvm", "spring", "maven", "gradle", "kotlin"],
-        "C/C++": ["c++", "cpp", "c语言", "指针", "内存管理", "gcc"],
-        "Kotlin": ["kotlin", "kt", "android"],
-        "Verilog": ["verilog", "fpga", "hdl", "硬件描述", "逻辑设计"],
-        "MATLAB": ["matlab", "矩阵", "simulink", "数值计算"],
+## 分析维度
 
-        # Web & App 开发
-        "前端": ["前端", "react", "vue", "css", "javascript", "html", "typescript", "webpack"],
-        "后端": ["后端", "api", "server", "database", "mysql", "postgresql", "redis"],
-        "全栈": ["全栈", "fullstack", "前后端", "web开发"],
-        "Flutter": ["flutter", "dart", "移动开发", "app开发", "跨平台"],
+1. **技术领域**：识别用户涉足的技术领域（不限于此列表，自由发现）
+2. **认知水平**：评估用户在各领域的理解深度
+   - 入门：刚开始接触，学习基础概念
+   - 进阶：能独立完成项目，理解原理
+   - 高级：深入底层，能优化和创新
+3. **特点标签**：用户的学习风格、产出特点
 
-        # 工程 & 运维
-        "Git": ["git", "github", "版本控制", "commit", "branch", "merge", "repository"],
-        "Docker": ["docker", "容器", "部署", "kubernetes", "k8s", "devops"],
-        "爬虫": ["爬虫", "crawler", "spider", "scrapy", "requests", "selenium", "webclaw"],
+## 用户文档信息
 
-        # 数学 & 建模
-        "数学建模": ["数模", "数学建模", "建模", "国赛", "美赛", "优化", "规划"],
-        "算法": ["算法", "数据结构", "排序", "搜索", "动态规划", "图论", "leetcode"],
-        "统计学": ["统计", "概率", "分布", "回归", "假设检验"],
+{docs_info}
 
-        # 硬件 & 系统
-        "计算机体系结构": ["体系结构", "cpu", "处理器", "指令集", "流水线", "一生一芯", "cpu设计"],
-        "操作系统": ["操作系统", "os", "进程", "线程", "内存管理", "linux"],
+## 输出格式
 
-        # 学术 & 写作
-        "学术写作": ["论文", "学术", "查重", "文献", "引用", "latex"],
-        "数学物理": ["数学", "物理", "微积分", "线性代数", "力学", "电磁"],
+请严格按以下 JSON 格式输出，不要有多余内容：
 
-        # 产品 & 运营
-        "产品运营": ["运营", "小红书", "新媒体", "内容策划", "用户增长", "社群"],
-        "创业": ["创业", "企业家", "商业模式", "商赛", "路演", "pitch"],
+```json
+{{
+  "interests": ["领域1", "领域2", "领域3"],
+  "skills": {{
+    "领域1": "进阶",
+    "领域2": "入门",
+    "领域3": "高级"
+  }},
+  "level": "进阶",
+  "tags": ["标签1", "标签2"],
+  "summary": "一句话概括这个用户的技术特点"
+}}
+```
 
-        # 游戏 & 娱乐
-        "游戏开发": ["游戏", "game", "unity", "unreal", "minecraft", "mod"],
-        "Java Mod": ["minecraft", "mod", "forge", "fabric", "java mod"],
+注意：
+- interests 最多 5 个领域
+- tags 最多 3 个标签
+- level 是整体水平
+- 所有字段必须有值"""
 
-        # 其他工具
-        "AstrBot": ["astrbot", "机器人", "bot", "qq机器人", "聊天机器人"],
-        "浏览器插件": ["浏览器", "extension", "插件", "chrome", "madoka"],
-    }
+    def build_docs_info(self, docs: list) -> str:
+        """构建文档信息字符串"""
+        if not docs:
+            return "暂无文档"
 
-    LEVEL_KEYWORDS = {
-        "advanced": ["原理", "源码", "架构", "优化", "性能", "深入", "底层", "内核"],
-        "intermediate": ["项目", "实践", "实现", "开发", "实战", "应用", "部署"],
-        "beginner": ["入门", "基础", "教程", "学习", "新手", "初学者", "快速上手"]
-    }
+        lines = []
+        for i, doc in enumerate(docs[:30], 1):  # 最多30篇
+            title = doc.get("title", "无标题")
+            book = doc.get("book_name", "未知知识库")
+            content = doc.get("content", "")[:200] if doc.get("content") else ""
+            lines.append(f"{i}. [{book}] {title}")
+            if content:
+                lines.append(f"   摘要: {content[:100]}...")
 
-    # 停用词（过滤掉无意义的词）
-    STOP_WORDS = {
-        "的", "是", "在", "了", "和", "与", "或", "有", "为", "中", "到", "对", "等",
-        "我", "你", "他", "她", "它", "我们", "你们", "他们", "这个", "那个", "什么",
-        "如何", "怎么", "为什么", "可以", "能", "会", "要", "就", "也", "都", "又",
-        "一个", "一些", "这些", "那些", "之", "以", "及", "其", "但", "而", "则",
-        "使用", "进行", "实现", "方法", "方式", "问题", "内容", "功能", "系统", "设计",
-    }
+        return "\n".join(lines)
 
-    def generate_from_docs(self, docs: list) -> dict:
-        """从文档列表生成用户画像
+    async def generate_with_llm(self, docs: list, provider) -> dict:
+        """使用 LLM 生成用户画像
 
         Args:
-            docs: 文档列表，每个文档应包含 title, description, content, book_name
+            docs: 文档列表
+            provider: AstrBot LLM Provider
 
         Returns:
-            包含 profile 和 stats 的画像字典
+            画像字典
         """
         if not docs:
             return self._empty_profile()
 
-        # 兴趣领域得分
-        interest_scores = {k: 0 for k in self.INTEREST_KEYWORDS}
-        # 每个兴趣领域的内容（用于计算技能水平）
-        interest_docs = {k: [] for k in self.INTEREST_KEYWORDS}
-        # 知识库集合
-        repos = set()
-        # 用于动态发现新兴趣的关键词
-        all_keywords = []
+        docs_info = self.build_docs_info(docs)
+        prompt = self.PROFILE_PROMPT.format(docs_info=docs_info)
 
-        for doc in docs:
-            # 合并标题、描述和正文前500字
-            title = doc.get("title", "") or ""
-            desc = doc.get("description", "") or ""
-            content = doc.get("content", "") or ""
-            text = f"{title} {desc} {content[:500]}".lower()
+        try:
+            resp = await provider.text_chat(
+                prompt=prompt,
+                context=[],
+                system_prompt="你是一个专业的技术能力分析助手，输出格式必须是 JSON。"
+            )
 
-            # 统计知识库
-            book_name = doc.get("book_name", "")
-            if book_name:
-                repos.add(book_name)
+            result_text = resp.completion_text.strip()
 
-            # 匹配兴趣领域
-            matched_interests = set()
-            for interest, keywords in self.INTEREST_KEYWORDS.items():
-                for kw in keywords:
-                    if kw.lower() in text:
-                        interest_scores[interest] += 1
-                        matched_interests.add(interest)
-                        break
+            # 提取 JSON
+            import json
+            # 尝试从 markdown 代码块中提取
+            if "```json" in result_text:
+                start = result_text.find("```json") + 7
+                end = result_text.find("```", start)
+                result_text = result_text[start:end].strip()
+            elif "```" in result_text:
+                start = result_text.find("```") + 3
+                end = result_text.find("```", start)
+                result_text = result_text[start:end].strip()
 
-            for interest in matched_interests:
-                interest_docs[interest].append(text)
+            profile_data = json.loads(result_text)
 
-            # 提取标题中的关键词（用于发现新兴趣）
-            if title:
-                keywords = self._extract_keywords(title)
-                all_keywords.extend(keywords)
-
-        # 提取兴趣列表（出现2次以上）
-        interests = [k for k, v in sorted(interest_scores.items(), key=lambda x: -x[1]) if v >= 2][:5]
-
-        # 动态发现新兴趣（标题中高频出现但不在预设列表中的关键词）
-        if all_keywords:
-            keyword_freq = Counter(all_keywords)
-            # 已匹配的兴趣关键词（用于排除）
-            matched_kw_set = set()
-            for interest in interests:
-                matched_kw_set.update(k.lower() for k in self.INTEREST_KEYWORDS.get(interest, []))
-
-            # 发现新兴趣
-            discovered = []
-            for kw, freq in keyword_freq.most_common(20):
-                if freq >= 2 and kw not in matched_kw_set and kw not in self.STOP_WORDS:
-                    # 检查是否是已匹配兴趣的关键词
-                    is_known = False
-                    for known_kws in self.INTEREST_KEYWORDS.values():
-                        if kw in [k.lower() for k in known_kws]:
-                            is_known = True
-                            break
-                    if not is_known and len(kw) >= 2:  # 过滤太短的词
-                        discovered.append(kw)
-                        if len(discovered) >= 2:  # 最多添加2个新兴趣
-                            break
-
-            # 将发现的新兴趣添加到列表
-            if discovered:
-                interests.extend(discovered[:2])
-                for kw in discovered[:2]:
-                    skills[kw] = "exploring"  # 探索中的新兴趣
-
-        # 计算每个兴趣领域的技能水平
-        skills = {}
-        for interest in interests:
-            if interest in interest_docs:
-                skill_level = self._assess_skill_level(interest_docs[interest])
-                skills[interest] = skill_level
-
-        # 计算整体水平
-        overall_level = self._calculate_overall_level(skills)
-
-        return {
-            "profile": {
-                "interests": interests,
-                "level": overall_level,
-                "skills": skills,
-            },
-            "stats": {
-                "docs_count": len(docs),
-                "repos": list(repos),
+            # 构建返回格式
+            return {
+                "profile": {
+                    "interests": profile_data.get("interests", []),
+                    "level": profile_data.get("level", "beginner"),
+                    "skills": profile_data.get("skills", {}),
+                    "tags": profile_data.get("tags", []),
+                    "summary": profile_data.get("summary", ""),
+                },
+                "stats": {
+                    "docs_count": len(docs),
+                    "repos": list(set(doc.get("book_name", "") for doc in docs if doc.get("book_name"))),
+                }
             }
-        }
 
-    def _extract_keywords(self, text: str) -> list[str]:
-        """从文本中提取关键词"""
-        # 使用jieba分词
-        words = jieba.cut(text)
-        # 过滤：只保留中文词（2-4字）和英文词（3+字符）
-        keywords = []
-        for w in words:
-            w = w.strip().lower()
-            if not w:
-                continue
-            # 中文词：2-4字
-            if re.match(r'^[\u4e00-\u9fa5]{2,4}$', w):
-                keywords.append(w)
-            # 英文词：3+字符
-            elif re.match(r'^[a-z]{3,}$', w):
-                keywords.append(w)
-        return keywords
-
-    def _assess_skill_level(self, texts: list[str]) -> str:
-        """评估某领域的技能水平"""
-        if not texts:
-            return "beginner"
-
-        level_scores = {"advanced": 0, "intermediate": 0, "beginner": 0}
-
-        for text in texts:
-            for level, keywords in self.LEVEL_KEYWORDS.items():
-                for kw in keywords:
-                    if kw in text:
-                        level_scores[level] += 1
-
-        # 根据得分判断水平
-        if level_scores["advanced"] >= 2:
-            return "advanced"
-        elif level_scores["intermediate"] >= 3 or level_scores["advanced"] >= 1:
-            return "intermediate"
-        else:
-            return "beginner"
-
-    def _calculate_overall_level(self, skills: dict) -> str:
-        """根据各技能水平计算整体水平"""
-        if not skills:
-            return "beginner"
-
-        levels = list(skills.values())
-        advanced_count = levels.count("advanced")
-        intermediate_count = levels.count("intermediate")
-
-        if advanced_count >= 2:
-            return "advanced"
-        elif intermediate_count >= 2 or advanced_count >= 1:
-            return "intermediate"
-        else:
-            return "beginner"
+        except Exception as e:
+            logger.error(f"LLM 生成画像失败: {e}")
+            return self._empty_profile()
 
     def _empty_profile(self) -> dict:
         return {
@@ -938,9 +822,6 @@ class NovaBotPlugin(Star):
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
 
-            # 生成用户画像
-            self._generate_all_profiles()
-
             logger.info(f"后台同步完成: {result['docs_count']} 篇文档")
 
         except Exception as e:
@@ -950,34 +831,6 @@ class NovaBotPlugin(Star):
             state["in_progress"] = False
             state["progress"] = None
             self.storage.save_sync_state(state)
-
-    def _generate_all_profiles(self):
-        """为所有已绑定用户生成画像"""
-        bindings = self.storage.load_bindings()
-        if not bindings:
-            return
-
-        generated = 0
-        for platform_id, binding in bindings.items():
-            yuque_name = binding.get("yuque_name", "")
-            yuque_id = binding.get("yuque_id")
-
-            if not yuque_name or not yuque_id:
-                continue
-
-            # 获取该用户的文档
-            docs = self.yuque_sync.get_docs_by_author(yuque_name)
-            if not docs:
-                continue
-
-            # 生成画像
-            profile = self.profile_gen.generate_from_docs(docs)
-            self.storage.save_profile(yuque_id, profile)
-            generated += 1
-            logger.info(f"生成用户画像: {yuque_name}, 兴趣: {profile['profile']['interests']}")
-
-        if generated > 0:
-            logger.info(f"共生成 {generated} 个用户画像")
 
     @filter.command("bind")
     async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):
@@ -1030,34 +883,13 @@ class NovaBotPlugin(Star):
             "yuque_name": matched.get("name", ""),
         })
 
-        # 立即生成画像
-        yuque_name = matched.get("name", "")
-        yuque_id = matched["id"]
-        docs = self.yuque_sync.get_docs_by_author(yuque_name)
-
-        if docs:
-            profile = self.profile_gen.generate_from_docs(docs)
-            self.storage.save_profile(yuque_id, profile)
-            interests = profile.get("profile", {}).get("interests", [])
-            level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-            level = level_map.get(profile.get("profile", {}).get("level", ""), "入门")
-
-            yield event.plain_result(
-                f"✅ 绑定成功\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"账号: @{matched.get('login', '')} ({yuque_name})\n"
-                f"文档: {len(docs)} 篇\n"
-                f"兴趣: {', '.join(interests) or '暂无'}\n"
-                f"水平: {level}"
-            )
-        else:
-            yield event.plain_result(
-                f"✅ 绑定成功\n"
-                f"账号: @{matched.get('login', '')} ({yuque_name})\n"
-                f"\n"
-                f"⚠️ 未找到你的文档\n"
-                f"执行 /sync 同步后再查看画像"
-            )
+        yield event.plain_result(
+            f"✅ 绑定成功\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"账号: @{matched.get('login', '')} ({matched.get('name', '')})\n"
+            f"\n"
+            f"💡 使用 /profile refresh 生成用户画像"
+        )
 
     @filter.command("unbind")
     async def unbind_cmd(self, event: AstrMessageEvent):
@@ -1078,7 +910,7 @@ class NovaBotPlugin(Star):
 
         用法:
         - /profile - 查看画像
-        - /profile refresh - 刷新画像
+        - /profile refresh - 使用 AI 深度分析生成画像
         """
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
@@ -1091,15 +923,40 @@ class NovaBotPlugin(Star):
         yuque_name = binding.get("yuque_name", "")
         yuque_login = binding.get("yuque_login", "")
 
-        # 刷新画像
+        # 刷新画像（使用 LLM 深度分析）
         if action.lower() == "refresh":
+            # 获取文档
             docs = self.yuque_sync.get_docs_by_author(yuque_name)
-            if docs:
-                profile = self.profile_gen.generate_from_docs(docs)
-                self.storage.save_profile(yuque_id, profile)
-                yield event.plain_result(f"✅ 画像已刷新，分析了 {len(docs)} 篇文档")
-            else:
+            if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
+                return
+
+            # 获取 LLM Provider
+            try:
+                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                if not provider:
+                    yield event.plain_result("❌ LLM 未配置，请先配置模型 Provider")
+                    return
+
+                yield event.plain_result(f"🔍 正在分析 {len(docs)} 篇文档...")
+
+                # 使用 LLM 生成画像
+                profile = await self.profile_gen.generate_with_llm(docs, provider)
+                self.storage.save_profile(yuque_id, profile)
+
+                p = profile.get("profile", {})
+                yield event.plain_result(
+                    f"✅ 画像已生成\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"兴趣: {', '.join(p.get('interests', []))}\n"
+                    f"水平: {p.get('level', '未知')}\n"
+                    f"标签: {', '.join(p.get('tags', []))}\n"
+                    f"\n"
+                    f"📝 {p.get('summary', '')}"
+                )
+            except Exception as e:
+                logger.error(f"生成画像失败: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 生成失败: {e}")
             return
 
         # 显示画像
@@ -1135,15 +992,25 @@ class NovaBotPlugin(Star):
             else:
                 lines.append("暂无数据")
 
+            # 标签
+            tags = p.get("tags", [])
+            if tags:
+                lines.extend(["", f"🏷️ 标签", f"• {' • '.join(tags)}"])
+
             lines.extend([
                 "",
                 f"📊 统计",
                 f"• 文档数: {stats.get('docs_count', 0)} 篇",
                 f"• 知识库: {repos_str or '暂无'}",
                 f"• 整体水平: {level_map.get(p.get('level', ''), '未知')}",
-                "",
-                f"💡 使用 /profile refresh 刷新画像",
             ])
+
+            # 概括
+            summary = p.get("summary", "")
+            if summary:
+                lines.extend(["", f"📝 {summary}"])
+
+            lines.extend(["", f"💡 使用 /profile refresh 重新分析"])
 
             yield event.plain_result("\n".join(lines))
         else:
@@ -1153,8 +1020,7 @@ class NovaBotPlugin(Star):
                 f"账号: @{yuque_login} ({yuque_name})\n"
                 f"\n"
                 f"画像未生成\n"
-                f"使用 /profile refresh 生成画像\n"
-                f"或执行 /sync 同步后自动生成"
+                f"使用 /profile refresh 生成画像"
             )
 
     @filter.command("rag")
