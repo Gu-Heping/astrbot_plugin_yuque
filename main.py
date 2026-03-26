@@ -3,12 +3,15 @@ NovaBot - NOVA 社团智能助手
 以语雀知识库为核心的 AstrBot Plugin
 """
 
+import asyncio
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import httpx
+import yaml
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
@@ -16,238 +19,316 @@ from astrbot.api.star import Context, Star, register
 from .novabot.rag import RAGEngine
 
 
+# ============================================================================
+# 语雀 API 客户端
+# ============================================================================
+
 class YuqueClient:
-    """语雀 API 客户端"""
+    """语雀 API 客户端（带限流和重试）"""
+
+    # 限流配置
+    CONCURRENCY = 3          # 最大并发数
+    REQUEST_DELAY = 0.25     # 请求间隔（秒）
+    MAX_RETRIES = 4          # 最大重试次数
 
     def __init__(self, token: str, base_url: str = "https://nova.yuque.com/api/v2"):
         self.base_url = base_url.rstrip("/")
+        self.token = token
         self.headers = {
             "X-Auth-Token": token,
             "User-Agent": "NovaBot/1.0",
+            "Content-Type": "application/json",
         }
-        self.client = httpx.AsyncClient(headers=self.headers, timeout=30.0)
+        self._client: Optional[httpx.AsyncClient] = None
+        self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
+
+    @property
+    def client(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(headers=self.headers, timeout=30.0)
+        return self._client
+
+    async def close(self):
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+        """带限流和重试的请求"""
+        last_error = None
+
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                async with self._semaphore:
+                    resp = await self.client.request(method, url, **kwargs)
+
+                    # 429 Rate Limit
+                    if resp.status_code == 429:
+                        wait = int(resp.headers.get("Retry-After", 2 ** attempt))
+                        logger.warning(f"Rate limited (429), wait {wait}s")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    # 5xx Server Error
+                    if 500 <= resp.status_code < 600:
+                        wait = 2 ** attempt
+                        logger.warning(f"Server error {resp.status_code}, retry in {wait}s")
+                        await asyncio.sleep(wait)
+                        continue
+
+                    # 请求间隔
+                    if self.REQUEST_DELAY > 0:
+                        await asyncio.sleep(self.REQUEST_DELAY)
+
+                    return resp
+
+            except (httpx.RequestError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                wait = 2 ** attempt
+                logger.warning(f"Request error: {e}, retry in {wait}s")
+                await asyncio.sleep(wait)
+                last_error = e
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Unexpected retry loop exit")
+
+    async def _get(self, path: str, params: dict = None) -> dict:
+        """GET 请求"""
+        url = f"{self.base_url}{path}"
+        resp = await self._request("GET", url, params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    # ========== API 方法 ==========
 
     async def get_user_info(self) -> dict:
         """获取当前认证用户信息"""
-        resp = await self.client.get(f"{self.base_url}/user")
-        resp.raise_for_status()
-        return resp.json().get("data", {})
+        data = await self._get("/user")
+        return data.get("data", {})
 
-    async def get_user_docs(self, user_id: int, limit: int = 100) -> list:
-        """获取用户的文档列表"""
-        resp = await self.client.get(
-            f"{self.base_url}/users/{user_id}/docs",
-            params={"limit": limit}
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", [])
+    async def get_group_repos(self, group_id: int, limit: int = 100) -> list:
+        """获取团队的知识库列表"""
+        data = await self._get(f"/groups/{group_id}/repos", {"limit": limit})
+        return data.get("data", [])
 
-    async def get_repos(self, user_id: int, limit: int = 100) -> list:
+    async def get_user_repos(self, user_id: int, limit: int = 100) -> list:
         """获取用户的知识库列表"""
-        resp = await self.client.get(
-            f"{self.base_url}/users/{user_id}/repos",
-            params={"limit": limit}
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", [])
+        data = await self._get(f"/users/{user_id}/repos", {"limit": limit})
+        return data.get("data", [])
 
-    async def get_repo_docs(self, repo_namespace: str, limit: int = 100) -> list:
+    async def get_repo_docs(self, namespace: str, limit: int = 100) -> list:
         """获取知识库的文档列表"""
-        resp = await self.client.get(
-            f"{self.base_url}/repos/{repo_namespace}/docs",
-            params={"limit": limit}
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", [])
+        data = await self._get(f"/repos/{namespace}/docs", {"limit": limit})
+        return data.get("data", [])
 
-    async def get_doc_detail(self, repo_namespace: str, slug: str) -> dict:
+    async def get_doc_detail(self, namespace: str, slug: str) -> dict:
         """获取文档详情（含正文）"""
-        resp = await self.client.get(
-            f"{self.base_url}/repos/{repo_namespace}/docs/{slug}",
-            params={"include_content": "true"}
-        )
-        resp.raise_for_status()
-        return resp.json().get("data", {})
+        data = await self._get(f"/repos/{namespace}/docs/{slug}", {"include_content": "true"})
+        return data.get("data", {})
 
-    async def close(self):
-        await self.client.aclose()
+    async def get_group_members(self, group_id: int) -> list:
+        """获取团队成员（分页）"""
+        all_members = []
+        page = 1
+
+        while True:
+            data = await self._get(
+                f"/groups/{group_id}/statistics/members",
+                {"page": page}
+            )
+            members = data.get("data", {}).get("members", [])
+            if not members:
+                break
+            all_members.extend(members)
+            page += 1
+
+        return all_members
 
 
-class YuqueSync:
-    """语雀文档同步器"""
+# ============================================================================
+# 数据存储
+# ============================================================================
+
+class Storage:
+    """数据存储"""
 
     def __init__(self, data_dir: str = "data/nova"):
         self.data_dir = Path(data_dir)
-        self.docs_dir = self.data_dir / "yuque_docs"
-        self.repos_dir = self.data_dir / "yuque_repos"
-        self.docs_dir.mkdir(parents=True, exist_ok=True)
-        self.repos_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+
+        # 文件路径
+        self.bindings_file = self.data_dir / "bindings.json"
+        self.members_file = self.data_dir / "yuque-members.json"
+        self.sync_state_file = self.data_dir / "sync_state.json"
+        self.profiles_dir = self.data_dir / "user_profiles"
+        self.profiles_dir.mkdir(parents=True, exist_ok=True)
+
+    # ========== 绑定关系 ==========
+
+    def load_bindings(self) -> dict:
+        if self.bindings_file.exists():
+            return json.loads(self.bindings_file.read_text(encoding="utf-8"))
+        return {}
+
+    def save_bindings(self, bindings: dict):
+        self.bindings_file.write_text(
+            json.dumps(bindings, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+    def get_binding(self, platform_id: str) -> Optional[dict]:
+        return self.load_bindings().get(platform_id)
+
+    def add_binding(self, platform_id: str, yuque_info: dict):
+        bindings = self.load_bindings()
+        bindings[platform_id] = {
+            **yuque_info,
+            "bind_time": datetime.now().isoformat(),
+        }
+        self.save_bindings(bindings)
+
+    def remove_binding(self, platform_id: str):
+        bindings = self.load_bindings()
+        if platform_id in bindings:
+            del bindings[platform_id]
+            self.save_bindings(bindings)
+
+    # ========== 团队成员 ==========
+
+    def load_members(self) -> dict:
+        if self.members_file.exists():
+            return json.loads(self.members_file.read_text(encoding="utf-8"))
+        return {}
+
+    def save_members(self, members: dict):
+        self.members_file.write_text(
+            json.dumps(members, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+    def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
+        members = self.load_members()
+        name_lower = name_or_login.lower()
+
+        # 1. 精确匹配 login
+        for uid, info in members.items():
+            if info.get("login", "").lower() == name_lower:
+                return {"id": int(uid), **info}
+
+        # 2. 精确匹配 name
+        for uid, info in members.items():
+            if info.get("name", "").lower() == name_lower:
+                return {"id": int(uid), **info}
+
+        # 3. 模糊匹配
+        for uid, info in members.items():
+            if name_lower in info.get("name", "").lower():
+                return {"id": int(uid), **info}
+            if name_lower in info.get("login", "").lower():
+                return {"id": int(uid), **info}
+
+        return None
+
+    # ========== 同步状态 ==========
 
     def load_sync_state(self) -> dict:
-        """加载同步状态"""
-        state_file = self.data_dir / "sync_state.json"
-        if state_file.exists():
-            return json.loads(state_file.read_text(encoding="utf-8"))
+        if self.sync_state_file.exists():
+            return json.loads(self.sync_state_file.read_text(encoding="utf-8"))
         return {"last_sync": None, "repos": {}, "docs_count": 0}
 
     def save_sync_state(self, state: dict):
-        """保存同步状态"""
-        state_file = self.data_dir / "sync_state.json"
-        state_file.write_text(
+        self.sync_state_file.write_text(
             json.dumps(state, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
 
-    async def sync_user_repos(self, client: YuqueClient, user_id: int) -> list:
-        """同步用户知识库列表"""
-        repos = await client.get_repos(user_id, limit=100)
-        
-        # 保存知识库列表
-        repos_file = self.repos_dir / f"user_{user_id}_repos.json"
-        repos_file.write_text(
-            json.dumps(repos, ensure_ascii=False, indent=2),
+    # ========== 用户画像 ==========
+
+    def load_profile(self, yuque_id: int) -> Optional[dict]:
+        profile_file = self.profiles_dir / f"{yuque_id}.json"
+        if profile_file.exists():
+            return json.loads(profile_file.read_text(encoding="utf-8"))
+        return None
+
+    def save_profile(self, yuque_id: int, profile: dict):
+        profile_file = self.profiles_dir / f"{yuque_id}.json"
+        profile["updated_at"] = datetime.now().isoformat()
+        profile_file.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
-        
-        logger.info(f"同步知识库列表完成，共 {len(repos)} 个知识库")
-        return repos
 
-    async def sync_repo_docs(self, client: YuqueClient, repo_namespace: str, with_content: bool = False, members: dict = None) -> list:
-        """同步知识库文档为 Markdown 文件"""
-        docs = await client.get_repo_docs(repo_namespace, limit=100)
-        
-        # 创建知识库目录
-        repo_dir = self.docs_dir / repo_namespace.replace("/", "_")
-        repo_dir.mkdir(parents=True, exist_ok=True)
-        
-        synced_docs = []
-        for doc in docs:
-            doc_id = doc.get("id")
-            slug = doc.get("slug", str(doc_id))
-            title = doc.get("title", "Untitled")
-            
-            doc_info = {
-                "id": doc_id,
-                "slug": slug,
-                "title": title,
-                "description": doc.get("description", ""),
-                "updated_at": doc.get("updated_at"),
-                "created_at": doc.get("created_at"),
-                "word_count": doc.get("word_count", 0),
-                "repo_namespace": repo_namespace,
-            }
-            
-            # 获取正文内容
-            if with_content:
-                try:
-                    detail = await client.get_doc_detail(repo_namespace, slug)
-                    doc_info["content"] = detail.get("content", "")
-                    doc_info["content_html"] = detail.get("content_html", "")
-                    doc_info["book"] = detail.get("book", {})
-                    doc_info["user_id"] = detail.get("user_id")
-                    
-                    # 从成员缓存获取作者姓名
-                    if members and doc_info.get("user_id"):
-                        member_info = members.get(str(doc_info["user_id"]), {})
-                        doc_info["author"] = member_info.get("name", "")
-                    else:
-                        doc_info["author"] = ""
-                    
-                    # 写入 Markdown 文件
-                    md_content = self._build_md(doc_info)
-                    md_file = repo_dir / f"{self._safe_filename(title, slug)}.md"
-                    md_file.write_text(md_content, encoding="utf-8")
-                    
-                except Exception as e:
-                    logger.warning(f"获取文档正文失败 {slug}: {e}")
-            
-            synced_docs.append(doc_info)
-        
-        logger.info(f"同步知识库 {repo_namespace} 完成，共 {len(synced_docs)} 篇文档")
-        return synced_docs
 
-    def _build_md(self, doc: dict) -> str:
-        """构建带 frontmatter 的 Markdown"""
-        # Frontmatter 字段
-        fm = {
-            "id": doc.get("id"),
-            "title": doc.get("title", ""),
-            "slug": doc.get("slug", ""),
-            "created_at": doc.get("created_at", ""),
-            "updated_at": doc.get("updated_at", ""),
-        }
-        
-        if doc.get("author"):
-            fm["author"] = doc["author"]
-        
-        book = doc.get("book", {})
-        if book and book.get("name"):
-            fm["book_name"] = book["name"]
-        
-        if doc.get("description"):
-            fm["description"] = doc["description"]
-        
-        # YAML frontmatter
-        import yaml
-        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-        
-        # 构建 Markdown
-        md = f"---\n{yaml_block}\n---\n\n"
-        
-        # 作者信息表格
-        author = doc.get("author", "") or str(doc.get("user_id", ""))
-        created = doc.get("created_at", "")
-        updated = doc.get("updated_at", "")
-        
-        md += "| 作者 | 创建时间 | 更新时间 |\n"
-        md += "|------|----------|----------|\n"
-        md += f"| {author} | {created} | {updated} |\n\n"
-        
-        # 正文
-        content = doc.get("content", "")
-        if content:
-            md += content
-        
-        return md
+# ============================================================================
+# 文档同步器
+# ============================================================================
 
-    def _safe_filename(self, title: str, slug: str) -> str:
-        """生成安全的文件名"""
-        import re
-        # 移除不安全字符
-        safe_title = re.sub(r'[<>:"/\\|?*]', '', title)
-        safe_title = safe_title.strip()[:50]  # 限制长度
-        return safe_title if safe_title else slug
+class YuqueSync:
+    """语雀文档同步器"""
 
-    async def full_sync(self, client: YuqueClient, user_id: int, with_content: bool = True, storage=None) -> dict:
-        """全量同步用户所有知识库
-        
-        Args:
-            client: 语雀客户端
-            user_id: 用户 ID
-            with_content: 是否同步正文
-            storage: Storage 实例（用于保存团队成员缓存）
-        """
-        state = self.load_sync_state()
-        
-        # 同步团队成员（如果有 storage）
+    def __init__(self, storage: Storage):
+        self.storage = storage
+        self.docs_dir = storage.data_dir / "yuque_docs"
+        self.docs_dir.mkdir(parents=True, exist_ok=True)
+
+    async def sync_team_members(self, client: YuqueClient) -> int:
+        """同步团队成员"""
+        user_info = await client.get_user_info()
+
+        if user_info.get("type") != "Group":
+            logger.info("非团队 Token，跳过成员同步")
+            return 0
+
+        group_id = user_info.get("id")
+        logger.info(f"同步团队成员，团队 ID: {group_id}")
+
+        members_raw = await client.get_group_members(group_id)
+
         members = {}
-        if storage and client:
-            await self._sync_team_members(client, storage)
-            members = storage.load_members()
-        
-        # 同步知识库列表
-        repos = await self.sync_user_repos(client, user_id)
-        
+        for item in members_raw:
+            user = item.get("user", {})
+            uid = user.get("id") or item.get("user_id")
+            if uid:
+                members[str(uid)] = {
+                    "name": user.get("name", ""),
+                    "login": user.get("login", "")
+                }
+
+        if members:
+            self.storage.save_members(members)
+            logger.info(f"同步团队成员完成，共 {len(members)} 人")
+
+        return len(members)
+
+    async def sync_all_repos(self, client: YuqueClient, with_content: bool = True) -> dict:
+        """同步所有知识库（自动判断团队/个人 Token）"""
+        user_info = await client.get_user_info()
+        is_group = user_info.get("type") == "Group"
+
+        # 获取知识库列表
+        if is_group:
+            group_id = user_info.get("id")
+            repos = await client.get_group_repos(group_id)
+            logger.info(f"团队 Token，获取到 {len(repos)} 个知识库")
+        else:
+            user_id = user_info.get("id")
+            repos = await client.get_user_repos(user_id)
+            logger.info(f"个人 Token，获取到 {len(repos)} 个知识库")
+
+        # 获取成员映射（用于填充作者名）
+        members = self.storage.load_members()
+
+        # 同步每个知识库
         total_docs = 0
         repo_stats = {}
-        
+
         for repo in repos:
             namespace = repo.get("namespace", "")
             if not namespace:
                 continue
-            
+
             try:
-                docs = await self.sync_repo_docs(client, namespace, with_content=with_content, members=members)
+                docs = await self._sync_repo_docs(client, namespace, with_content, members)
                 total_docs += len(docs)
                 repo_stats[namespace] = {
                     "name": repo.get("name", ""),
@@ -257,255 +338,159 @@ class YuqueSync:
             except Exception as e:
                 logger.error(f"同步知识库 {namespace} 失败: {e}")
                 repo_stats[namespace] = {"error": str(e)}
-        
-        # 更新同步状态
-        state["last_sync"] = datetime.now().isoformat()
-        state["repos"] = repo_stats
-        state["docs_count"] = total_docs
-        self.save_sync_state(state)
-        
+
+        # 保存同步状态
+        state = {
+            "last_sync": datetime.now().isoformat(),
+            "repos": repo_stats,
+            "docs_count": total_docs,
+            "token_type": "group" if is_group else "user"
+        }
+        self.storage.save_sync_state(state)
+
         return {
             "repos_count": len(repos),
             "docs_count": total_docs,
             "repos": repo_stats
         }
 
-    async def _sync_team_members(self, client: YuqueClient, storage) -> int:
-        """同步团队成员到缓存
-        
-        Args:
-            client: 语雀客户端
-            storage: Storage 实例
-        
-        Returns:
-            同步的成员数量
-        """
-        try:
-            # 获取当前用户信息以确定 group_id
-            user_info = await client.get_user_info()
-            group_id = user_info.get("group_id")
-            
-            if not group_id:
-                logger.warning("无法获取团队 ID，跳过成员同步")
-                return 0
-            
-            # 分页获取团队成员
-            members = {}
-            page = 1
-            
-            while True:
+    async def _sync_repo_docs(self, client: YuqueClient, namespace: str,
+                               with_content: bool, members: dict) -> list:
+        """同步单个知识库的文档"""
+        docs = await client.get_repo_docs(namespace)
+
+        repo_dir = self.docs_dir / namespace.replace("/", "_")
+        repo_dir.mkdir(parents=True, exist_ok=True)
+
+        synced = []
+        for doc in docs:
+            doc_id = doc.get("id")
+            slug = doc.get("slug", str(doc_id))
+            title = doc.get("title", "Untitled")
+
+            doc_info = {
+                "id": doc_id,
+                "slug": slug,
+                "title": title,
+                "description": doc.get("description", ""),
+                "created_at": doc.get("created_at", ""),
+                "updated_at": doc.get("updated_at", ""),
+                "repo_namespace": namespace,
+            }
+
+            if with_content:
                 try:
-                    resp = await client.client.get(
-                        f"{client.base_url}/groups/{group_id}/statistics/members",
-                        params={"page": page}
-                    )
-                    resp.raise_for_status()
-                    data = resp.json().get("data", {})
-                    page_members = data.get("members", [])
-                    
-                    if not page_members:
-                        break
-                    
-                    for item in page_members:
-                        user = item.get("user", {})
-                        uid = user.get("id") or item.get("user_id")
-                        if uid:
-                            members[str(uid)] = {
-                                "name": user.get("name", ""),
-                                "login": user.get("login", "")
-                            }
-                    
-                    page += 1
+                    detail = await client.get_doc_detail(namespace, slug)
+                    doc_info["content"] = detail.get("content", "")
+                    doc_info["book"] = detail.get("book", {})
+
+                    # 作者名
+                    user_id = detail.get("user_id")
+                    if user_id and str(user_id) in members:
+                        doc_info["author"] = members[str(user_id)].get("name", "")
+                    else:
+                        doc_info["author"] = ""
+
+                    # 写入 Markdown
+                    md_content = self._build_markdown(doc_info)
+                    filename = self._safe_filename(title, slug)
+                    (repo_dir / f"{filename}.md").write_text(md_content, encoding="utf-8")
+
                 except Exception as e:
-                    logger.warning(f"获取团队成员第 {page} 页失败: {e}")
-                    break
-            
-            if members:
-                storage.save_members(members)
-                logger.info(f"同步团队成员完成，共 {len(members)} 人")
-            
-            return len(members)
-            
-        except Exception as e:
-            logger.error(f"同步团队成员失败: {e}")
-            return 0
+                    logger.warning(f"获取文档详情失败 {slug}: {e}")
 
+            synced.append(doc_info)
 
-class Storage:
-    """数据存储工具"""
+        logger.info(f"同步知识库 {namespace}，共 {len(synced)} 篇")
+        return synced
 
-    def __init__(self, data_dir: str = "data/nova"):
-        self.data_dir = Path(data_dir)
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.bindings_file = self.data_dir / "bindings.json"
-        self.profiles_dir = self.data_dir / "user_profiles"
-        self.profiles_dir.mkdir(parents=True, exist_ok=True)
-
-    def load_bindings(self) -> dict:
-        """加载绑定关系"""
-        if self.bindings_file.exists():
-            return json.loads(self.bindings_file.read_text(encoding="utf-8"))
-        return {}
-
-    def save_bindings(self, bindings: dict):
-        """保存绑定关系"""
-        self.bindings_file.write_text(
-            json.dumps(bindings, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-
-    def get_binding(self, platform_id: str) -> Optional[dict]:
-        """获取用户的绑定信息"""
-        bindings = self.load_bindings()
-        return bindings.get(platform_id)
-
-    def add_binding(self, platform_id: str, yuque_info: dict):
-        """添加绑定"""
-        bindings = self.load_bindings()
-        bindings[platform_id] = {
-            **yuque_info,
-            "bind_time": datetime.now().isoformat(),
-            "last_sync": None
+    def _build_markdown(self, doc: dict) -> str:
+        """构建 Markdown 文件"""
+        fm = {
+            "id": doc.get("id"),
+            "title": doc.get("title", ""),
+            "slug": doc.get("slug", ""),
+            "created_at": doc.get("created_at", ""),
+            "updated_at": doc.get("updated_at", ""),
         }
-        self.save_bindings(bindings)
 
-    def remove_binding(self, platform_id: str):
-        """移除绑定"""
-        bindings = self.load_bindings()
-        if platform_id in bindings:
-            del bindings[platform_id]
-            self.save_bindings(bindings)
+        if doc.get("author"):
+            fm["author"] = doc["author"]
+        if doc.get("book", {}).get("name"):
+            fm["book_name"] = doc["book"]["name"]
+        if doc.get("description"):
+            fm["description"] = doc["description"]
 
-    def find_yuque_binding(self, yuque_id: int) -> Optional[tuple]:
-        """查找语雀 ID 被谁绑定"""
-        bindings = self.load_bindings()
-        for platform_id, info in bindings.items():
-            if info.get("yuque_id") == yuque_id:
-                return platform_id, info
-        return None
+        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
 
-    def load_profile(self, yuque_id: int) -> Optional[dict]:
-        """加载用户画像"""
-        profile_file = self.profiles_dir / f"{yuque_id}.json"
-        if profile_file.exists():
-            return json.loads(profile_file.read_text(encoding="utf-8"))
-        return None
+        md = f"---\n{yaml_block}\n---\n\n"
 
-    def save_profile(self, yuque_id: int, profile: dict):
-        """保存用户画像"""
-        profile_file = self.profiles_dir / f"{yuque_id}.json"
-        profile["updated_at"] = datetime.now().isoformat()
-        profile_file.write_text(
-            json.dumps(profile, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        # 元信息表格
+        author = doc.get("author") or str(doc.get("user_id", ""))
+        md += f"| 作者 | 创建时间 | 更新时间 |\n"
+        md += f"|------|----------|----------|\n"
+        md += f"| {author} | {doc.get('created_at', '')} | {doc.get('updated_at', '')} |\n\n"
 
-    def load_members(self) -> dict:
-        """加载团队成员缓存"""
-        members_file = self.data_dir / "yuque-members.json"
-        if members_file.exists():
-            return json.loads(members_file.read_text(encoding="utf-8"))
-        return {}
+        # 正文
+        content = doc.get("content", "")
+        if content:
+            md += content
 
-    def save_members(self, members: dict):
-        """保存团队成员缓存"""
-        members_file = self.data_dir / "yuque-members.json"
-        members_file.write_text(
-            json.dumps(members, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
+        return md
 
-    def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
-        """通过用户名或 login 查找成员（支持模糊匹配）"""
-        members = self.load_members()
-        name_lower = name_or_login.lower()
-        
-        # 1. 精确匹配 login
-        for uid, info in members.items():
-            if info.get("login", "").lower() == name_lower:
-                return {"id": int(uid), **info}
-        
-        # 2. 精确匹配 name
-        for uid, info in members.items():
-            if info.get("name", "").lower() == name_lower:
-                return {"id": int(uid), **info}
-        
-        # 3. 模糊匹配 name 或 login
-        for uid, info in members.items():
-            name = info.get("name", "")
-            login = info.get("login", "")
-            if name_lower in name.lower() or name_lower in login.lower():
-                return {"id": int(uid), **info}
-        
-        return None
+    def _safe_filename(self, title: str, slug: str) -> str:
+        safe = re.sub(r'[<>:"/\\|?*]', '', title)
+        safe = safe.strip()[:50]
+        return safe or slug
 
+
+# ============================================================================
+# 用户画像生成器
+# ============================================================================
 
 class ProfileGenerator:
-    """用户画像生成器 - 基于关键词提取"""
+    """用户画像生成器"""
 
-    # 兴趣领域关键词映射
     INTEREST_KEYWORDS = {
-        "AI Agent": ["agent", "智能体", "autonomous", "agent"],
+        "AI Agent": ["agent", "智能体", "autonomous"],
         "Python": ["python", "pip", "django", "flask", "fastapi"],
-        "爬虫": ["爬虫", "crawler", "spider", "scrapy", "requests", "selenium"],
+        "爬虫": ["爬虫", "crawler", "spider", "scrapy"],
         "LLM": ["llm", "gpt", "claude", "prompt", "chatgpt", "大模型"],
-        "数据分析": ["数据分析", "pandas", "numpy", "visualization", "可视化"],
-        "前端": ["前端", "react", "vue", "css", "javascript", "typescript"],
-        "后端": ["后端", "api", "server", "database", "mysql", "redis"],
-        "AstrBot": ["astrbot", "astrbot", "机器人", "bot"],
+        "数据分析": ["数据分析", "pandas", "numpy", "可视化"],
+        "前端": ["前端", "react", "vue", "css", "javascript"],
+        "后端": ["后端", "api", "server", "database", "mysql"],
+        "AstrBot": ["astrbot", "机器人", "bot"],
         "RAG": ["rag", "向量", "embedding", "检索"],
     }
 
-    # 技能水平关键词
     LEVEL_KEYWORDS = {
-        "advanced": ["原理", "源码", "架构", "优化", "性能", "深入"],
+        "advanced": ["原理", "源码", "架构", "优化", "性能"],
         "intermediate": ["项目", "实践", "实现", "开发", "实战"],
-        "beginner": ["入门", "基础", "教程", "学习", "初学", "新手"]
+        "beginner": ["入门", "基础", "教程", "学习", "新手"]
     }
 
     def generate_from_docs(self, docs: list) -> dict:
-        """
-        从文档列表生成画像
-        
-        Args:
-            docs: 文档列表，每个文档包含 title, description 等字段
-        
-        Returns:
-            画像字典
-        """
         if not docs:
             return self._empty_profile()
 
-        # 统计关键词
         interest_scores = {k: 0 for k in self.INTEREST_KEYWORDS}
-        level_scores = {"advanced": 0, "intermediate": 0, "beginner": 0}
-        
-        doc_titles = []
+        level_scores = {k: 0 for k in self.LEVEL_KEYWORDS}
+
         for doc in docs:
-            title = doc.get("title", "")
-            description = doc.get("description", "")
-            combined = f"{title} {description}".lower()
-            doc_titles.append(title)
-            
-            # 统计兴趣关键词
+            text = f"{doc.get('title', '')} {doc.get('description', '')}".lower()
+
             for interest, keywords in self.INTEREST_KEYWORDS.items():
                 for kw in keywords:
-                    if kw.lower() in combined:
+                    if kw in text:
                         interest_scores[interest] += 1
-            
-            # 统计水平关键词
+
             for level, keywords in self.LEVEL_KEYWORDS.items():
                 for kw in keywords:
-                    if kw in combined:
+                    if kw in text:
                         level_scores[level] += 1
 
-        # 提取 top 兴趣（分数 >= 2）
-        interests = [
-            k for k, v in sorted(interest_scores.items(), key=lambda x: -x[1])
-            if v >= 2
-        ][:5]
+        interests = [k for k, v in sorted(interest_scores.items(), key=lambda x: -x[1]) if v >= 2][:5]
 
-        # 判断水平
         if level_scores["advanced"] >= 3:
             level = "advanced"
         elif level_scores["intermediate"] >= 3 or level_scores["advanced"] >= 1:
@@ -514,53 +499,43 @@ class ProfileGenerator:
             level = "beginner"
 
         return {
-            "profile": {
-                "interests": interests,
-                "level": level,
-                "collaboration_style": "solo",  # 默认，后续可分析协作文档
-                "learning_pace": "steady"
-            },
-            "stats": {
-                "docs_count": len(docs),
-                "docs_titles": doc_titles[:10]  # 只保留前 10 个标题
-            }
+            "profile": {"interests": interests, "level": level},
+            "stats": {"docs_count": len(docs)}
         }
 
     def _empty_profile(self) -> dict:
-        """返回空画像"""
         return {
-            "profile": {
-                "interests": [],
-                "level": "beginner",
-                "collaboration_style": "solo",
-                "learning_pace": "steady"
-            },
-            "stats": {
-                "docs_count": 0,
-                "docs_titles": []
-            }
+            "profile": {"interests": [], "level": "beginner"},
+            "stats": {"docs_count": 0}
         }
 
 
-@register("novabot", "谷和平", "NOVA 社团智能助手，以语雀知识库为核心", "0.2.0")
+# ============================================================================
+# 主插件类
+# ============================================================================
+
+@register("novabot", "谷和平", "NOVA 社团智能助手", "0.5.0")
 class NovaBotPlugin(Star):
-    """NovaBot 主插件类"""
+    """NovaBot 主插件"""
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.storage = Storage()
-        self.yuque_sync = YuqueSync()
-        self.profile_generator = ProfileGenerator()
+
+        # 配置
         self.yuque_token = config.get("yuque_token", "")
         self.yuque_base_url = config.get("yuque_base_url", "https://nova.yuque.com/api/v2")
-        
-        # RAG 配置
         self.embedding_api_key = config.get("embedding_api_key", "")
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
-        
-        # 初始化 RAG 引擎
+
+        # 组件
+        self.storage = Storage()
+        self.yuque_sync = YuqueSync(self.storage)
+        self.profile_gen = ProfileGenerator()
+        self.client: Optional[YuqueClient] = None
+
+        # RAG
         self.rag: Optional[RAGEngine] = None
         if self.embedding_api_key:
             try:
@@ -573,499 +548,278 @@ class NovaBotPlugin(Star):
                 logger.info(f"RAG 引擎初始化完成，模型: {self.embedding_model}")
             except Exception as e:
                 logger.error(f"RAG 引擎初始化失败: {e}")
-        
-        logger.info("NovaBot 插件初始化完成 (v0.2.0)")
+
+        logger.info("NovaBot 插件初始化完成 (v0.5.0)")
+
+    def _get_client(self) -> YuqueClient:
+        """获取语雀客户端（懒加载）"""
+        if self.client is None:
+            self.client = YuqueClient(self.yuque_token, self.yuque_base_url)
+        return self.client
+
+    async def _close_client(self):
+        if self.client:
+            await self.client.close()
+            self.client = None
+
+    # ========== LLM 钩子 ==========
 
     @filter.on_llm_request()
     async def on_llm_request(self, event, req):
-        """LLM 请求前钩子：添加系统提示引导检索行为"""
         req.system_prompt += """
 
-你是 NovaBot，NOVA 社团的智能助手。语雀知识库是你的知识来源。
-
-【检索指引】
-- 用户提问涉及技术文档、教程、项目经验时 → 使用 gno.query 工具搜索
-- 用户问「有什么文档」「谁写过」→ 使用 gno.search 工具
-- 搜索结果中会包含文档来源，回答时请标注
+你是 NovaBot，NOVA 社团的智能助手。
 
 【回答风格】
-- 有温度，像学习伙伴而不是机器
+- 有温度，像学习伙伴
 - 回答后追问「还想了解什么？」
 - 标注来源：「根据《文档名》by 作者...」
 
-【个人信息】
-- 用户问「我的画像」「我写过什么」→ 引导使用 /profile 指令
-- 用户要绑定语雀 → 引导使用 /bind 指令
-- 用户要同步知识库 → 引导使用 /sync 指令
+【指令引导】
+- 用户问「我的画像」→ 引导 /profile
+- 用户要同步知识库 → 引导 /sync
 """
 
+    # ========== 指令 ==========
+
     @filter.command("sync")
-    async def sync(self, event: AstrMessageEvent, action: str = ""):
+    async def sync_cmd(self, event: AstrMessageEvent, action: str = ""):
         """同步语雀知识库
-        
-        用法: 
-        - /sync - 全量同步当前绑定用户的知识库
+
+        用法:
+        - /sync - 同步所有知识库
+        - /sync members - 同步团队成员
         - /sync status - 查看同步状态
-        - /sync members - 仅同步团队成员（无需绑定）
         """
-        platform_id = event.get_sender_id()
-        
-        # 仅同步团队成员（无需绑定）
+        if not self.yuque_token:
+            yield event.plain_result("❌ 未配置语雀 Token")
+            return
+
+        # 同步团队成员
         if action.lower() == "members":
-            if not self.yuque_token:
-                yield event.plain_result("无法同步：团队 Token 未配置")
-                return
-            
-            yield event.plain_result("🔄 开始同步团队成员...")
-            
+            yield event.plain_result("🔄 同步团队成员...")
+
+            client = self._get_client()
             try:
-                client = YuqueClient(self.yuque_token, self.yuque_base_url)
-                count = await self.yuque_sync._sync_team_members(client, self.storage)
-                await client.close()
-                
+                count = await self.yuque_sync.sync_team_members(client)
                 if count > 0:
                     yield event.plain_result(
                         f"✅ 团队成员同步完成\n"
                         f"共 {count} 人\n"
-                        f"用户可使用 /bind <用户名> 绑定"
+                        f"使用 /bind <用户名> 绑定账号"
                     )
                 else:
-                    yield event.plain_result(
-                        "⚠️ 未获取到成员数据\n"
-                        "请检查 Token 是否有团队权限"
-                    )
+                    yield event.plain_result("⚠️ 未获取到成员，请检查 Token 权限")
             except Exception as e:
                 logger.error(f"同步团队成员失败: {e}")
-                yield event.plain_result(f"❌ 同步失败：{str(e)}")
+                yield event.plain_result(f"❌ 同步失败: {e}")
             return
-        
-        # 以下操作需要绑定
-        binding = self.storage.get_binding(platform_id)
-        
-        if not binding:
-            yield event.plain_result(
-                "你还没有绑定语雀账号\n"
-                "请使用 /bind 绑定"
-            )
-            return
-        
-        yuque_id = binding.get("yuque_id")
-        yuque_login = binding.get("yuque_login", "未知")
-        
-        # 查看同步状态
+
+        # 查看状态
         if action.lower() == "status":
-            state = self.yuque_sync.load_sync_state()
-            
+            state = self.storage.load_sync_state()
             if state.get("last_sync"):
-                repos_info = []
-                for ns, info in state.get("repos", {}).items():
-                    if "error" in info:
-                        repos_info.append(f"  ❌ {ns}: {info['error']}")
-                    else:
-                        repos_info.append(f"  ✅ {info.get('name', ns)}: {info.get('docs_count', 0)} 篇")
-                
-                yield event.plain_result(
-                    f"📊 同步状态\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"语雀账号：@{yuque_login}\n"
-                    f"上次同步：{state['last_sync'][:19]}\n"
-                    f"知识库数：{len(state.get('repos', {}))}\n"
-                    f"文档总数：{state.get('docs_count', 0)} 篇\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    + "\n".join(repos_info[:10])
-                )
+                lines = [f"📊 同步状态", "━" * 15]
+                lines.append(f"上次同步: {state['last_sync'][:19]}")
+                lines.append(f"知识库数: {len(state.get('repos', {}))}")
+                lines.append(f"文档总数: {state.get('docs_count', 0)}")
+                lines.append(f"Token 类型: {state.get('token_type', '未知')}")
+                yield event.plain_result("\n".join(lines))
             else:
-                yield event.plain_result(
-                    f"📊 同步状态\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"语雀账号：@{yuque_login}\n"
-                    f"尚未同步\n"
-                    f"使用 /sync 开始同步"
-                )
+                yield event.plain_result("尚未同步，使用 /sync 开始")
             return
-        
-        # 执行全量同步（使用团队 Token）
-        if not self.yuque_token:
-            yield event.plain_result("无法同步：团队 Token 未配置")
-            return
-        
-        yield event.plain_result(f"🔄 开始同步 @{yuque_login} 的知识库...")
-        
+
+        # 执行同步
+        yield event.plain_result("🔄 开始同步知识库...")
+
+        client = self._get_client()
         try:
-            client = YuqueClient(self.yuque_token, self.yuque_base_url)
-            result = await self.yuque_sync.full_sync(client, yuque_id, with_content=True, storage=self.storage)
-            await client.close()
-            
-            # 更新绑定中的同步时间
-            bindings = self.storage.load_bindings()
-            if platform_id in bindings:
-                bindings[platform_id]["last_sync"] = datetime.now().isoformat()
-                self.storage.save_bindings(bindings)
-            
-            # 构建结果
-            repos_list = []
-            for ns, info in result.get("repos", {}).items():
-                if "error" not in info:
-                    repos_list.append(f"• {info.get('name', ns)}: {info.get('docs_count', 0)} 篇")
-            
-            # 同步到 RAG 向量库
-            rag_status = ""
+            result = await self.yuque_sync.sync_all_repos(client, with_content=True)
+
+            # RAG 索引
+            rag_msg = ""
             if self.rag:
                 try:
                     indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
-                    rag_status = f"\n📚 已索引到 RAG: {indexed} 篇文档"
-                    logger.info(f"RAG 索引完成: {indexed} 篇文档")
+                    rag_msg = f"\n📚 RAG 索引: {indexed} 篇"
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
-                    rag_status = f"\n⚠️ RAG 索引失败: {str(e)}"
-            
+
             yield event.plain_result(
-                f"✅ 同步完成！\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"知识库：{result['repos_count']} 个\n"
-                f"文档数：{result['docs_count']} 篇\n"
-                f"━━━━━━━━━━━━━━━\n"
-                + "\n".join(repos_list[:10])
-                + rag_status
+                f"✅ 同步完成\n"
+                f"知识库: {result['repos_count']} 个\n"
+                f"文档: {result['docs_count']} 篇"
+                f"{rag_msg}"
             )
-            
-        except httpx.HTTPStatusError as e:
-            logger.error(f"同步失败: {e}")
-            yield event.plain_result("❌ 同步失败：API 请求错误")
         except Exception as e:
             logger.error(f"同步失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 同步失败：{str(e)}")
+            yield event.plain_result(f"❌ 同步失败: {e}")
 
     @filter.command("bind")
-    async def bind(self, event: AstrMessageEvent, arg: str = ""):
+    async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):
         """绑定语雀账号
-        
-        用法: /bind <语雀用户名或 login>
-        
-        说明：使用语雀团队中的用户名或 login 绑定，支持模糊匹配
+
+        用法: /bind <用户名或 login>
         """
         platform_id = event.get_sender_id()
-        
-        # 检查是否已有绑定
+
+        # 检查已有绑定
         existing = self.storage.get_binding(platform_id)
         if existing:
             yield event.plain_result(
-                f"❌ 你的账号已绑定语雀账号 @{existing['yuque_login']}\n"
-                f"如需更换，请先使用 /unbind 解绑。"
+                f"已绑定 @{existing['yuque_login']}\n"
+                f"使用 /unbind 解绑后重新绑定"
             )
             return
 
-        # 检查是否是确认绑定
-        if arg.lower() == "confirm":
-            pending_key = f"_pb_{hash(platform_id)}"
-            pending = getattr(self, pending_key, None)
-            if not pending:
-                yield event.plain_result("没有待确认的绑定请求，请重新执行 /bind")
-                return
-            
-            self.storage.add_binding(platform_id, pending["yuque_info"])
-            delattr(self, pending_key)
-            
-            yield event.plain_result(
-                f"✅ 绑定成功！\n"
-                f"语雀账号：@{pending['yuque_info']['yuque_login']} "
-                f"({pending['yuque_info']['yuque_name']})\n"
-                f"使用 /sync 同步知识库"
-            )
-            return
-
-        # 检查参数
         if not arg:
             yield event.plain_result(
-                "请提供语雀用户名或 login：\n"
-                "/bind <用户名或 login>\n"
-                "\n"
-                "例如：\n"
-                "• /bind 谷和平\n"
-                "• /bind heping-qcbue\n"
-                "\n"
-                "支持模糊匹配，如 /bind 和平"
+                "请提供用户名:\n"
+                "/bind <用户名>\n\n"
+                "例如: /bind 张三"
             )
             return
-        
-        # 检查团队成员缓存
+
+        # 检查成员数据
         members = self.storage.load_members()
         if not members:
             yield event.plain_result(
-                "❌ 团队成员数据未同步\n"
-                "请管理员先执行 /sync 同步团队成员"
+                "❌ 团队成员未同步\n"
+                "请先执行 /sync members"
             )
             return
 
         # 查找用户
-        matched_user = self.storage.find_member_by_name(arg)
-        
-        if not matched_user:
-            # 列出部分成员帮助用户确认
-            sample_names = [info.get("name", "") for info in list(members.values())[:5]]
+        matched = self.storage.find_member_by_name(arg)
+        if not matched:
+            sample = [info.get("name", "") for info in list(members.values())[:5]]
             yield event.plain_result(
-                f"❌ 未找到用户「{arg}」\n"
-                f"\n"
-                f"团队成员示例：{', '.join(sample_names)} ...\n"
-                f"\n"
-                f"请确认用户名或 login 是否正确"
+                f"❌ 未找到「{arg}」\n"
+                f"成员示例: {', '.join(sample)}"
             )
             return
-        
-        yuque_id = matched_user["id"]
-        yuque_login = matched_user.get("login", "")
-        yuque_name = matched_user.get("name", yuque_login)
-        
-        # 检查语雀账号是否被他人绑定
-        existing_binding = self.storage.find_yuque_binding(yuque_id)
-        if existing_binding:
-            bound_platform_id, bound_info = existing_binding
-            if bound_platform_id != platform_id:
-                pending_key = f"_pb_{hash(platform_id)}"
-                setattr(self, pending_key, {
-                    "yuque_info": {
-                        "yuque_id": yuque_id,
-                        "yuque_login": yuque_login,
-                        "yuque_name": yuque_name,
-                    }
-                })
-                yield event.plain_result(
-                    f"⚠️ 语雀账号 @{yuque_login} 已被另一个账号绑定。\n"
-                    f"确认要绑定吗？（这会解除原绑定）\n"
-                    f"\n"
-                    f"输入 /bind confirm 确认绑定"
-                )
-                return
-        
-        # 直接绑定
+
+        # 绑定
         self.storage.add_binding(platform_id, {
-            "yuque_id": yuque_id,
-            "yuque_login": yuque_login,
-            "yuque_name": yuque_name,
+            "yuque_id": matched["id"],
+            "yuque_login": matched.get("login", ""),
+            "yuque_name": matched.get("name", ""),
         })
-        
+
         yield event.plain_result(
-            f"✅ 绑定成功！\n"
-            f"语雀账号：@{yuque_login} ({yuque_name})\n"
-            f"使用 /sync 同步知识库"
+            f"✅ 绑定成功\n"
+            f"账号: @{matched.get('login', '')} ({matched.get('name', '')})"
         )
 
     @filter.command("unbind")
-    async def unbind(self, event: AstrMessageEvent):
-        """解除语雀账号绑定
-        
-        用法: /unbind
-        """
+    async def unbind_cmd(self, event: AstrMessageEvent):
+        """解除绑定"""
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
-        
+
         if not binding:
-            yield event.plain_result("你还没有绑定语雀账号")
+            yield event.plain_result("你还没有绑定账号")
             return
-        
-        yuque_login = binding.get("yuque_login", "未知")
+
         self.storage.remove_binding(platform_id)
-        
-        yield event.plain_result(f"✅ 已解除绑定语雀账号 @{yuque_login}")
+        yield event.plain_result(f"✅ 已解除绑定 @{binding.get('yuque_login', '')}")
 
     @filter.command("profile")
-    async def profile(self, event: AstrMessageEvent, action: str = ""):
-        """查看用户画像
-        
-        用法: 
-        - /profile - 查看画像
-        - /profile refresh - 重新生成画像
-        """
+    async def profile_cmd(self, event: AstrMessageEvent):
+        """查看用户画像"""
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
-        
+
         if not binding:
-            yield event.plain_result(
-                "你还没有绑定语雀账号\n"
-                "请使用 /bind 绑定"
-            )
+            yield event.plain_result("请先使用 /bind 绑定账号")
             return
-        
+
         yuque_id = binding.get("yuque_id")
-        yuque_login = binding.get("yuque_login", "未知")
-        yuque_name = binding.get("yuque_name", "未知")
-        bind_time = binding.get("bind_time", "未知")
-        token = binding.get("token", "")
-        
-        # 重新生成画像
-        if action.lower() == "refresh":
-            if not token:
-                yield event.plain_result("无法刷新画像：Token 未保存")
-                return
-            
-            try:
-                client = YuqueClient(token, self.yuque_base_url)
-                docs = await client.get_user_docs(yuque_id, limit=50)
-                await client.close()
-                
-                if docs:
-                    profile = self.profile_generator.generate_from_docs(docs)
-                    self.storage.save_profile(yuque_id, profile)
-                    yield event.plain_result(
-                        f"✅ 画像已更新！\n"
-                        f"分析了 {len(docs)} 篇文档"
-                    )
-                else:
-                    yield event.plain_result("未找到文档，无法生成画像")
-            except Exception as e:
-                logger.error(f"画像刷新失败: {e}")
-                yield event.plain_result(f"画像刷新失败：{str(e)}")
-            return
-        
-        # 加载画像
         profile = self.storage.load_profile(yuque_id)
-        
-        # 水平中文映射
+
         level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-        
+
         if profile:
             p = profile.get("profile", {})
-            stats = profile.get("stats", {})
-            
-            interests = ", ".join(p.get("interests", [])) or "暂无"
-            level = level_map.get(p.get("level", ""), p.get("level", "未知"))
-            docs_count = stats.get("docs_count", 0)
-            
             yield event.plain_result(
                 f"📋 用户画像\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"语雀账号：@{yuque_login} ({yuque_name})\n"
-                f"绑定时间：{bind_time[:10] if bind_time else '未知'}\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"兴趣领域：{interests}\n"
-                f"整体水平：{level}\n"
-                f"文档数量：{docs_count} 篇\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"使用 /profile refresh 可重新生成"
+                f"━" * 15 + "\n"
+                f"账号: @{binding.get('yuque_login', '')}\n"
+                f"兴趣: {', '.join(p.get('interests', [])) or '暂无'}\n"
+                f"水平: {level_map.get(p.get('level', ''), '未知')}"
             )
         else:
             yield event.plain_result(
                 f"📋 用户画像\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"语雀账号：@{yuque_login} ({yuque_name})\n"
-                f"绑定时间：{bind_time[:10] if bind_time else '未知'}\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"画像未生成\n"
-                f"使用 /profile refresh 生成画像"
+                f"账号: @{binding.get('yuque_login', '')}\n"
+                f"画像未生成，同步后自动生成"
             )
 
     @filter.command("rag")
     async def rag_cmd(self, event: AstrMessageEvent, action: str = "", query: str = ""):
-        """RAG 检索管理
-        
-        用法: 
-        - /rag status - 查看 RAG 状态
-        - /rag search <关键词> - 搜索文档
+        """RAG 检索
+
+        用法:
+        - /rag status - 查看状态
+        - /rag search <关键词> - 搜索
         - /rag rebuild - 重建索引
         """
         if not self.rag:
-            yield event.plain_result(
-                "❌ RAG 未初始化\n"
-                "请在插件配置中设置 embedding_api_key"
-            )
+            yield event.plain_result("❌ RAG 未初始化，请配置 embedding_api_key")
             return
-        
-        # 查看状态
+
         if action.lower() == "status":
             stats = self.rag.get_stats()
-            sync_state = self.yuque_sync.load_sync_state()
-            
             yield event.plain_result(
                 f"📊 RAG 状态\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"Embedding 模型: {self.embedding_model}\n"
-                f"索引文档数: {stats.get('docs_count', 0)} 篇\n"
-                f"向量库路径: {stats.get('persist_directory', '未知')}\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"语雀同步: {sync_state.get('docs_count', 0)} 篇文档\n"
-                f"使用 /rag search <关键词> 搜索"
+                f"模型: {self.embedding_model}\n"
+                f"文档数: {stats.get('docs_count', 0)}"
             )
             return
-        
-        # 搜索
+
         if action.lower() == "search" and query:
-            try:
-                results = self.rag.search(query, k=5)
-                
-                if not results:
-                    yield event.plain_result(
-                        f"🔍 搜索: {query}\n"
-                        f"━━━━━━━━━━━━━━━\n"
-                        f"未找到相关文档"
-                    )
-                    return
-                
-                output = [
-                    f"🔍 搜索: {query}",
-                    f"━━━━━━━━━━━━━━━\n"
-                ]
-                
-                for i, doc in enumerate(results, 1):
-                    output.append(
-                        f"{i}. {doc['title']}\n"
-                        f"   来源: {doc['source']}\n"
-                        f"   {doc['content'][:100]}..."
-                    )
-                
-                yield event.plain_result("\n".join(output))
-            except Exception as e:
-                logger.error(f"RAG 搜索失败: {e}")
-                yield event.plain_result(f"❌ 搜索失败: {str(e)}")
+            results = self.rag.search(query, k=5)
+            if not results:
+                yield event.plain_result(f"未找到相关文档: {query}")
+                return
+
+            lines = [f"🔍 搜索: {query}", "━" * 15]
+            for i, doc in enumerate(results, 1):
+                lines.append(f"{i}. {doc['title']}")
+                lines.append(f"   {doc['content'][:80]}...")
+
+            yield event.plain_result("\n".join(lines))
             return
-        
-        # 重建索引
+
         if action.lower() == "rebuild":
-            try:
-                # 清空现有索引
-                self.rag.clear()
-                
-                # 从同步目录重新索引
-                indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
-                
-                yield event.plain_result(
-                    f"✅ RAG 索引重建完成\n"
-                    f"索引文档: {indexed} 篇"
-                )
-            except Exception as e:
-                logger.error(f"RAG 重建失败: {e}")
-                yield event.plain_result(f"❌ 重建失败: {str(e)}")
+            self.rag.clear()
+            indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+            yield event.plain_result(f"✅ 重建完成，索引 {indexed} 篇文档")
             return
-        
-        # 帮助信息
+
         yield event.plain_result(
-            "📚 RAG 检索管理\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "用法:\n"
-            "• /rag status - 查看状态\n"
+            "📚 RAG 检索\n"
+            "• /rag status - 状态\n"
             "• /rag search <关键词> - 搜索\n"
             "• /rag rebuild - 重建索引"
         )
 
     @filter.command("novabot")
-    async def novabot_help(self, event: AstrMessageEvent):
-        """NovaBot 帮助信息"""
+    async def help_cmd(self, event: AstrMessageEvent):
+        """帮助信息"""
         yield event.plain_result(
             "🤖 NovaBot - NOVA 社团智能助手\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "指令列表：\n"
-            "• /bind <用户名> - 绑定语雀账号\n"
-            "• /unbind - 解除绑定\n"
-            "• /profile - 查看用户画像\n"
-            "• /sync - 同步语雀知识库\n"
-            "• /sync status - 查看同步状态\n"
+            "━" * 20 + "\n"
+            "• /sync - 同步知识库\n"
             "• /sync members - 同步团队成员\n"
-            "• /rag status - 查看 RAG 状态\n"
+            "• /sync status - 查看状态\n"
+            "• /bind <用户名> - 绑定账号\n"
+            "• /unbind - 解绑\n"
+            "• /profile - 用户画像\n"
             "• /rag search <关键词> - 搜索文档\n"
-            "• /novabot - 显示帮助\n"
-            "━━━━━━━━━━━━━━━━━━━━━━\n"
-            "直接提问即可，我会从语雀知识库中检索答案。"
+            "• /novabot - 帮助"
         )
 
     async def terminate(self):
-        """插件销毁时调用"""
+        await self._close_client()
         logger.info("NovaBot 插件已卸载")
