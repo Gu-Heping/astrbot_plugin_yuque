@@ -863,6 +863,7 @@ class NovaBotPlugin(Star):
                 client=client,
                 output_dir=self.yuque_sync.docs_dir,
                 members=members,
+                progress_callback=self.storage.update_progress,
             )
 
             # 更新同步状态

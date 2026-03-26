@@ -244,6 +244,7 @@ async def sync_all_repos(
     client: YuqueClient,
     output_dir: Path,
     members: Optional[Dict[str, Dict]] = None,
+    progress_callback: Optional[callable] = None,
 ) -> Dict:
     """同步所有知识库
 
@@ -251,6 +252,7 @@ async def sync_all_repos(
         client: 语雀客户端
         output_dir: 输出目录
         members: 成员映射
+        progress_callback: 进度回调函数 (current, total, repo_name)
 
     Returns:
         同步统计信息
@@ -287,6 +289,10 @@ async def sync_all_repos(
         name = repo.get("name", "")
         if not namespace:
             continue
+
+        # 进度回调
+        if progress_callback:
+            progress_callback(i + 1, len(repos), name)
 
         logger.info(f"[Sync] [{i+1}/{len(repos)}] {name}")
         stats = await syncer.sync_repo(namespace, name)
