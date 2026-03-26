@@ -52,12 +52,11 @@ class DashScopeEmbeddings(Embeddings):
                 return response.json()
 
         try:
-            # 在线程中执行同步请求，避免阻塞事件循环
-            result = asyncio.get_event_loop().run_in_executor(None, _do_request)
-            # 如果已经在异步上下文中，等待结果
+            # 在线程池中执行同步请求，避免阻塞事件循环
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                result = executor.submit(_do_request).result(timeout=120)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_request)
+                result = future.result(timeout=120)
 
             embeddings = [item["embedding"] for item in result["data"]]
             logger.info(f"[RAG] 获得 {len(embeddings)} 个嵌入向量")
