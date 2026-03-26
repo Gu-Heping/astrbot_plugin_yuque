@@ -421,6 +421,7 @@ class RAGEngine:
                     "title": title,
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
+                    "book_name": doc.metadata.get("book_name", ""),
                 })
 
                 if len(unique_results) >= k:

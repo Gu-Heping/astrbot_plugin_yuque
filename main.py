@@ -412,7 +412,7 @@ class NovaBotPlugin(Star):
         class SearchKnowledgeBaseTool(FunctionTool):
             """知识库搜索工具"""
             name: str = "search_knowledge_base"
-            description: str = "搜索 NOVA 社团语雀知识库。当用户询问技术问题、项目信息、文档内容时使用。返回相关文档片段。"
+            description: str = "语义搜索 NOVA 社团语雀知识库。返回可能相关的文档片段。注意：结果可能不够精确，建议先用 list_knowledge_bases 确定知识库，再用 grep_local_docs 精确搜索关键词。"
             parameters: dict = field(default_factory=lambda: {
                 "type": "object",
                 "properties": {
@@ -439,12 +439,15 @@ class NovaBotPlugin(Star):
                     if not results:
                         return f"未找到与「{query}」相关的内容"
 
-                    output = []
+                    output = [f"🔍 语义搜索结果（可能不精确，建议用 grep 精确搜索）:\n"]
                     for i, r in enumerate(results, 1):
                         title = r.get("title", "未知")
                         author = r.get("author", "")
+                        book = r.get("book_name", "")
                         content = r.get("content", "")[:300]
                         output.append(f"【{i}】{title}" + (f" (by {author})" if author else ""))
+                        if book:
+                            output.append(f"    📚 知识库: {book}")
                         output.append(f"    {content}...")
                         output.append("")
 
@@ -456,13 +459,17 @@ class NovaBotPlugin(Star):
         class GrepLocalDocsTool(FunctionTool):
             """本地文档关键词搜索工具"""
             name: str = "grep_local_docs"
-            description: str = "在本地同步的语雀文档中进行关键词精确匹配搜索。适合查找特定代码、配置、名称等。"
+            description: str = "在本地同步的语雀文档中进行关键词精确匹配搜索。比语义搜索更精确。建议先用 list_knowledge_bases 找到相关知识库名称，再用 repo_filter 指定搜索范围。"
             parameters: dict = field(default_factory=lambda: {
                 "type": "object",
                 "properties": {
                     "keyword": {
                         "type": "string",
                         "description": "要搜索的关键词"
+                    },
+                    "repo_filter": {
+                        "type": "string",
+                        "description": "知识库名称过滤（可选），只搜索该知识库"
                     },
                     "max_results": {
                         "type": "integer",
@@ -474,7 +481,7 @@ class NovaBotPlugin(Star):
             })
             plugin: object = None
 
-            async def run(self, event, keyword: str, max_results: int = 10):
+            async def run(self, event, keyword: str, repo_filter: str = "", max_results: int = 10):
                 import re
                 from pathlib import Path
 
@@ -485,44 +492,64 @@ class NovaBotPlugin(Star):
                 results = []
                 pattern = re.compile(re.escape(keyword), re.IGNORECASE)
 
-                for md_file in docs_dir.rglob("*.md"):
-                    try:
-                        content = md_file.read_text(encoding="utf-8")
-                        matches = list(pattern.finditer(content))
-                        if matches:
-                            # 提取标题
-                            title = md_file.stem
-                            for line in content.split("\n")[:10]:
-                                if line.startswith("# "):
-                                    title = line[2:].strip()
+                # 确定搜索范围
+                search_dirs = []
+                if repo_filter:
+                    # 模糊匹配知识库目录
+                    for d in docs_dir.iterdir():
+                        if d.is_dir() and repo_filter.lower() in d.name.lower():
+                            search_dirs.append(d)
+                    if not search_dirs:
+                        return f"未找到匹配「{repo_filter}」的知识库"
+                else:
+                    search_dirs = [docs_dir]
+
+                for search_dir in search_dirs:
+                    for md_file in search_dir.rglob("*.md"):
+                        try:
+                            content = md_file.read_text(encoding="utf-8")
+                            matches = list(pattern.finditer(content))
+                            if matches:
+                                # 提取标题
+                                title = md_file.stem
+                                for line in content.split("\n")[:10]:
+                                    if line.startswith("# "):
+                                        title = line[2:].strip()
+                                        break
+
+                                # 提取上下文
+                                contexts = []
+                                for m in matches[:3]:  # 每个文件最多3个匹配
+                                    start = max(0, m.start() - 50)
+                                    end = min(len(content), m.end() + 100)
+                                    ctx = content[start:end].replace("\n", " ")
+                                    contexts.append(f"...{ctx}...")
+
+                                # 获取知识库名
+                                rel_path = md_file.relative_to(docs_dir)
+                                repo_name = rel_path.parts[0] if len(rel_path.parts) > 1 else ""
+
+                                results.append({
+                                    "title": title,
+                                    "repo": repo_name,
+                                    "count": len(matches),
+                                    "contexts": contexts
+                                })
+
+                                if len(results) >= max_results:
                                     break
-
-                            # 提取上下文
-                            contexts = []
-                            for m in matches[:3]:  # 每个文件最多3个匹配
-                                start = max(0, m.start() - 50)
-                                end = min(len(content), m.end() + 100)
-                                ctx = content[start:end].replace("\n", " ")
-                                contexts.append(f"...{ctx}...")
-
-                            results.append({
-                                "title": title,
-                                "file": str(md_file.relative_to(docs_dir)),
-                                "count": len(matches),
-                                "contexts": contexts
-                            })
-
-                            if len(results) >= max_results:
-                                break
-                    except Exception as e:
-                        continue
+                        except Exception as e:
+                            continue
+                    if len(results) >= max_results:
+                        break
 
                 if not results:
-                    return f"未找到包含「{keyword}」的文档"
+                    filter_hint = f"（在「{repo_filter}」中）" if repo_filter else ""
+                    return f"未找到包含「{keyword}」的文档{filter_hint}"
 
-                output = [f"找到 {len(results)} 个文档包含「{keyword}」:\n"]
+                output = [f"找到 {len(results)} 个文档包含「{keyword}»:\n"]
                 for r in results:
-                    output.append(f"📄 {r['title']} ({r['count']} 处)")
+                    output.append(f"📄 {r['title']} ({r['count']} 处)" + (f" - {r['repo']}" if r.get('repo') else ""))
                     for ctx in r['contexts'][:1]:
                         output.append(f"   {ctx}")
                     output.append("")
