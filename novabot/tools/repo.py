@@ -114,6 +114,7 @@ class ListRepoDocsTool(BaseTool):
         repos_file = docs_dir / ".repos.json"
         matched_dir = None
         matched_repo = None
+        matched_namespace = None
 
         if repos_file.exists():
             try:
@@ -123,7 +124,8 @@ class ListRepoDocsTool(BaseTool):
                     ns = repo.get("namespace", "")
                     if repo_name.lower() in name.lower() or repo_name.lower() in ns.lower():
                         matched_repo = repo
-                        matched_dir = docs_dir / ns.replace("/", "_")
+                        matched_namespace = ns
+                        matched_dir = docs_dir / self._namespace_to_dirname(ns, name)
                         break
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(f"读取知识库列表失败: {e}")
@@ -147,7 +149,28 @@ class ListRepoDocsTool(BaseTool):
                 available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
             return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
 
-        # 读取 TOC
+        # 优先从 SQLite 索引读取（支持 webhook 更新）
+        from ..doc_index import DocIndex
+        db_path = docs_dir.parent / "doc_index.db"
+        if db_path.exists():
+            try:
+                doc_index = DocIndex(str(db_path))
+                # 按知识库名过滤
+                book_name = matched_repo.get("name", "") if matched_repo else repo_name
+                docs = doc_index.search(book=book_name, limit=100)
+                if docs:
+                    lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 文档列表:\n"]
+                    for doc in docs:
+                        title = doc.get("title", "无标题")
+                        author = doc.get("author", "")
+                        author_hint = f" (by {author})" if author else ""
+                        lines.append(f"📄 {title}{author_hint}")
+                    lines.append(f"\n共 {len(docs)} 篇文档")
+                    return "\n".join(lines)
+            except Exception as e:
+                logger.warning(f"从 SQLite 读取文档列表失败: {e}")
+
+        # 备选：从 TOC 读取
         toc_file = matched_dir / ".toc.json"
         if toc_file.exists():
             try:
@@ -162,7 +185,7 @@ class ListRepoDocsTool(BaseTool):
             except Exception as e:
                 logger.warning(f"读取 TOC 失败: {e}")
 
-        # 备选：列出 md 文件
+        # 最后备选：列出 md 文件
         md_files = list(matched_dir.glob("*.md"))
         output = [f"📖 {matched_dir.name} 文档列表:\n"]
         for md_file in sorted(md_files)[:30]:
@@ -180,3 +203,10 @@ class ListRepoDocsTool(BaseTool):
         if len(md_files) > 30:
             output.append(f"\n... 还有 {len(md_files) - 30} 篇文档")
         return "\n".join(output)
+
+    def _namespace_to_dirname(self, namespace: str, repo_name: str) -> str:
+        """将 namespace 转换为目录名"""
+        from ..yuque_client import YuqueClient
+        if repo_name:
+            return YuqueClient.slug_safe(repo_name)
+        return namespace.replace("/", "_")
