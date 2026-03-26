@@ -150,9 +150,20 @@ class YuqueSync:
         logger.info(f"同步知识库 {repo_namespace} 完成，共 {len(synced_docs)} 篇文档")
         return synced_docs
 
-    async def full_sync(self, client: YuqueClient, user_id: int, with_content: bool = True) -> dict:
-        """全量同步用户所有知识库"""
+    async def full_sync(self, client: YuqueClient, user_id: int, with_content: bool = True, storage=None) -> dict:
+        """全量同步用户所有知识库
+        
+        Args:
+            client: 语雀客户端
+            user_id: 用户 ID
+            with_content: 是否同步正文
+            storage: Storage 实例（用于保存团队成员缓存）
+        """
         state = self.load_sync_state()
+        
+        # 同步团队成员（如果有 storage）
+        if storage and client:
+            await self._sync_team_members(client, storage)
         
         # 同步知识库列表
         repos = await self.sync_user_repos(client, user_id)
@@ -188,6 +199,66 @@ class YuqueSync:
             "docs_count": total_docs,
             "repos": repo_stats
         }
+
+    async def _sync_team_members(self, client: YuqueClient, storage) -> int:
+        """同步团队成员到缓存
+        
+        Args:
+            client: 语雀客户端
+            storage: Storage 实例
+        
+        Returns:
+            同步的成员数量
+        """
+        try:
+            # 获取当前用户信息以确定 group_id
+            user_info = await client.get_user_info()
+            group_id = user_info.get("group_id")
+            
+            if not group_id:
+                logger.warning("无法获取团队 ID，跳过成员同步")
+                return 0
+            
+            # 分页获取团队成员
+            members = {}
+            page = 1
+            
+            while True:
+                try:
+                    resp = await client.client.get(
+                        f"{client.base_url}/groups/{group_id}/statistics/members",
+                        params={"page": page}
+                    )
+                    resp.raise_for_status()
+                    data = resp.json().get("data", {})
+                    page_members = data.get("members", [])
+                    
+                    if not page_members:
+                        break
+                    
+                    for item in page_members:
+                        user = item.get("user", {})
+                        uid = user.get("id") or item.get("user_id")
+                        if uid:
+                            members[str(uid)] = {
+                                "name": user.get("name", ""),
+                                "login": user.get("login", "")
+                            }
+                    
+                    page += 1
+                except Exception as e:
+                    logger.warning(f"获取团队成员第 {page} 页失败: {e}")
+                    break
+            
+            if members:
+                storage.save_members(members)
+                logger.info(f"同步团队成员完成，共 {len(members)} 人")
+            
+            return len(members)
+            
+        except Exception as e:
+            logger.error(f"同步团队成员失败: {e}")
+            return 0
 
 
 class Storage:
@@ -258,6 +329,45 @@ class Storage:
             json.dumps(profile, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+
+    def load_members(self) -> dict:
+        """加载团队成员缓存"""
+        members_file = self.data_dir / "yuque-members.json"
+        if members_file.exists():
+            return json.loads(members_file.read_text(encoding="utf-8"))
+        return {}
+
+    def save_members(self, members: dict):
+        """保存团队成员缓存"""
+        members_file = self.data_dir / "yuque-members.json"
+        members_file.write_text(
+            json.dumps(members, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+    def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
+        """通过用户名或 login 查找成员（支持模糊匹配）"""
+        members = self.load_members()
+        name_lower = name_or_login.lower()
+        
+        # 1. 精确匹配 login
+        for uid, info in members.items():
+            if info.get("login", "").lower() == name_lower:
+                return {"id": int(uid), **info}
+        
+        # 2. 精确匹配 name
+        for uid, info in members.items():
+            if info.get("name", "").lower() == name_lower:
+                return {"id": int(uid), **info}
+        
+        # 3. 模糊匹配 name 或 login
+        for uid, info in members.items():
+            name = info.get("name", "")
+            login = info.get("login", "")
+            if name_lower in name.lower() or name_lower in login.lower():
+                return {"id": int(uid), **info}
+        
+        return None
 
 
 class ProfileGenerator:
@@ -482,7 +592,7 @@ class NovaBotPlugin(Star):
         
         try:
             client = YuqueClient(self.yuque_token, self.yuque_base_url)
-            result = await self.yuque_sync.full_sync(client, yuque_id, with_content=True)
+            result = await self.yuque_sync.full_sync(client, yuque_id, with_content=True, storage=self.storage)
             await client.close()
             
             # 更新绑定中的同步时间
@@ -529,9 +639,9 @@ class NovaBotPlugin(Star):
     async def bind(self, event: AstrMessageEvent, arg: str = ""):
         """绑定语雀账号
         
-        用法: /bind <语雀用户名>
+        用法: /bind <语雀用户名或 login>
         
-        说明：使用语雀团队中的用户名绑定，而非 Token
+        说明：使用语雀团队中的用户名或 login 绑定，支持模糊匹配
         """
         platform_id = event.get_sender_id()
         
@@ -546,14 +656,12 @@ class NovaBotPlugin(Star):
 
         # 检查是否是确认绑定
         if arg.lower() == "confirm":
-            # 从会话状态获取待确认的绑定信息
             pending_key = f"_pb_{hash(platform_id)}"
             pending = getattr(self, pending_key, None)
             if not pending:
                 yield event.plain_result("没有待确认的绑定请求，请重新执行 /bind")
                 return
             
-            # 执行绑定
             self.storage.add_binding(platform_id, pending["yuque_info"])
             delattr(self, pending_key)
             
@@ -568,111 +676,78 @@ class NovaBotPlugin(Star):
         # 检查参数
         if not arg:
             yield event.plain_result(
-                "请提供语雀用户名：\n"
-                "/bind <用户名>\n"
+                "请提供语雀用户名或 login：\n"
+                "/bind <用户名或 login>\n"
                 "\n"
-                "例如：/bind 谷和平\n"
+                "例如：\n"
+                "• /bind 谷和平\n"
+                "• /bind heping-qcbue\n"
                 "\n"
-                "用户名为你在语雀团队中的显示名称"
+                "支持模糊匹配，如 /bind 和平"
             )
             return
         
-        # 检查团队 Token 是否配置
-        if not self.yuque_token:
+        # 检查团队成员缓存
+        members = self.storage.load_members()
+        if not members:
             yield event.plain_result(
-                "❌ 插件未配置语雀团队 Token\n"
-                "请联系管理员在插件设置中配置 yuque_token"
+                "❌ 团队成员数据未同步\n"
+                "请管理员先执行 /sync 同步团队成员"
             )
             return
 
-        # 通过团队 Token 查找用户
-        try:
-            client = YuqueClient(self.yuque_token, self.yuque_base_url)
-            
-            # 获取团队成员列表
-            members = await self._get_team_members(client)
-            
-            # 模糊匹配用户名
-            matched_user = None
-            for member in members:
-                name = member.get("name", "")
-                login = member.get("login", "")
-                # 精确匹配或模糊匹配
-                if arg == name or arg == login:
-                    matched_user = member
-                    break
-                # 包含匹配
-                if arg in name or arg in login:
-                    matched_user = member
-            
-            await client.close()
-            
-            if not matched_user:
+        # 查找用户
+        matched_user = self.storage.find_member_by_name(arg)
+        
+        if not matched_user:
+            # 列出部分成员帮助用户确认
+            sample_names = [info.get("name", "") for info in list(members.values())[:5]]
+            yield event.plain_result(
+                f"❌ 未找到用户「{arg}」\n"
+                f"\n"
+                f"团队成员示例：{', '.join(sample_names)} ...\n"
+                f"\n"
+                f"请确认用户名或 login 是否正确"
+            )
+            return
+        
+        yuque_id = matched_user["id"]
+        yuque_login = matched_user.get("login", "")
+        yuque_name = matched_user.get("name", yuque_login)
+        
+        # 检查语雀账号是否被他人绑定
+        existing_binding = self.storage.find_yuque_binding(yuque_id)
+        if existing_binding:
+            bound_platform_id, bound_info = existing_binding
+            if bound_platform_id != platform_id:
+                pending_key = f"_pb_{hash(platform_id)}"
+                setattr(self, pending_key, {
+                    "yuque_info": {
+                        "yuque_id": yuque_id,
+                        "yuque_login": yuque_login,
+                        "yuque_name": yuque_name,
+                    }
+                })
                 yield event.plain_result(
-                    f"❌ 未找到用户「{arg}」\n"
+                    f"⚠️ 语雀账号 @{yuque_login} 已被另一个账号绑定。\n"
+                    f"确认要绑定吗？（这会解除原绑定）\n"
                     f"\n"
-                    f"请确认用户名是否正确，或在语雀团队中查看你的显示名称"
+                    f"输入 /bind confirm 确认绑定"
                 )
                 return
-            
-            yuque_id = matched_user["id"]
-            yuque_login = matched_user.get("login", "")
-            yuque_name = matched_user.get("name", yuque_login)
-            
-            # 检查语雀账号是否被他人绑定
-            existing_binding = self.storage.find_yuque_binding(yuque_id)
-            if existing_binding:
-                bound_platform_id, bound_info = existing_binding
-                if bound_platform_id != platform_id:
-                    # 需要确认
-                    pending_key = f"_pb_{hash(platform_id)}"
-                    setattr(self, pending_key, {
-                        "yuque_info": {
-                            "yuque_id": yuque_id,
-                            "yuque_login": yuque_login,
-                            "yuque_name": yuque_name,
-                        }
-                    })
-                    yield event.plain_result(
-                        f"⚠️ 语雀账号 @{yuque_login} 已被另一个账号绑定。\n"
-                        f"确认要绑定吗？（这会解除原绑定）\n"
-                        f"\n"
-                        f"输入 /bind confirm 确认绑定"
-                    )
-                    return
-            
-            # 直接绑定
-            self.storage.add_binding(platform_id, {
-                "yuque_id": yuque_id,
-                "yuque_login": yuque_login,
-                "yuque_name": yuque_name,
-            })
-            
-            yield event.plain_result(
-                f"✅ 绑定成功！\n"
-                f"语雀账号：@{yuque_login} ({yuque_name})\n"
-                f"使用 /sync 同步知识库"
-            )
-            
-        except httpx.HTTPStatusError as e:
-            logger.error(f"语雀 API 请求失败: {e}")
-            yield event.plain_result("❌ 语雀 API 请求失败，请检查 Token 配置")
-        except UnicodeEncodeError as e:
-            logger.error(f"编码错误: {e}")
-            yield event.plain_result("❌ 处理过程中出现编码错误，请检查输入是否包含特殊字符")
-        except Exception as e:
-            logger.error(f"绑定过程出错: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 绑定失败：{str(e)}")
-
-    async def _get_team_members(self, client: YuqueClient) -> list:
-        """获取团队成员列表"""
-        # 获取当前用户信息以确定团队
-        user_info = await client.get_user_info()
         
-        # 尝试获取团队成员（假设是团队 Token）
-        # 语雀 API: GET /groups/:group_id/members
-        # 这里简化处理，使用用户自己的文档来验证
-        return [user_info]  # 暂时返回当前用户
+        # 直接绑定
+        self.storage.add_binding(platform_id, {
+            "yuque_id": yuque_id,
+            "yuque_login": yuque_login,
+            "yuque_name": yuque_name,
+        })
+        
+        yield event.plain_result(
+            f"✅ 绑定成功！\n"
+            f"语雀账号：@{yuque_login} ({yuque_name})\n"
+            f"使用 /sync 同步知识库"
+        )
 
     @filter.command("unbind")
     async def unbind(self, event: AstrMessageEvent):
