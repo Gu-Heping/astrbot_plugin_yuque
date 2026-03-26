@@ -282,6 +282,18 @@ class NovaBotPlugin(Star):
                 )
                 return
 
+            # 检查是否正在 RAG 索引
+            if state.get("status") == "rag_indexing" and state.get("rag_progress"):
+                rp = state["rag_progress"]
+                yield event.plain_result(
+                    f"⏳ RAG 索引进行中\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"进度: {rp['current']}/{rp['total']}\n\n"
+                    f"（Embedding API 调用较慢，请耐心等待）\n"
+                    f"使用 /sync status 刷新进度"
+                )
+                return
+
             if state.get("last_sync"):
                 lines = [
                     f"📊 同步状态",
@@ -346,10 +358,30 @@ class NovaBotPlugin(Star):
             # RAG 索引
             if self.rag and result and result.get("docs", 0) > 0:
                 try:
-                    indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+                    # RAG 索引进度回调
+                    def rag_progress(current, total):
+                        state = self.storage.load_sync_state()
+                        state["status"] = "rag_indexing"
+                        state["rag_progress"] = {"current": current, "total": total}
+                        self.storage.save_sync_state(state)
+
+                    # 初始化状态
+                    rag_progress(0, result.get("docs", 0))
+
+                    indexed = await asyncio.to_thread(
+                        self.rag.index_from_sync,
+                        str(self.yuque_sync.docs_dir),
+                        rag_progress
+                    )
                     logger.info(f"RAG 索引完成: {indexed} 篇")
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
+
+            # 清除 RAG 索引状态
+            state = self.storage.load_sync_state()
+            state.pop("status", None)
+            state.pop("rag_progress", None)
+            self.storage.save_sync_state(state)
 
             docs_count = result.get("docs", 0) if result else 0
             removed_count = result.get("removed", 0) if result else 0
@@ -361,6 +393,8 @@ class NovaBotPlugin(Star):
             state = self.storage.load_sync_state()
             state["in_progress"] = False
             state["progress"] = None
+            state.pop("status", None)
+            state.pop("rag_progress", None)
             self.storage.save_sync_state(state)
 
     @filter.command("bind")

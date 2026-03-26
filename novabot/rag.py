@@ -223,8 +223,13 @@ class RAGEngine:
                     logger.error(f"[RAG] 目录删除失败: {e2}")
                     raise
 
-    def index_docs(self, docs: list[dict]) -> int:
-        """索引文档到向量库"""
+    def index_docs(self, docs: list[dict], progress_callback: callable = None) -> int:
+        """索引文档到向量库
+
+        Args:
+            docs: 文档列表
+            progress_callback: 进度回调函数 (current, total)
+        """
         if not docs:
             logger.info("[RAG] 没有文档需要索引")
             return 0
@@ -290,7 +295,8 @@ class RAGEngine:
             logger.info("[RAG] 过滤后没有有效文档")
             return 0
 
-        logger.info(f"[RAG] 有效文档数: {len(documents)}")
+        total_docs = len(documents)
+        logger.info(f"[RAG] 有效文档数: {total_docs}")
 
         # 分批索引，避免一次提交太多
         batch_size = 10  # 减小批量避免 API 超时
@@ -301,7 +307,15 @@ class RAGEngine:
             try:
                 self.vectorstore.add_documents(batch)
                 total_indexed += len(batch)
-                logger.info(f"[RAG] 索引进度: {total_indexed}/{len(documents)}")
+                logger.info(f"[RAG] 索引进度: {total_indexed}/{total_docs}")
+
+                # 进度回调
+                if progress_callback:
+                    try:
+                        progress_callback(total_indexed, total_docs)
+                    except Exception:
+                        pass
+
             except Exception as e:
                 logger.error(f"[RAG] 批次 {i//batch_size} 索引失败: {e}")
                 # 尝试逐个索引找出问题文档
@@ -309,6 +323,11 @@ class RAGEngine:
                     try:
                         self.vectorstore.add_documents([doc])
                         total_indexed += 1
+                        if progress_callback:
+                            try:
+                                progress_callback(total_indexed, total_docs)
+                            except Exception:
+                                pass
                     except Exception as e2:
                         title = doc.metadata.get('title', 'unknown') if doc.metadata else 'unknown'
                         logger.error(f"[RAG] 文档索引失败: {title} - {e2}")
@@ -361,8 +380,13 @@ class RAGEngine:
             logger.error(f"[RAG] 删除向量失败: {e}")
             return False
 
-    def index_from_sync(self, docs_dir: str) -> int:
-        """从同步目录读取 Markdown 并索引（全量重建）"""
+    def index_from_sync(self, docs_dir: str, progress_callback: callable = None) -> int:
+        """从同步目录读取 Markdown 并索引（全量重建）
+
+        Args:
+            docs_dir: 文档目录
+            progress_callback: 进度回调函数 (current, total)
+        """
         import re
         import yaml
 
@@ -436,7 +460,7 @@ class RAGEngine:
                 logger.warning(f"[RAG] 读取 {md_file} 失败: {e}")
 
         logger.info(f"[RAG] 读取到 {len(all_docs)} 篇文档")
-        return self.index_docs(all_docs)
+        return self.index_docs(all_docs, progress_callback)
 
     def search(self, query: str, k: int = 5) -> list[dict]:
         """语义检索（按文档去重）"""
