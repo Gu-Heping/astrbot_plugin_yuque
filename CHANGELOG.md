@@ -14,6 +14,9 @@
   - TITLE 类型：创建目录，不写文件
   - DOC 类型：写入 Markdown 文件
   - 支持按层级创建目录结构
+- **main.py 精简**：使用新模块替换原有同步逻辑
+  - YuqueSync 类简化，只保留 get_docs_by_author 方法
+  - sync_cmd 使用新模块的 sync_all_repos 函数
 
 ### 新增
 - `toc_list_children()` 函数：按链表顺序遍历 TOC 子节点

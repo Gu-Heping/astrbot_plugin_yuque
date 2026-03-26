@@ -5,149 +5,16 @@ NovaBot - NOVA 社团智能助手
 
 import asyncio
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import httpx
 import yaml
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .novabot.rag import RAGEngine
-
-
-# ============================================================================
-# 语雀 API 客户端
-# ============================================================================
-
-class YuqueClient:
-    """语雀 API 客户端（带限流和重试）"""
-
-    # 限流配置
-    CONCURRENCY = 3          # 最大并发数
-    REQUEST_DELAY = 0.25     # 请求间隔（秒）
-    MAX_RETRIES = 4          # 最大重试次数
-
-    def __init__(self, token: str, base_url: str = "https://nova.yuque.com/api/v2"):
-        self.base_url = base_url.rstrip("/")
-        self.token = token
-        self.headers = {
-            "X-Auth-Token": token,
-            "User-Agent": "NovaBot/1.0",
-            "Content-Type": "application/json",
-        }
-        self._client: Optional[httpx.AsyncClient] = None
-        self._semaphore = asyncio.Semaphore(self.CONCURRENCY)
-
-    @property
-    def client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(headers=self.headers, timeout=30.0)
-        return self._client
-
-    async def close(self):
-        if self._client:
-            await self._client.aclose()
-            self._client = None
-
-    async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
-        """带限流和重试的请求"""
-        last_error = None
-
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                async with self._semaphore:
-                    resp = await self.client.request(method, url, **kwargs)
-
-                    # 429 Rate Limit
-                    if resp.status_code == 429:
-                        wait = int(resp.headers.get("Retry-After", 2 ** attempt))
-                        logger.warning(f"Rate limited (429), wait {wait}s")
-                        await asyncio.sleep(wait)
-                        continue
-
-                    # 5xx Server Error
-                    if 500 <= resp.status_code < 600:
-                        wait = 2 ** attempt
-                        logger.warning(f"Server error {resp.status_code}, retry in {wait}s")
-                        await asyncio.sleep(wait)
-                        continue
-
-                    # 请求间隔
-                    if self.REQUEST_DELAY > 0:
-                        await asyncio.sleep(self.REQUEST_DELAY)
-
-                    return resp
-
-            except (httpx.RequestError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
-                wait = 2 ** attempt
-                logger.warning(f"Request error: {e}, retry in {wait}s")
-                await asyncio.sleep(wait)
-                last_error = e
-
-        if last_error:
-            raise last_error
-        raise RuntimeError("Unexpected retry loop exit")
-
-    async def _get(self, path: str, params: dict = None) -> dict:
-        """GET 请求"""
-        url = f"{self.base_url}{path}"
-        resp = await self._request("GET", url, params=params)
-        resp.raise_for_status()
-        return resp.json()
-
-    # ========== API 方法 ==========
-
-    async def get_user_info(self) -> dict:
-        """获取当前认证用户信息"""
-        data = await self._get("/user")
-        return data.get("data", {})
-
-    async def get_group_repos(self, group_id: int, limit: int = 100) -> list:
-        """获取团队的知识库列表"""
-        data = await self._get(f"/groups/{group_id}/repos", {"limit": limit})
-        return data.get("data", [])
-
-    async def get_user_repos(self, user_id: int, limit: int = 100) -> list:
-        """获取用户的知识库列表"""
-        data = await self._get(f"/users/{user_id}/repos", {"limit": limit})
-        return data.get("data", [])
-
-    async def get_repo_docs(self, namespace: str, limit: int = 100) -> list:
-        """获取知识库的文档列表"""
-        data = await self._get(f"/repos/{namespace}/docs", {"limit": limit})
-        return data.get("data", [])
-
-    async def get_doc_detail(self, namespace: str, slug: str) -> dict:
-        """获取文档详情（含正文）"""
-        data = await self._get(f"/repos/{namespace}/docs/{slug}", {"include_content": "true"})
-        return data.get("data", {})
-
-    async def get_repo_toc(self, namespace: str) -> list:
-        """获取知识库目录结构（TOC）"""
-        data = await self._get(f"/repos/{namespace}/toc")
-        return data.get("data", [])
-
-    async def get_group_members(self, group_id: int) -> list:
-        """获取团队成员（分页）"""
-        all_members = []
-        page = 1
-
-        while True:
-            data = await self._get(
-                f"/groups/{group_id}/statistics/members",
-                {"page": page}
-            )
-            members = data.get("data", {}).get("members", [])
-            if not members:
-                break
-            all_members.extend(members)
-            page += 1
-
-        return all_members
+from .novabot import RAGEngine, YuqueClient, DocSyncer, sync_all_repos
 
 
 # ============================================================================
@@ -292,223 +159,12 @@ class Storage:
 # ============================================================================
 
 class YuqueSync:
-    """语雀文档同步器"""
+    """语雀文档辅助工具（主要提供 get_docs_by_author）"""
 
     def __init__(self, storage: Storage):
         self.storage = storage
         self.docs_dir = storage.data_dir / "yuque_docs"
         self.docs_dir.mkdir(parents=True, exist_ok=True)
-
-    async def sync_team_members(self, client: YuqueClient) -> int:
-        """同步团队成员"""
-        user_info = await client.get_user_info()
-
-        if user_info.get("type") != "Group":
-            logger.info("非团队 Token，跳过成员同步")
-            return 0
-
-        group_id = user_info.get("id")
-        logger.info(f"同步团队成员，团队 ID: {group_id}")
-
-        members_raw = await client.get_group_members(group_id)
-
-        members = {}
-        for item in members_raw:
-            user = item.get("user", {})
-            uid = user.get("id") or item.get("user_id")
-            if uid:
-                members[str(uid)] = {
-                    "name": user.get("name", ""),
-                    "login": user.get("login", "")
-                }
-
-        if members:
-            self.storage.save_members(members)
-            logger.info(f"同步团队成员完成，共 {len(members)} 人")
-
-        return len(members)
-
-    async def sync_all_repos(self, client: YuqueClient, with_content: bool = True) -> dict:
-        """同步所有知识库（自动判断团队/个人 Token）"""
-        user_info = await client.get_user_info()
-        is_group = user_info.get("type") == "Group"
-
-        # 获取知识库列表
-        if is_group:
-            group_id = user_info.get("id")
-            logger.info(f"团队 Token，ID: {group_id}")
-            repos = await client.get_group_repos(group_id)
-        else:
-            user_id = user_info.get("id")
-            logger.info(f"个人 Token，ID: {user_id}")
-            repos = await client.get_user_repos(user_id)
-
-        total_repos = len(repos)
-        logger.info(f"获取到 {total_repos} 个知识库，开始同步...")
-
-        # 获取成员映射（用于填充作者名）
-        members = self.storage.load_members()
-
-        # 同步每个知识库
-        total_docs = 0
-        repo_stats = {}
-        repos_info = []  # 用于保存 .repos.json
-
-        for i, repo in enumerate(repos):
-            namespace = repo.get("namespace", "")
-            repo_name = repo.get("name", "")
-            repo_id = repo.get("id")
-            if not namespace:
-                continue
-
-            # 更新进度
-            self.storage.update_progress(i + 1, total_repos, repo_name)
-            logger.info(f"[{i+1}/{total_repos}] 同步: {repo_name}")
-
-            try:
-                # 获取 TOC 结构
-                toc = await client.get_repo_toc(namespace)
-                docs = await self._sync_repo_docs(client, namespace, with_content, members, toc)
-                total_docs += len(docs)
-                repo_stats[namespace] = {
-                    "name": repo_name,
-                    "docs_count": len(docs),
-                    "synced_at": datetime.now().isoformat()
-                }
-                repos_info.append({
-                    "id": repo_id,
-                    "namespace": namespace,
-                    "name": repo_name,
-                    "slug": repo.get("slug", ""),
-                    "description": repo.get("description", ""),
-                    "items_count": repo.get("items_count", 0),
-                })
-            except Exception as e:
-                logger.error(f"同步知识库 {namespace} 失败: {e}", exc_info=True)
-                repo_stats[namespace] = {"name": repo_name, "error": str(e)}
-
-        # 保存 repos 列表
-        repos_file = self.docs_dir / ".repos.json"
-        repos_file.write_text(
-            json.dumps(repos_info, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        logger.info(f"保存知识库列表: {repos_file}")
-
-        # 保存同步状态
-        state = {
-            "last_sync": datetime.now().isoformat(),
-            "repos": repo_stats,
-            "docs_count": total_docs,
-            "token_type": "group" if is_group else "user",
-            "in_progress": False,
-            "progress": None
-        }
-        self.storage.save_sync_state(state)
-        logger.info(f"同步完成，共 {total_docs} 篇文档")
-
-        return {
-            "repos_count": len(repos),
-            "docs_count": total_docs,
-            "repos": repo_stats
-        }
-
-    async def _sync_repo_docs(self, client: YuqueClient, namespace: str,
-                               with_content: bool, members: dict, toc: list = None) -> list:
-        """同步单个知识库的文档"""
-        docs = await client.get_repo_docs(namespace)
-
-        repo_dir = self.docs_dir / namespace.replace("/", "_")
-        repo_dir.mkdir(parents=True, exist_ok=True)
-
-        # 保存 TOC 结构
-        if toc:
-            toc_file = repo_dir / ".toc.json"
-            toc_file.write_text(
-                json.dumps(toc, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
-
-        synced = []
-        for doc in docs:
-            doc_id = doc.get("id")
-            slug = doc.get("slug", str(doc_id))
-            title = doc.get("title", "Untitled")
-
-            doc_info = {
-                "id": doc_id,
-                "slug": slug,
-                "title": title,
-                "description": doc.get("description", ""),
-                "created_at": doc.get("created_at", ""),
-                "updated_at": doc.get("updated_at", ""),
-                "repo_namespace": namespace,
-            }
-
-            if with_content:
-                try:
-                    detail = await client.get_doc_detail(namespace, slug)
-                    doc_info["content"] = detail.get("content", "")
-                    doc_info["book"] = detail.get("book", {})
-
-                    # 作者名
-                    user_id = detail.get("user_id")
-                    if user_id and str(user_id) in members:
-                        doc_info["author"] = members[str(user_id)].get("name", "")
-                    else:
-                        doc_info["author"] = ""
-
-                    # 写入 Markdown
-                    md_content = self._build_markdown(doc_info)
-                    filename = self._safe_filename(title, slug)
-                    (repo_dir / f"{filename}.md").write_text(md_content, encoding="utf-8")
-
-                except Exception as e:
-                    logger.warning(f"获取文档详情失败 {slug}: {e}")
-
-            synced.append(doc_info)
-
-        logger.info(f"同步知识库 {namespace}，共 {len(synced)} 篇")
-        return synced
-
-    def _build_markdown(self, doc: dict) -> str:
-        """构建 Markdown 文件"""
-        fm = {
-            "id": doc.get("id"),
-            "title": doc.get("title", ""),
-            "slug": doc.get("slug", ""),
-            "created_at": doc.get("created_at", ""),
-            "updated_at": doc.get("updated_at", ""),
-        }
-
-        if doc.get("author"):
-            fm["author"] = doc["author"]
-        if doc.get("book", {}).get("name"):
-            fm["book_name"] = doc["book"]["name"]
-        if doc.get("description"):
-            fm["description"] = doc["description"]
-
-        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-
-        md = f"---\n{yaml_block}\n---\n\n"
-
-        # 元信息表格
-        author = doc.get("author") or str(doc.get("user_id", ""))
-        md += f"| 作者 | 创建时间 | 更新时间 |\n"
-        md += f"|------|----------|----------|\n"
-        md += f"| {author} | {doc.get('created_at', '')} | {doc.get('updated_at', '')} |\n\n"
-
-        # 正文
-        content = doc.get("content", "")
-        if content:
-            md += content
-
-        return md
-
-    def _safe_filename(self, title: str, slug: str) -> str:
-        safe = re.sub(r'[<>:"/\\|?*]', '', title)
-        safe = safe.strip()[:50]
-        return safe or slug
 
     def get_docs_by_author(self, author_name: str) -> list[dict]:
         """获取指定作者的文档列表"""
@@ -1112,11 +768,29 @@ class NovaBotPlugin(Star):
 
             client = self._get_client()
             try:
-                count = await self.yuque_sync.sync_team_members(client)
-                if count > 0:
+                user_info = await client.get_user()
+                if user_info.get("type") != "Group":
+                    yield event.plain_result("⚠️ 非团队 Token，跳过成员同步")
+                    return
+
+                group_id = user_info.get("id")
+                members_raw = await client.get_group_members(group_id)
+
+                members = {}
+                for item in members_raw:
+                    user = item.get("user", {})
+                    uid = user.get("id") or item.get("user_id")
+                    if uid:
+                        members[str(uid)] = {
+                            "name": user.get("name", ""),
+                            "login": user.get("login", "")
+                        }
+
+                if members:
+                    self.storage.save_members(members)
                     yield event.plain_result(
                         f"✅ 团队成员同步完成\n"
-                        f"共 {count} 人\n"
+                        f"共 {len(members)} 人\n"
                         f"使用 /bind <用户名> 绑定账号"
                     )
                 else:
@@ -1178,7 +852,28 @@ class NovaBotPlugin(Star):
         """后台同步任务"""
         client = self._get_client()
         try:
-            result = await self.yuque_sync.sync_all_repos(client, with_content=True)
+            # 标记开始
+            state = self.storage.load_sync_state()
+            state["in_progress"] = True
+            self.storage.save_sync_state(state)
+
+            # 使用新模块同步
+            members = self.storage.load_members()
+            result = await sync_all_repos(
+                client=client,
+                output_dir=self.yuque_sync.docs_dir,
+                members=members,
+            )
+
+            # 更新同步状态
+            state = {
+                "last_sync": datetime.now().isoformat(),
+                "repos_count": result.get("repos_count", 0),
+                "docs_count": result.get("docs", 0),
+                "in_progress": False,
+                "progress": None
+            }
+            self.storage.save_sync_state(state)
 
             # RAG 索引
             if self.rag:
@@ -1188,7 +883,7 @@ class NovaBotPlugin(Star):
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
 
-            logger.info(f"后台同步完成: {result['docs_count']} 篇文档")
+            logger.info(f"后台同步完成: {result.get('docs', 0)} 篇文档")
 
         except Exception as e:
             logger.error(f"后台同步失败: {e}", exc_info=True)
