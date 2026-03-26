@@ -477,6 +477,46 @@ class YuqueSync:
         safe = safe.strip()[:50]
         return safe or slug
 
+    def get_docs_by_author(self, author_name: str) -> list[dict]:
+        """获取指定作者的文档列表"""
+        import yaml
+
+        if not author_name:
+            return []
+
+        docs = []
+        for md_file in self.docs_dir.rglob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+
+                # 解析 frontmatter
+                metadata = {}
+                body = content
+
+                if content.startswith("---"):
+                    end = content.find("\n---", 3)
+                    if end != -1:
+                        try:
+                            metadata = yaml.safe_load(content[3:end].strip()) or {}
+                        except:
+                            pass
+
+                # 匹配作者
+                doc_author = metadata.get("author", "")
+                if doc_author == author_name:
+                    docs.append({
+                        "id": metadata.get("id"),
+                        "title": metadata.get("title", ""),
+                        "slug": metadata.get("slug", ""),
+                        "description": metadata.get("description", ""),
+                        "author": doc_author,
+                        "book_name": metadata.get("book_name", ""),
+                    })
+            except Exception as e:
+                logger.warning(f"读取文档失败 {md_file}: {e}")
+
+        return docs
+
 
 # ============================================================================
 # 用户画像生成器
@@ -719,6 +759,9 @@ class NovaBotPlugin(Star):
                 except Exception as e:
                     logger.error(f"RAG 索引失败: {e}")
 
+            # 生成用户画像
+            self._generate_all_profiles()
+
             logger.info(f"后台同步完成: {result['docs_count']} 篇文档")
 
         except Exception as e:
@@ -728,6 +771,34 @@ class NovaBotPlugin(Star):
             state["in_progress"] = False
             state["progress"] = None
             self.storage.save_sync_state(state)
+
+    def _generate_all_profiles(self):
+        """为所有已绑定用户生成画像"""
+        bindings = self.storage.load_bindings()
+        if not bindings:
+            return
+
+        generated = 0
+        for platform_id, binding in bindings.items():
+            yuque_name = binding.get("yuque_name", "")
+            yuque_id = binding.get("yuque_id")
+
+            if not yuque_name or not yuque_id:
+                continue
+
+            # 获取该用户的文档
+            docs = self.yuque_sync.get_docs_by_author(yuque_name)
+            if not docs:
+                continue
+
+            # 生成画像
+            profile = self.profile_gen.generate_from_docs(docs)
+            self.storage.save_profile(yuque_id, profile)
+            generated += 1
+            logger.info(f"生成用户画像: {yuque_name}, 兴趣: {profile['profile']['interests']}")
+
+        if generated > 0:
+            logger.info(f"共生成 {generated} 个用户画像")
 
     @filter.command("bind")
     async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):

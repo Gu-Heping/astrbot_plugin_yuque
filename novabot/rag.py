@@ -74,7 +74,11 @@ class RAGEngine:
             # 数据库损坏，清理后重建
             log(f"向量库损坏，准备重建: {e}")
             log(traceback.format_exc())
+
+            # 清理并重新创建目录
             self._force_clear_directory()
+            self.persist_directory.mkdir(parents=True, exist_ok=True)
+
             log("重建向量库...")
             vs = Chroma(
                 persist_directory=str(self.persist_directory),
