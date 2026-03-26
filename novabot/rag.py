@@ -166,30 +166,58 @@ class RAGEngine:
 
         logger.info(f"[RAG] 开始索引 {len(docs)} 篇文档")
 
+        # 测试 embedding 是否正常工作
+        try:
+            test_embedding = self.embeddings.embed_query("test")
+            if not test_embedding:
+                raise ValueError("Embedding 返回空结果")
+            logger.info(f"[RAG] Embedding 测试成功，维度: {len(test_embedding)}")
+        except Exception as e:
+            logger.error(f"[RAG] Embedding 测试失败: {e}")
+            raise
+
         # 构建 Document 列表
         documents = []
-        for doc in docs:
+        for i, doc in enumerate(docs):
             content = doc.get("content", "")
 
-            if not content or not isinstance(content, str):
+            # 严格验证内容
+            if content is None:
+                continue
+            if not isinstance(content, str):
+                logger.warning(f"[RAG] 文档 {i} 内容类型无效: {type(content)}")
                 continue
 
-            content = " ".join(content.split()).strip()
+            # 清理内容
+            try:
+                content = " ".join(content.split()).strip()
+            except Exception as e:
+                logger.warning(f"[RAG] 文档 {i} 内容清理失败: {e}")
+                continue
+
             if not content:
                 continue
 
+            # 限制长度
             if len(content) > 8000:
                 content = content[:8000]
+
+            # 确保内容是有效字符串
+            try:
+                _ = content.encode('utf-8')
+            except Exception as e:
+                logger.warning(f"[RAG] 文档 {i} 编码失败: {e}")
+                continue
 
             documents.append(Document(
                 page_content=content,
                 metadata={
-                    "id": str(doc.get("id", "")),
-                    "title": str(doc.get("title", "")),
-                    "slug": str(doc.get("slug", "")),
-                    "author": str(doc.get("author", "")),
-                    "book_name": str(doc.get("book_name", "")),
-                    "source": f"yuque:{doc.get('repo_namespace', '')}/{doc.get('slug', '')}",
+                    "id": str(doc.get("id", "") or ""),
+                    "title": str(doc.get("title", "") or ""),
+                    "slug": str(doc.get("slug", "") or ""),
+                    "author": str(doc.get("author", "") or ""),
+                    "book_name": str(doc.get("book_name", "") or ""),
+                    "source": f"yuque:{doc.get('repo_namespace', '') or ''}/{doc.get('slug', '') or ''}",
                 }
             ))
 
@@ -199,13 +227,29 @@ class RAGEngine:
 
         logger.info(f"[RAG] 有效文档数: {len(documents)}")
 
-        try:
-            self.vectorstore.add_documents(documents)
-            logger.info(f"[RAG] 索引成功: {len(documents)} 篇文档")
-            return len(documents)
-        except Exception as e:
-            logger.error(f"[RAG] 索引失败: {e}")
-            raise
+        # 分批索引，避免一次提交太多
+        batch_size = 50
+        total_indexed = 0
+
+        for i in range(0, len(documents), batch_size):
+            batch = documents[i:i + batch_size]
+            try:
+                self.vectorstore.add_documents(batch)
+                total_indexed += len(batch)
+                logger.info(f"[RAG] 索引进度: {total_indexed}/{len(documents)}")
+            except Exception as e:
+                logger.error(f"[RAG] 批次 {i//batch_size} 索引失败: {e}")
+                # 尝试逐个索引找出问题文档
+                for j, doc in enumerate(batch):
+                    try:
+                        self.vectorstore.add_documents([doc])
+                        total_indexed += 1
+                    except Exception as e2:
+                        title = doc.metadata.get('title', 'unknown') if doc.metadata else 'unknown'
+                        logger.error(f"[RAG] 文档索引失败: {title} - {e2}")
+
+        logger.info(f"[RAG] 索引完成: {total_indexed} 篇文档")
+        return total_indexed
 
     def index_from_sync(self, docs_dir: str) -> int:
         """从同步目录读取 Markdown 并索引"""
@@ -236,16 +280,17 @@ class RAGEngine:
                         except:
                             pass
 
-                if not body.strip():
+                if not body or not body.strip():
                     continue
 
+                # 确保所有字段都是字符串
                 all_docs.append({
-                    "content": body,
-                    "id": metadata.get("id"),
-                    "title": metadata.get("title", ""),
-                    "slug": metadata.get("slug", ""),
-                    "author": metadata.get("author", ""),
-                    "book_name": metadata.get("book_name", ""),
+                    "content": str(body),
+                    "id": str(metadata.get("id") or ""),
+                    "title": str(metadata.get("title") or ""),
+                    "slug": str(metadata.get("slug") or ""),
+                    "author": str(metadata.get("author") or ""),
+                    "book_name": str(metadata.get("book_name") or ""),
                     "repo_namespace": str(md_file.parent.relative_to(docs_path)),
                 })
 
