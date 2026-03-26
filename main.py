@@ -13,6 +13,8 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
+from .novabot.rag import RAGEngine
+
 
 class YuqueClient:
     """语雀 API 客户端"""
@@ -372,7 +374,26 @@ class NovaBotPlugin(Star):
         self.profile_generator = ProfileGenerator()
         self.yuque_token = config.get("yuque_token", "")
         self.yuque_base_url = config.get("yuque_base_url", "https://nova.yuque.com/api/v2")
-        self.docs_path = Path(config.get("docs_path", "/home/admin/yuque-docs"))
+        
+        # RAG 配置
+        self.embedding_api_key = config.get("embedding_api_key", "")
+        self.embedding_base_url = config.get("embedding_base_url", "")
+        self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
+        
+        # 初始化 RAG 引擎
+        self.rag: Optional[RAGEngine] = None
+        if self.embedding_api_key:
+            try:
+                self.rag = RAGEngine(
+                    persist_directory=str(self.storage.data_dir / "chroma_db"),
+                    embedding_api_key=self.embedding_api_key,
+                    embedding_base_url=self.embedding_base_url or None,
+                    embedding_model=self.embedding_model,
+                )
+                logger.info(f"RAG 引擎初始化完成，模型: {self.embedding_model}")
+            except Exception as e:
+                logger.error(f"RAG 引擎初始化失败: {e}")
+        
         logger.info("NovaBot 插件初始化完成 (v0.2.0)")
 
     @filter.on_llm_request()
@@ -476,6 +497,17 @@ class NovaBotPlugin(Star):
                 if "error" not in info:
                     repos_list.append(f"• {info.get('name', ns)}: {info.get('docs_count', 0)} 篇")
             
+            # 同步到 RAG 向量库
+            rag_status = ""
+            if self.rag:
+                try:
+                    indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+                    rag_status = f"\n📚 已索引到 RAG: {indexed} 篇文档"
+                    logger.info(f"RAG 索引完成: {indexed} 篇文档")
+                except Exception as e:
+                    logger.error(f"RAG 索引失败: {e}")
+                    rag_status = f"\n⚠️ RAG 索引失败: {str(e)}"
+            
             yield event.plain_result(
                 f"✅ 同步完成！\n"
                 f"━━━━━━━━━━━━━━━\n"
@@ -483,6 +515,7 @@ class NovaBotPlugin(Star):
                 f"文档数：{result['docs_count']} 篇\n"
                 f"━━━━━━━━━━━━━━━\n"
                 + "\n".join(repos_list[:10])
+                + rag_status
             )
             
         except httpx.HTTPStatusError as e:
@@ -725,6 +758,98 @@ class NovaBotPlugin(Star):
                 f"使用 /profile refresh 生成画像"
             )
 
+    @filter.command("rag")
+    async def rag_cmd(self, event: AstrMessageEvent, action: str = "", query: str = ""):
+        """RAG 检索管理
+        
+        用法: 
+        - /rag status - 查看 RAG 状态
+        - /rag search <关键词> - 搜索文档
+        - /rag rebuild - 重建索引
+        """
+        if not self.rag:
+            yield event.plain_result(
+                "❌ RAG 未初始化\n"
+                "请在插件配置中设置 embedding_api_key"
+            )
+            return
+        
+        # 查看状态
+        if action.lower() == "status":
+            stats = self.rag.get_stats()
+            sync_state = self.yuque_sync.load_sync_state()
+            
+            yield event.plain_result(
+                f"📊 RAG 状态\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"Embedding 模型: {self.embedding_model}\n"
+                f"索引文档数: {stats.get('docs_count', 0)} 篇\n"
+                f"向量库路径: {stats.get('persist_directory', '未知')}\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"语雀同步: {sync_state.get('docs_count', 0)} 篇文档\n"
+                f"使用 /rag search <关键词> 搜索"
+            )
+            return
+        
+        # 搜索
+        if action.lower() == "search" and query:
+            try:
+                results = self.rag.search(query, k=5)
+                
+                if not results:
+                    yield event.plain_result(
+                        f"🔍 搜索: {query}\n"
+                        f"━━━━━━━━━━━━━━━\n"
+                        f"未找到相关文档"
+                    )
+                    return
+                
+                output = [
+                    f"🔍 搜索: {query}",
+                    f"━━━━━━━━━━━━━━━\n"
+                ]
+                
+                for i, doc in enumerate(results, 1):
+                    output.append(
+                        f"{i}. {doc['title']}\n"
+                        f"   来源: {doc['source']}\n"
+                        f"   {doc['content'][:100]}..."
+                    )
+                
+                yield event.plain_result("\n".join(output))
+            except Exception as e:
+                logger.error(f"RAG 搜索失败: {e}")
+                yield event.plain_result(f"❌ 搜索失败: {str(e)}")
+            return
+        
+        # 重建索引
+        if action.lower() == "rebuild":
+            try:
+                # 清空现有索引
+                self.rag.clear()
+                
+                # 从同步目录重新索引
+                indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+                
+                yield event.plain_result(
+                    f"✅ RAG 索引重建完成\n"
+                    f"索引文档: {indexed} 篇"
+                )
+            except Exception as e:
+                logger.error(f"RAG 重建失败: {e}")
+                yield event.plain_result(f"❌ 重建失败: {str(e)}")
+            return
+        
+        # 帮助信息
+        yield event.plain_result(
+            "📚 RAG 检索管理\n"
+            "━━━━━━━━━━━━━━━━━━━━━━\n"
+            "用法:\n"
+            "• /rag status - 查看状态\n"
+            "• /rag search <关键词> - 搜索\n"
+            "• /rag rebuild - 重建索引"
+        )
+
     @filter.command("novabot")
     async def novabot_help(self, event: AstrMessageEvent):
         """NovaBot 帮助信息"""
@@ -737,6 +862,8 @@ class NovaBotPlugin(Star):
             "• /profile - 查看用户画像\n"
             "• /sync - 同步语雀知识库\n"
             "• /sync status - 查看同步状态\n"
+            "• /rag status - 查看 RAG 状态\n"
+            "• /rag search <关键词> - 搜索文档\n"
             "• /novabot - 显示帮助\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "直接提问即可，我会从语雀知识库中检索答案。"

@@ -1,11 +1,11 @@
 {
   "version": "1.0",
   "project": "NovaBot",
-  "last_wake": "2026-03-26T08:00:00+08:00",
-  "wake_count": 12,
+  "last_wake": "2026-03-26T09:00:00+08:00",
+  "wake_count": 14,
   
-  "phase": "committing",
-  "phase_entered": "2026-03-26T08:30:00+08:00",
+  "phase": "planning",
+  "phase_entered": "2026-03-26T09:00:00+08:00",
   "phase_history": [
     {"phase": "idle", "entered": "2026-03-26T02:40:00", "exited": "2026-03-26T03:30:00"},
     {"phase": "planning", "entered": "2026-03-26T03:30:00", "exited": "2026-03-26T03:35:00"},
@@ -17,37 +17,39 @@
     {"phase": "planning", "entered": "2026-03-26T08:00:00", "exited": "2026-03-26T08:00:00"},
     {"phase": "developing", "entered": "2026-03-26T08:00:00", "exited": "2026-03-26T08:30:00"},
     {"phase": "testing", "entered": "2026-03-26T08:30:00", "exited": "2026-03-26T08:30:00"},
-    {"phase": "auditing", "entered": "2026-03-26T08:30:00", "exited": "2026-03-26T08:30:00"}
+    {"phase": "auditing", "entered": "2026-03-26T08:30:00", "exited": "2026-03-26T08:30:00"},
+    {"phase": "committing", "entered": "2026-03-26T08:30:00", "exited": "2026-03-26T08:30:00"},
+    {"phase": "pushing", "entered": "2026-03-26T08:30:00", "exited": "2026-03-26T09:00:00"}
   ],
   
-  "last_wake": "2026-03-26T08:30:00+08:00",
-  "wake_count": 13,
+  "current_task": "T005",
   "task_queue": [
-    {
-      "id": "T004",
-      "title": "实现内置语雀同步模块",
-      "priority": 0,
-      "status": "pending",
-      "description": "实现语雀文档全量同步，自动获取知识库列表，存储到插件 data 目录"
-    },
     {
       "id": "T005",
       "title": "集成 LangChain + ChromaDB RAG",
-      "priority": 1,
-      "status": "pending",
-      "description": "纯 Python RAG，使用 API embedding（OpenAI/兼容服务）"
+      "priority": 0,
+      "status": "done",
+      "completed_at": "2026-03-26T09:30:00+08:00",
+      "commit": "d5520a0",
+      "features": [
+        "RAGEngine 类处理向量索引和搜索",
+        "/rag 指令管理 RAG 状态",
+        "/rag search 搜索文档",
+        "/rag rebuild 重建索引",
+        "同步后自动索引到 RAG"
+      ]
     },
     {
       "id": "T006",
       "title": "实现 Webhook 增量同步",
-      "priority": 2,
+      "priority": 1,
       "status": "pending",
       "description": "接收语雀 Webhook，实现文档增量更新"
     },
     {
       "id": "T007",
       "title": "更新 requirements.txt",
-      "priority": 3,
+      "priority": 2,
       "status": "pending",
       "description": "添加 langchain、chromadb、sentence-transformers 依赖"
     }
@@ -78,11 +80,27 @@
       "status": "done",
       "completed_at": "2026-03-26T03:50:00+08:00",
       "commit": "ecf60f2"
+    },
+    {
+      "id": "T004",
+      "title": "实现内置语雀同步模块",
+      "priority": 0,
+      "status": "done",
+      "completed_at": "2026-03-26T08:30:00+08:00",
+      "commit": "b9df6b6",
+      "features": [
+        "YuqueSync 类处理全量同步",
+        "/sync 指令同步用户知识库",
+        "/sync status 查看同步状态",
+        "支持获取知识库列表和文档详情"
+      ]
     }
   ],
   "blocked": [],
   
-  "questions": [],
+  "questions": [
+    "embedding 服务使用哪个？（OpenAI / DashScope / 本地模型）"
+  ],
   "ideas": [
     {
       "idea": "画像可以用 LLM 分析提高准确度",
@@ -101,10 +119,10 @@
     "NovaBot设计/01-数据架构.md",
     "NovaBot设计/03-个人层.md"
   ],
-  "commits": ["74367fa", "6750331", "ecf60f2"],
-  "tests_passed": 3,
+  "commits": ["74367fa", "6750331", "ecf60f2", "b9df6b6"],
+  "tests_passed": 4,
   "tests_failed": 0,
   
-  "milestone": "Phase 1 MVP 完成，待重构为自包含架构",
-  "next_focus": "实现内置语雀同步 + RAG 模块"
+  "milestone": "Phase 1.5 同步模块完成",
+  "next_focus": "集成 RAG 检索模块"
 }
