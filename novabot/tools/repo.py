@@ -92,17 +92,22 @@ class ListRepoDocsTool(BaseTool):
                 children.append(node)
         return children
 
-    def _format_tree(self, nodes: list, indent: str = "") -> list:
+    def _format_tree(self, nodes: list, author_map: dict = None, indent: str = "") -> list:
         """格式化树形结构为文本"""
+        if author_map is None:
+            author_map = {}
         lines = []
         for node in nodes:
             title = node.get("title", "")
             doc_type = node.get("type", "DOC")
             icon = "📄" if doc_type == "DOC" else "📁"
             type_hint = "" if doc_type == "DOC" else " [分组]"
-            lines.append(f"{indent}{icon} {title}{type_hint}")
+            author_hint = ""
+            if doc_type == "DOC" and author_map.get(title):
+                author_hint = f" (by {author_map[title]})"
+            lines.append(f"{indent}{icon} {title}{type_hint}{author_hint}")
             if node.get("children"):
-                lines.extend(self._format_tree(node["children"], indent + "  "))
+                lines.extend(self._format_tree(node["children"], author_map, indent + "  "))
         return lines
 
     async def run(self, event, repo_name: str):
@@ -149,35 +154,31 @@ class ListRepoDocsTool(BaseTool):
                 available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
             return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
 
-        # 优先从 SQLite 索引读取（支持 webhook 更新）
+        # 准备作者信息（从 SQLite 索引）
+        author_map = {}
         from ..doc_index import DocIndex
         db_path = docs_dir.parent / "doc_index.db"
         if db_path.exists():
             try:
                 doc_index = DocIndex(str(db_path))
-                # 按知识库名过滤
                 book_name = matched_repo.get("name", "") if matched_repo else repo_name
-                docs = doc_index.search(book=book_name, limit=100)
-                if docs:
-                    lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 文档列表:\n"]
-                    for doc in docs:
-                        title = doc.get("title", "无标题")
-                        author = doc.get("author", "")
-                        author_hint = f" (by {author})" if author else ""
-                        lines.append(f"📄 {title}{author_hint}")
-                    lines.append(f"\n共 {len(docs)} 篇文档")
-                    return "\n".join(lines)
+                docs = doc_index.search(book=book_name, limit=200)
+                for doc in docs:
+                    title = doc.get("title", "")
+                    author = doc.get("author", "")
+                    if title and author:
+                        author_map[title] = author
             except Exception as e:
-                logger.warning(f"从 SQLite 读取文档列表失败: {e}")
+                logger.debug(f"从 SQLite 读取作者信息失败: {e}")
 
-        # 备选：从 TOC 读取
+        # 从 TOC 读取层级结构
         toc_file = matched_dir / ".toc.json"
         if toc_file.exists():
             try:
                 toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
                 tree = self._build_toc_tree(toc_list)
                 lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 目录结构:\n"]
-                lines.extend(self._format_tree(tree))
+                lines.extend(self._format_tree(tree, author_map))
                 doc_count = sum(1 for item in toc_list if item.get("type") == "DOC")
                 title_count = sum(1 for item in toc_list if item.get("type") == "TITLE")
                 lines.append(f"\n共 {doc_count} 篇文档, {title_count} 个分组")
