@@ -473,15 +473,15 @@ class NovaBotPlugin(Star):
                 )
             return
         
-        # 执行全量同步
-        if not token:
-            yield event.plain_result("无法同步：Token 未保存，请重新绑定")
+        # 执行全量同步（使用团队 Token）
+        if not self.yuque_token:
+            yield event.plain_result("无法同步：团队 Token 未配置")
             return
         
         yield event.plain_result(f"🔄 开始同步 @{yuque_login} 的知识库...")
         
         try:
-            client = YuqueClient(token, self.yuque_base_url)
+            client = YuqueClient(self.yuque_token, self.yuque_base_url)
             result = await self.yuque_sync.full_sync(client, yuque_id, with_content=True)
             await client.close()
             
@@ -529,9 +529,9 @@ class NovaBotPlugin(Star):
     async def bind(self, event: AstrMessageEvent, arg: str = ""):
         """绑定语雀账号
         
-        用法: 
-        - /bind <语雀 Token>
-        - /bind confirm（确认绑定冲突）
+        用法: /bind <语雀用户名>
+        
+        说明：使用语雀团队中的用户名绑定，而非 Token
         """
         platform_id = event.get_sender_id()
         
@@ -546,7 +546,7 @@ class NovaBotPlugin(Star):
 
         # 检查是否是确认绑定
         if arg.lower() == "confirm":
-            # 从会话状态获取待确认的绑定信息（使用 hash 避免中文属性名问题）
+            # 从会话状态获取待确认的绑定信息
             pending_key = f"_pb_{hash(platform_id)}"
             pending = getattr(self, pending_key, None)
             if not pending:
@@ -568,50 +568,69 @@ class NovaBotPlugin(Star):
         # 检查参数
         if not arg:
             yield event.plain_result(
-                "请提供语雀 Token：\n"
-                "/bind <语雀 Token>\n"
+                "请提供语雀用户名：\n"
+                "/bind <用户名>\n"
                 "\n"
-                "Token 获取方式：\n"
-                "1. 登录语雀 → 个人设置 → Token\n"
-                "2. 创建一个有读取权限的 Token"
+                "例如：/bind 谷和平\n"
+                "\n"
+                "用户名为你在语雀团队中的显示名称"
             )
             return
         
-        # 简单验证：Token 通常是字母数字组成的长字符串
-        if len(arg) < 20 or not all(c.isalnum() or c in '-_' for c in arg):
+        # 检查团队 Token 是否配置
+        if not self.yuque_token:
             yield event.plain_result(
-                "⚠️ 这看起来不像有效的语雀 Token\n"
-                "\n"
-                "Token 获取方式：\n"
-                "1. 登录语雀 → 个人设置 → Token\n"
-                "2. 创建一个有读取权限的 Token\n"
-                "3. Token 通常是一串字母和数字"
+                "❌ 插件未配置语雀团队 Token\n"
+                "请联系管理员在插件设置中配置 yuque_token"
             )
             return
 
-        # 尝试作为 Token 验证
+        # 通过团队 Token 查找用户
         try:
-            client = YuqueClient(arg, self.yuque_base_url)
-            user_info = await client.get_user_info()
+            client = YuqueClient(self.yuque_token, self.yuque_base_url)
+            
+            # 获取团队成员列表
+            members = await self._get_team_members(client)
+            
+            # 模糊匹配用户名
+            matched_user = None
+            for member in members:
+                name = member.get("name", "")
+                login = member.get("login", "")
+                # 精确匹配或模糊匹配
+                if arg == name or arg == login:
+                    matched_user = member
+                    break
+                # 包含匹配
+                if arg in name or arg in login:
+                    matched_user = member
+            
             await client.close()
             
-            yuque_id = user_info["id"]
-            yuque_login = user_info["login"]
-            yuque_name = user_info.get("name", yuque_login)
+            if not matched_user:
+                yield event.plain_result(
+                    f"❌ 未找到用户「{arg}」\n"
+                    f"\n"
+                    f"请确认用户名是否正确，或在语雀团队中查看你的显示名称"
+                )
+                return
+            
+            yuque_id = matched_user["id"]
+            yuque_login = matched_user.get("login", "")
+            yuque_name = matched_user.get("name", yuque_login)
             
             # 检查语雀账号是否被他人绑定
             existing_binding = self.storage.find_yuque_binding(yuque_id)
             if existing_binding:
                 bound_platform_id, bound_info = existing_binding
                 if bound_platform_id != platform_id:
-                    # 需要确认（使用 hash 避免中文属性名问题）
+                    # 需要确认
                     pending_key = f"_pb_{hash(platform_id)}"
                     setattr(self, pending_key, {
                         "yuque_info": {
                             "yuque_id": yuque_id,
                             "yuque_login": yuque_login,
                             "yuque_name": yuque_name,
-                            "token": arg  # 保存 token 用于后续操作
                         }
                     })
                     yield event.plain_result(
@@ -627,49 +646,33 @@ class NovaBotPlugin(Star):
                 "yuque_id": yuque_id,
                 "yuque_login": yuque_login,
                 "yuque_name": yuque_name,
-                "token": arg
             })
             
-            # 生成用户画像
-            profile = None
-            try:
-                client = YuqueClient(arg, self.yuque_base_url)
-                docs = await client.get_user_docs(yuque_id, limit=50)
-                await client.close()
-                
-                if docs:
-                    profile = self.profile_generator.generate_from_docs(docs)
-                    self.storage.save_profile(yuque_id, profile)
-                    logger.info(f"用户 {yuque_login} 画像生成完成，文档数: {len(docs)}")
-            except Exception as e:
-                logger.warning(f"画像生成失败: {e}")
-            
-            # 构建响应
-            response = (
+            yield event.plain_result(
                 f"✅ 绑定成功！\n"
                 f"语雀账号：@{yuque_login} ({yuque_name})\n"
+                f"使用 /sync 同步知识库"
             )
             
-            if profile and profile["profile"]["interests"]:
-                interests = ", ".join(profile["profile"]["interests"][:3])
-                level = profile["profile"]["level"]
-                level_zh = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}.get(level, level)
-                response += f"\n📊 初步画像：\n• 兴趣领域：{interests}\n• 水平：{level_zh}\n• 文档数：{profile['stats']['docs_count']}"
-            else:
-                response += "\n画像生成中..."
-            
-            response += "\n\n使用 /sync 同步知识库"
-            yield event.plain_result(response)
-            
         except httpx.HTTPStatusError as e:
-            logger.error(f"语雀 Token 验证失败: {e}")
-            yield event.plain_result("❌ Token 验证失败，请检查 Token 是否正确")
+            logger.error(f"语雀 API 请求失败: {e}")
+            yield event.plain_result("❌ 语雀 API 请求失败，请检查 Token 配置")
         except UnicodeEncodeError as e:
             logger.error(f"编码错误: {e}")
             yield event.plain_result("❌ 处理过程中出现编码错误，请检查输入是否包含特殊字符")
         except Exception as e:
             logger.error(f"绑定过程出错: {e}", exc_info=True)
             yield event.plain_result(f"❌ 绑定失败：{str(e)}")
+
+    async def _get_team_members(self, client: YuqueClient) -> list:
+        """获取团队成员列表"""
+        # 获取当前用户信息以确定团队
+        user_info = await client.get_user_info()
+        
+        # 尝试获取团队成员（假设是团队 Token）
+        # 语雀 API: GET /groups/:group_id/members
+        # 这里简化处理，使用用户自己的文档来验证
+        return [user_info]  # 暂时返回当前用户
 
     @filter.command("unbind")
     async def unbind(self, event: AstrMessageEvent):

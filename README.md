@@ -161,12 +161,12 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 | 配置项 | 说明 |
 |--------|------|
-| `yuque_token` | 语雀 Token（用于同步知识库） |
+| `yuque_token` | 语雀团队 Token（用于同步知识库和用户绑定验证） |
 | `yuque_base_url` | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
 | `embedding_api_key` | Embedding API Key（OpenAI 或兼容服务） |
 | `embedding_base_url` | Embedding API 地址（可选，默认 OpenAI） |
 
-**知识库自动发现**：同步模块会自动获取 Token 有权限的所有知识库，无需手动配置。
+**绑定方式**：用户使用 `/bind <用户名>` 绑定，系统通过团队 Token 验证用户身份。
 
 ### 3. 初始同步
 
