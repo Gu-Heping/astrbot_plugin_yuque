@@ -887,7 +887,8 @@ class NovaBotPlugin(Star):
                     logger.error(f"RAG 索引失败: {e}")
 
             docs_count = result.get("docs", 0) if result else 0
-            logger.info(f"后台同步完成: {docs_count} 篇文档")
+            removed_count = result.get("removed", 0) if result else 0
+            logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
 
         except Exception as e:
             logger.error(f"后台同步失败: {e}", exc_info=True)

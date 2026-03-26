@@ -1,12 +1,12 @@
 """
 NovaBot 文档同步模块
-基于 yuque2git 实现，支持 TOC 层级处理
+基于 yuque2git 实现，支持 TOC 层级处理、孤儿文件清理
 """
 
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import yaml
 
@@ -72,11 +72,13 @@ class DocSyncer:
         client: YuqueClient,
         output_dir: Path,
         members: Optional[Dict[str, Dict]] = None,
+        global_index: Optional[Dict[str, str]] = None,
     ):
         self.client = client
         self.output_dir = output_dir
         self.members = members or {}
         self.used_basenames: Dict[tuple, set] = {}  # (repo_name, parent_path) -> set of basenames
+        self.global_index = global_index or {}  # yuque_id -> path (跨知识库)
 
     async def sync_repo(self, namespace: str, repo_name: str) -> Dict:
         """同步单个知识库
@@ -103,21 +105,59 @@ class DocSyncer:
 
         # 处理 TOC 节点
         roots = toc_list_children(None, toc_by_uuid)
-        stats = {"docs": 0, "titles": 0, "errors": 0}
-        index = {}  # yuque_id -> path
+        stats = {"docs": 0, "titles": 0, "errors": 0, "removed": 0}
+        repo_index = {}  # 本仓库的 yuque_id -> path
 
         for item in roots:
             await self._process_toc_item(
-                namespace, repo_name, repo_dir, item, "", toc_by_uuid, index, stats
+                namespace, repo_name, repo_dir, item, "", toc_by_uuid, repo_index, stats
             )
 
-        # 保存索引
-        if index:
+        # 保存本仓库索引
+        if repo_index:
             index_file = repo_dir / ".index.json"
-            index_file.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+            index_file.write_text(json.dumps(repo_index, ensure_ascii=False, indent=2), encoding="utf-8")
 
-        logger.info(f"[Sync] {repo_name}: {stats['docs']} docs, {stats['titles']} titles")
+        # 更新全局索引
+        self.global_index.update(repo_index)
+
+        # 清理孤儿文件：删除不在当前 TOC 中的 .md 文件
+        valid_paths: Set[str] = set(repo_index.values())
+        for md_file in repo_dir.rglob("*.md"):
+            rel_path = str(md_file.relative_to(self.output_dir))
+            if rel_path not in valid_paths:
+                try:
+                    md_file.unlink()
+                    stats["removed"] += 1
+                    logger.info(f"[Sync] 删除孤儿文件: {md_file.relative_to(self.output_dir)}")
+                except OSError as e:
+                    logger.warning(f"[Sync] 删除文件失败: {e}")
+
+        # 清理空目录（只含 .toc.json 的目录）
+        self._cleanup_empty_dirs(repo_dir)
+
+        logger.info(f"[Sync] {repo_name}: {stats['docs']} docs, {stats['titles']} titles, {stats['removed']} removed")
         return stats
+
+    def _cleanup_empty_dirs(self, repo_dir: Path) -> None:
+        """清理只含 .toc.json 的空目录"""
+        for _ in range(10):  # 多轮清理，因为子目录删除后父目录可能也变空
+            removed_any = False
+            for d in sorted(repo_dir.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                if not d.is_dir() or d == repo_dir:
+                    continue
+                items = list(d.iterdir())
+                # 只含 .toc.json 的目录
+                if len(items) == 1 and items[0].name == ".toc.json" and items[0].is_file():
+                    try:
+                        items[0].unlink()
+                        d.rmdir()
+                        logger.debug(f"[Sync] 清理空目录: {d.relative_to(self.output_dir)}")
+                        removed_any = True
+                    except OSError:
+                        pass
+            if not removed_any:
+                break
 
     async def _process_toc_item(
         self,
@@ -127,7 +167,7 @@ class DocSyncer:
         toc_item: Dict,
         parent_path: str,
         toc_by_uuid: Dict[str, Dict],
-        index: Dict[str, str],
+        repo_index: Dict[str, str],
         stats: Dict[str, int],
     ) -> None:
         """递归处理 TOC 节点"""
@@ -157,13 +197,29 @@ class DocSyncer:
                     out_file = repo_dir / f"{base}.md"
 
                 out_file.parent.mkdir(parents=True, exist_ok=True)
+
+                # 检查是否移动了位置（文档ID对应旧路径，但新路径不同）
+                rel_path = str(out_file.relative_to(self.output_dir))
+                if yuque_id:
+                    yuque_id_str = str(yuque_id)
+                    old_path = self.global_index.get(yuque_id_str)
+                    if old_path and old_path != rel_path:
+                        # 删除旧文件
+                        old_file = self.output_dir / old_path
+                        if old_file.exists():
+                            try:
+                                old_file.unlink()
+                                logger.info(f"[Sync] 文档移动，删除旧路径: {old_path}")
+                            except OSError:
+                                pass
+
+                # 写入新文件
                 content = self._build_markdown(detail, author)
                 out_file.write_text(content, encoding="utf-8")
 
                 # 更新索引
-                rel_path = str(out_file.relative_to(self.output_dir))
                 if yuque_id:
-                    index[str(yuque_id)] = rel_path
+                    repo_index[str(yuque_id)] = rel_path
 
                 stats["docs"] += 1
                 logger.debug(f"[Sync] 写入文档: {title}")
@@ -183,7 +239,7 @@ class DocSyncer:
             children = toc_list_children(uuid, toc_by_uuid)
             for child in children:
                 await self._process_toc_item(
-                    namespace, repo_name, repo_dir, child, next_parent, toc_by_uuid, index, stats
+                    namespace, repo_name, repo_dir, child, next_parent, toc_by_uuid, repo_index, stats
                 )
 
     def _resolve_author(self, detail: Dict) -> str:
@@ -281,10 +337,13 @@ async def sync_all_repos(
 
     logger.info(f"[Sync] 发现 {len(repos)} 个知识库")
 
+    # 读取全局索引（用于检测文档移动）
+    global_index = _read_global_index(output_dir)
+
     # 同步
-    syncer = DocSyncer(client, output_dir, members)
+    syncer = DocSyncer(client, output_dir, members, global_index)
     repos_info = []
-    total_stats = {"docs": 0, "titles": 0, "errors": 0}
+    total_stats = {"docs": 0, "titles": 0, "errors": 0, "removed": 0}
 
     for i, repo in enumerate(repos):
         namespace = repo.get("namespace", "")
@@ -301,6 +360,7 @@ async def sync_all_repos(
         total_stats["docs"] += stats["docs"]
         total_stats["titles"] += stats["titles"]
         total_stats["errors"] += stats["errors"]
+        total_stats["removed"] += stats.get("removed", 0)
 
         repos_info.append({
             "id": repo.get("id"),
@@ -311,6 +371,9 @@ async def sync_all_repos(
             "items_count": repo.get("items_count", 0),
         })
 
+    # 保存全局索引
+    _write_global_index(output_dir, syncer.global_index)
+
     # 保存知识库列表（同时保存两份：一份在 docs 目录，一份在 data 根目录供工具读取）
     repos_file = output_dir / ".repos.json"
     repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -319,9 +382,35 @@ async def sync_all_repos(
     repos_cache = output_dir.parent / "yuque_repos.json"
     repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles")
+    # 清理孤儿知识库目录（不在当前 API 列表中的目录）
+    current_dirs = {YuqueClient.slug_safe(r.get("name", "") or r.get("namespace", "")) for r in repos_info}
+    for d in output_dir.iterdir():
+        if d.name.startswith(".") or not d.is_dir():
+            continue
+        if d.name not in current_dirs:
+            logger.info(f"[Sync] 发现孤儿知识库目录（不在当前列表中）: {d.name}")
+            # 不自动删除，只记录日志，让用户决定是否清理
+
+    logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles, {total_stats['removed']} removed")
     return {
         "repos_count": len(repos),
         "token_type": "团队" if is_group else "个人",
         **total_stats
     }
+
+
+def _read_global_index(output_dir: Path) -> Dict[str, str]:
+    """读取全局 ID->路径 索引"""
+    index_file = output_dir / ".yuque-id-to-path.json"
+    if not index_file.exists():
+        return {}
+    try:
+        return json.loads(index_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_global_index(output_dir: Path, index: Dict[str, str]) -> None:
+    """写入全局 ID->路径 索引"""
+    index_file = output_dir / ".yuque-id-to-path.json"
+    index_file.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
