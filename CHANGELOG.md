@@ -4,6 +4,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.1] - 2026-03-26
+
+### 修复
+- **`list_repo_docs` 层级显示**：修复工具优先读 SQLite 导致层级结构丢失，现在正确显示 TITLE 分组
+
 ## [v0.12.0] - 2026-03-26
 
 ### 安全修复
