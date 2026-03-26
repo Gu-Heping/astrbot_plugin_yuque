@@ -119,10 +119,10 @@
     "NovaBot设计/01-数据架构.md",
     "NovaBot设计/03-个人层.md"
   ],
-  "commits": ["74367fa", "6750331", "ecf60f2", "b9df6b6"],
+  "commits": ["74367fa", "6750331", "ecf60f2", "b9df6b6", "f4f2fe0"],
   "tests_passed": 4,
   "tests_failed": 0,
   
-  "milestone": "Phase 1.5 同步模块完成",
-  "next_focus": "集成 RAG 检索模块"
+  "milestone": "Phase 1.6 RAG 检索模块完成",
+  "next_focus": "Webhook 增量同步"
 }
