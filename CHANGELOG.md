@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.5.2] - 2026-03-26
+
+### 修复
+- **ChromaDB 数据库损坏**：初始化时验证数据库，损坏时自动重置
+- **RAG Embedding API 错误**：添加内容验证，跳过无效内容
+
 ## [v0.5.1] - 2026-03-26
 
 ### 新增
