@@ -316,6 +316,51 @@ class RAGEngine:
         logger.info(f"[RAG] 索引完成: {total_indexed} 篇文档")
         return total_indexed
 
+    def upsert_doc(self, doc: dict) -> bool:
+        """更新或插入单个文档
+
+        Args:
+            doc: 文档字典，包含 id, content, title, slug, author, book_name 等字段
+
+        Returns:
+            是否成功
+        """
+        yuque_id = doc.get("id") or doc.get("yuque_id")
+        if not yuque_id:
+            logger.warning("[RAG] upsert_doc 缺少文档 ID")
+            return False
+
+        yuque_id = str(yuque_id)
+
+        # 先删除旧向量
+        self.delete_doc(int(yuque_id))
+
+        # 添加新向量
+        indexed = self.index_docs([doc])
+        if indexed > 0:
+            logger.info(f"[RAG] 更新向量成功: yuque_id={yuque_id}")
+            return True
+        return False
+
+    def delete_doc(self, yuque_id: int) -> bool:
+        """删除指定文档的向量
+
+        Args:
+            yuque_id: 语雀文档 ID
+
+        Returns:
+            是否成功
+        """
+        try:
+            collection = self.vectorstore._collection
+            # 使用 where 条件删除
+            collection.delete(where={"id": str(yuque_id)})
+            logger.info(f"[RAG] 删除向量: yuque_id={yuque_id}")
+            return True
+        except Exception as e:
+            logger.error(f"[RAG] 删除向量失败: {e}")
+            return False
+
     def index_from_sync(self, docs_dir: str) -> int:
         """从同步目录读取 Markdown 并索引（全量重建）"""
         import re

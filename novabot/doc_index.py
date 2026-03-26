@@ -87,6 +87,29 @@ class DocIndex:
         ))
         conn.commit()
 
+    def delete_doc(self, yuque_id: int) -> bool:
+        """删除指定文档的索引记录
+
+        Args:
+            yuque_id: 语雀文档 ID
+
+        Returns:
+            是否删除成功（有记录被删除）
+        """
+        conn = self._get_conn()
+        cursor = conn.execute("DELETE FROM docs WHERE yuque_id = ?", (yuque_id,))
+        conn.commit()
+        deleted = cursor.rowcount > 0
+        if deleted:
+            logger.info(f"[DocIndex] 删除文档索引: yuque_id={yuque_id}")
+        return deleted
+
+    def get_doc_by_yuque_id(self, yuque_id: int) -> Optional[Dict]:
+        """根据语雀 ID 获取文档记录"""
+        conn = self._get_conn()
+        row = conn.execute("SELECT * FROM docs WHERE yuque_id = ?", (yuque_id,)).fetchone()
+        return dict(row) if row else None
+
     def add_docs(self, docs: List[Dict]):
         """批量添加文档"""
         conn = self._get_conn()

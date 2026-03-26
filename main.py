@@ -9,11 +9,12 @@ from datetime import datetime
 from typing import Optional
 
 import yaml
+from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .novabot import RAGEngine, YuqueClient, DocSyncer, sync_all_repos, Storage, ProfileGenerator
+from .novabot import RAGEngine, YuqueClient, DocSyncer, sync_all_repos, Storage, ProfileGenerator, WebhookHandler
 from .novabot.tools import ALL_TOOLS
 
 
@@ -95,6 +96,12 @@ class NovaBotPlugin(Star):
         self.profile_gen = ProfileGenerator()
         self.client: Optional[YuqueClient] = None
 
+        # Webhook 服务
+        self.webhook_handler: Optional[WebhookHandler] = None
+        self._webhook_app: Optional[web.Application] = None
+        self._webhook_runner: Optional[web.AppRunner] = None
+        self._webhook_site: Optional[web.TCPSite] = None
+
         # RAG
         self.rag: Optional[RAGEngine] = None
         if self.embedding_api_key:
@@ -121,6 +128,52 @@ class NovaBotPlugin(Star):
 
         # 注册 FunctionTool
         self._register_tools()
+
+        # 初始化 Webhook 服务（延迟到 initialize）
+        if config.get("webhook_enabled", False):
+            self._setup_webhook_app()
+
+    def _setup_webhook_app(self):
+        """设置 Webhook HTTP 服务"""
+        self._webhook_app = web.Application()
+        self._webhook_app.router.add_post("/yuque/webhook", self._handle_webhook_request)
+        self._webhook_app.router.add_get("/health", self._health_check)
+        self.webhook_handler = WebhookHandler(self)
+
+    async def initialize(self):
+        """插件初始化完成后的回调（AstrBot 已完全启动）"""
+        if self._webhook_app and self.config.get("webhook_enabled", False):
+            port = self.config.get("webhook_port", 8766)
+            try:
+                self._webhook_runner = web.AppRunner(self._webhook_app)
+                await self._webhook_runner.setup()
+                self._webhook_site = web.TCPSite(self._webhook_runner, "0.0.0.0", port)
+                await self._webhook_site.start()
+                logger.info(f"Webhook 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
+            except Exception as e:
+                logger.error(f"Webhook 服务启动失败: {e}")
+
+    async def _handle_webhook_request(self, request: web.Request) -> web.Response:
+        """处理语雀 Webhook 请求"""
+        if not self.webhook_handler:
+            return web.Response(status=503, text="Webhook not initialized")
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.Response(status=400, text="Invalid JSON")
+
+        try:
+            result = await self.webhook_handler.handle(payload)
+            logger.info(f"[Webhook] 处理结果: {result}")
+            return web.Response(status=200, text="OK")
+        except Exception as e:
+            logger.error(f"[Webhook] 处理失败: {e}")
+            return web.Response(status=500, text=str(e))
+
+    async def _health_check(self, request: web.Request) -> web.Response:
+        """健康检查端点"""
+        return web.json_response({"status": "ok", "service": "novabot-webhook"})
 
     def _register_tools(self):
         """注册 LLM 工具"""
@@ -569,6 +622,35 @@ class NovaBotPlugin(Star):
             "• /rag rebuild - 重建索引"
         )
 
+    @filter.command("webhook")
+    async def webhook_cmd(self, event: AstrMessageEvent):
+        """Webhook 服务状态"""
+        if not self.config.get("webhook_enabled", False):
+            yield event.plain_result(
+                "Webhook 服务未启用\n"
+                "在配置中设置 webhook_enabled: true 启用"
+            )
+            return
+
+        port = self.config.get("webhook_port", 8766)
+
+        if self._webhook_site:
+            yield event.plain_result(
+                f"🌐 Webhook 服务\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"状态: ✅ 运行中\n"
+                f"地址: http://0.0.0.0:{port}/yuque/webhook\n"
+                f"\n"
+                f"在语雀知识库设置中配置此地址"
+            )
+        else:
+            yield event.plain_result(
+                f"🌐 Webhook 服务\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"状态: ⚠️ 未启动\n"
+                f"端口: {port}"
+            )
+
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
@@ -591,9 +673,21 @@ class NovaBotPlugin(Star):
             "  /rag search <关键词> - 搜索\n"
             "  /rag rebuild - 重建索引\n"
             "\n"
+            "🌐 Webhook\n"
+            "  /webhook - 查看状态\n"
+            "\n"
             "  /novabot - 帮助"
         )
 
     async def terminate(self):
+        """插件卸载时的清理"""
+        # 停止 Webhook 服务
+        if self._webhook_site:
+            await self._webhook_site.stop()
+            logger.info("Webhook 服务已停止")
+        if self._webhook_runner:
+            await self._webhook_runner.cleanup()
+
+        # 关闭语雀客户端
         await self._close_client()
         logger.info("NovaBot 插件已卸载")

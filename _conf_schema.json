@@ -24,5 +24,25 @@
     "description": "Embedding 模型名称",
     "type": "string",
     "default": "text-embedding-3-small"
+  },
+  "webhook_enabled": {
+    "description": "启用 Webhook 服务（实时同步语雀文档变更）",
+    "type": "bool",
+    "default": false
+  },
+  "webhook_port": {
+    "description": "Webhook 服务端口",
+    "type": "int",
+    "default": 8766
+  },
+  "git_enabled": {
+    "description": "启用 Git 版本控制（保留文档变更历史）",
+    "type": "bool",
+    "default": true
+  },
+  "git_auto_push": {
+    "description": "自动推送到远程仓库（需先配置 git remote）",
+    "type": "bool",
+    "default": false
   }
 }

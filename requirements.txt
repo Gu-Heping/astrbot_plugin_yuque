@@ -1,5 +1,6 @@
 httpx>=0.24.0
 pyyaml>=6.0
+aiohttp>=3.9.0
 
 # RAG
 langchain>=0.1.0

@@ -8,6 +8,8 @@ from .sync import DocSyncer, sync_all_repos, toc_list_children
 from .doc_index import DocIndex
 from .storage import Storage
 from .profile import ProfileGenerator
+from .webhook import WebhookHandler
+from .git_ops import GitOps
 from . import tools
 
 __all__ = [
@@ -19,5 +21,7 @@ __all__ = [
     "DocIndex",
     "Storage",
     "ProfileGenerator",
+    "WebhookHandler",
+    "GitOps",
     "tools",
 ]
