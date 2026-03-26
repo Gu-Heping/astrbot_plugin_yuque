@@ -5,18 +5,16 @@ NovaBot RAG 检索模块
 
 import gc
 import shutil
-import traceback
 from pathlib import Path
 from typing import Optional
 
+import chromadb
+from chromadb.config import Settings
 from langchain_community.vectorstores import Chroma
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 
-
-def log(msg: str):
-    """简单日志"""
-    print(f"[RAG] {msg}")
+from astrbot.api import logger
 
 
 class RAGEngine:
@@ -43,8 +41,9 @@ class RAGEngine:
             embedding_kwargs["openai_api_base"] = embedding_base_url
         self.embeddings = OpenAIEmbeddings(**embedding_kwargs)
 
-        # 延迟初始化向量库
+        # 延迟初始化
         self._vectorstore: Optional[Chroma] = None
+        self._client: Optional[chromadb.ClientAPI] = None
 
     @property
     def vectorstore(self) -> Chroma:
@@ -54,81 +53,97 @@ class RAGEngine:
         return self._vectorstore
 
     def _create_vectorstore(self) -> Chroma:
-        """创建新的向量库实例"""
-        log(f"创建向量库: {self.persist_directory}")
+        """创建向量库"""
+        logger.info(f"[RAG] 创建向量库: {self.persist_directory}")
 
         # 确保目录存在
         self.persist_directory.mkdir(parents=True, exist_ok=True)
 
-        # 尝试加载现有数据库，验证完整性
+        # 创建 ChromaDB 客户端
+        settings = Settings(
+            anonymized_telemetry=False,
+            allow_reset=True,
+        )
+
         try:
-            vs = Chroma(
-                persist_directory=str(self.persist_directory),
-                embedding_function=self.embeddings,
+            # 尝试使用持久化客户端
+            self._client = chromadb.PersistentClient(
+                path=str(self.persist_directory),
+                settings=settings,
             )
-            # 验证数据库可用性
-            count = vs._collection.count()
-            log(f"加载现有向量库成功，文档数: {count}")
-            return vs
+
+            # 尝试获取或创建 collection
+            collection = self._client.get_or_create_collection("nova_docs")
+            count = collection.count()
+            logger.info(f"[RAG] 向量库加载成功，文档数: {count}")
+
         except Exception as e:
-            # 数据库损坏，清理后重建
-            log(f"向量库损坏，准备重建: {e}")
-            log(traceback.format_exc())
+            # 数据库损坏，重置
+            logger.warning(f"[RAG] 向量库损坏，重置: {e}")
 
-            # 清理并重新创建目录
-            self._force_clear_directory()
-            self.persist_directory.mkdir(parents=True, exist_ok=True)
+            # 强制清理
+            self._force_reset()
 
-            log("重建向量库...")
-            vs = Chroma(
-                persist_directory=str(self.persist_directory),
-                embedding_function=self.embeddings,
+            # 重新创建
+            self._client = chromadb.PersistentClient(
+                path=str(self.persist_directory),
+                settings=settings,
             )
-            log("向量库重建成功")
-            return vs
+            collection = self._client.get_or_create_collection("nova_docs")
+            logger.info("[RAG] 向量库重置成功")
 
-    def _force_clear_directory(self):
-        """强制清空向量库目录"""
-        log(f"清空向量库目录: {self.persist_directory}")
+        # 创建 LangChain Chroma 包装
+        return Chroma(
+            client=self._client,
+            collection_name="nova_docs",
+            embedding_function=self.embeddings,
+        )
 
-        # 删除目录
+    def _force_reset(self):
+        """强制重置向量库"""
+        logger.info("[RAG] 强制重置向量库...")
+
+        # 1. 如果有客户端，尝试 reset
+        if self._client is not None:
+            try:
+                self._client.reset()
+                logger.info("[RAG] 客户端 reset 成功")
+                return
+            except Exception as e:
+                logger.warning(f"[RAG] 客户端 reset 失败: {e}")
+
+        # 2. 释放引用
+        self._vectorstore = None
+        self._client = None
+        gc.collect()
+
+        # 3. 删除目录
         if self.persist_directory.exists():
             try:
                 shutil.rmtree(self.persist_directory)
-                log("目录删除成功")
+                logger.info("[RAG] 目录删除成功")
             except PermissionError:
-                # Windows 上可能文件被锁定
-                log("目录被锁定，等待 1 秒后重试...")
                 import time
                 time.sleep(1)
-                try:
-                    shutil.rmtree(self.persist_directory)
-                    log("目录删除成功")
-                except Exception as e:
-                    log(f"无法删除向量库目录: {e}")
-                    log(traceback.format_exc())
-                    raise
+                shutil.rmtree(self.persist_directory)
+                logger.info("[RAG] 目录删除成功（重试）")
             except Exception as e:
-                log(f"删除向量库目录失败: {e}")
-                log(traceback.format_exc())
+                logger.error(f"[RAG] 目录删除失败: {e}")
                 raise
-        else:
-            log("目录不存在，无需删除")
 
     def index_docs(self, docs: list[dict]) -> int:
         """索引文档到向量库"""
         if not docs:
-            log("没有文档需要索引")
+            logger.info("[RAG] 没有文档需要索引")
             return 0
 
-        log(f"开始索引 {len(docs)} 篇文档")
+        logger.info(f"[RAG] 开始索引 {len(docs)} 篇文档")
 
         # 构建 Document 列表
         documents = []
         for doc in docs:
             content = doc.get("content", "")
 
-            # 验证内容
             if not content or not isinstance(content, str):
                 continue
 
@@ -136,7 +151,6 @@ class RAGEngine:
             if not content:
                 continue
 
-            # 限制长度
             if len(content) > 8000:
                 content = content[:8000]
 
@@ -153,30 +167,28 @@ class RAGEngine:
             ))
 
         if not documents:
-            log("过滤后没有有效文档")
+            logger.info("[RAG] 过滤后没有有效文档")
             return 0
 
-        log(f"有效文档数: {len(documents)}")
+        logger.info(f"[RAG] 有效文档数: {len(documents)}")
 
-        # 批量添加
         try:
             self.vectorstore.add_documents(documents)
-            log(f"索引成功: {len(documents)} 篇文档")
+            logger.info(f"[RAG] 索引成功: {len(documents)} 篇文档")
             return len(documents)
         except Exception as e:
-            log(f"索引文档失败: {e}")
-            log(traceback.format_exc())
+            logger.error(f"[RAG] 索引失败: {e}")
             raise
 
     def index_from_sync(self, docs_dir: str) -> int:
         """从同步目录读取 Markdown 并索引"""
         import yaml
 
-        log(f"从目录读取文档: {docs_dir}")
+        logger.info(f"[RAG] 从目录读取文档: {docs_dir}")
 
         docs_path = Path(docs_dir)
         if not docs_path.exists():
-            log(f"文档目录不存在: {docs_dir}")
+            logger.warning(f"[RAG] 文档目录不存在: {docs_dir}")
             return 0
 
         all_docs = []
@@ -185,7 +197,6 @@ class RAGEngine:
             try:
                 content = md_file.read_text(encoding="utf-8")
 
-                # 解析 frontmatter
                 metadata = {}
                 body = content
 
@@ -212,9 +223,9 @@ class RAGEngine:
                 })
 
             except Exception as e:
-                log(f"读取 {md_file} 失败: {e}")
+                logger.warning(f"[RAG] 读取 {md_file} 失败: {e}")
 
-        log(f"读取到 {len(all_docs)} 篇文档")
+        logger.info(f"[RAG] 读取到 {len(all_docs)} 篇文档")
         return self.index_docs(all_docs)
 
     def search(self, query: str, k: int = 5) -> list[dict]:
@@ -238,34 +249,20 @@ class RAGEngine:
                 for doc in results
             ]
         except Exception as e:
-            log(f"搜索失败: {e}")
+            logger.error(f"[RAG] 搜索失败: {e}")
             return []
 
     def clear(self) -> bool:
         """清空向量库"""
-        log("清空向量库...")
+        logger.info("[RAG] 清空向量库...")
 
-        # 1. 释放 ChromaDB 连接
-        if self._vectorstore is not None:
-            try:
-                # 关闭底层的 SQLite 连接
-                if hasattr(self._vectorstore, '_client'):
-                    del self._vectorstore._client
-            except:
-                pass
-            self._vectorstore = None
-
-        # 2. 强制垃圾回收，释放文件句柄
-        gc.collect()
-
-        # 3. 删除目录
         try:
-            self._force_clear_directory()
+            self._force_reset()
+            logger.info("[RAG] 清空成功")
+            return True
         except Exception as e:
-            log(f"清空向量库失败: {e}")
+            logger.error(f"[RAG] 清空失败: {e}")
             return False
-
-        return True
 
     def get_stats(self) -> dict:
         """获取向量库统计"""
@@ -277,7 +274,7 @@ class RAGEngine:
                 "persist_directory": str(self.persist_directory),
             }
         except Exception as e:
-            log(f"获取统计失败: {e}")
+            logger.error(f"[RAG] 获取统计失败: {e}")
             return {
                 "docs_count": 0,
                 "persist_directory": str(self.persist_directory),

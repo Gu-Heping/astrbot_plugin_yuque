@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.5.6] - 2026-03-26
+
+### 修复
+- **ChromaDB 初始化问题**：使用 `PersistentClient` + `get_or_create_collection`
+- 损坏时使用 `client.reset()` 正确重置数据库
+- 使用 AstrBot logger 替代 print
+
 ## [v0.5.5] - 2026-03-26
 
 ### 新增
