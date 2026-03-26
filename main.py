@@ -4,7 +4,6 @@ NovaBot - NOVA 社团智能助手
 """
 
 import json
-import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -41,8 +40,152 @@ class YuqueClient:
         resp.raise_for_status()
         return resp.json().get("data", [])
 
+    async def get_repos(self, user_id: int, limit: int = 100) -> list:
+        """获取用户的知识库列表"""
+        resp = await self.client.get(
+            f"{self.base_url}/users/{user_id}/repos",
+            params={"limit": limit}
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+    async def get_repo_docs(self, repo_namespace: str, limit: int = 100) -> list:
+        """获取知识库的文档列表"""
+        resp = await self.client.get(
+            f"{self.base_url}/repos/{repo_namespace}/docs",
+            params={"limit": limit}
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+    async def get_doc_detail(self, repo_namespace: str, slug: str) -> dict:
+        """获取文档详情（含正文）"""
+        resp = await self.client.get(
+            f"{self.base_url}/repos/{repo_namespace}/docs/{slug}",
+            params={"include_content": "true"}
+        )
+        resp.raise_for_status()
+        return resp.json().get("data", {})
+
     async def close(self):
         await self.client.aclose()
+
+
+class YuqueSync:
+    """语雀文档同步器"""
+
+    def __init__(self, data_dir: str = "data/nova"):
+        self.data_dir = Path(data_dir)
+        self.docs_dir = self.data_dir / "yuque_docs"
+        self.repos_dir = self.data_dir / "yuque_repos"
+        self.docs_dir.mkdir(parents=True, exist_ok=True)
+        self.repos_dir.mkdir(parents=True, exist_ok=True)
+
+    def load_sync_state(self) -> dict:
+        """加载同步状态"""
+        state_file = self.data_dir / "sync_state.json"
+        if state_file.exists():
+            return json.loads(state_file.read_text(encoding="utf-8"))
+        return {"last_sync": None, "repos": {}, "docs_count": 0}
+
+    def save_sync_state(self, state: dict):
+        """保存同步状态"""
+        state_file = self.data_dir / "sync_state.json"
+        state_file.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+
+    async def sync_user_repos(self, client: YuqueClient, user_id: int) -> list:
+        """同步用户知识库列表"""
+        repos = await client.get_repos(user_id, limit=100)
+        
+        # 保存知识库列表
+        repos_file = self.repos_dir / f"user_{user_id}_repos.json"
+        repos_file.write_text(
+            json.dumps(repos, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        
+        logger.info(f"同步知识库列表完成，共 {len(repos)} 个知识库")
+        return repos
+
+    async def sync_repo_docs(self, client: YuqueClient, repo_namespace: str, with_content: bool = False) -> list:
+        """同步知识库文档"""
+        docs = await client.get_repo_docs(repo_namespace, limit=100)
+        
+        synced_docs = []
+        for doc in docs:
+            doc_info = {
+                "id": doc.get("id"),
+                "slug": doc.get("slug"),
+                "title": doc.get("title"),
+                "description": doc.get("description", ""),
+                "updated_at": doc.get("updated_at"),
+                "created_at": doc.get("created_at"),
+                "word_count": doc.get("word_count", 0),
+                "repo_namespace": repo_namespace,
+            }
+            
+            # 可选：同步正文内容
+            if with_content:
+                try:
+                    detail = await client.get_doc_detail(repo_namespace, doc["slug"])
+                    doc_info["content"] = detail.get("content", "")
+                    doc_info["content_html"] = detail.get("content_html", "")
+                except Exception as e:
+                    logger.warning(f"获取文档正文失败 {doc['slug']}: {e}")
+            
+            synced_docs.append(doc_info)
+        
+        # 保存文档列表
+        docs_file = self.docs_dir / f"{repo_namespace.replace('/', '_')}_docs.json"
+        docs_file.write_text(
+            json.dumps(synced_docs, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+        
+        logger.info(f"同步知识库 {repo_namespace} 完成，共 {len(synced_docs)} 篇文档")
+        return synced_docs
+
+    async def full_sync(self, client: YuqueClient, user_id: int, with_content: bool = True) -> dict:
+        """全量同步用户所有知识库"""
+        state = self.load_sync_state()
+        
+        # 同步知识库列表
+        repos = await self.sync_user_repos(client, user_id)
+        
+        total_docs = 0
+        repo_stats = {}
+        
+        for repo in repos:
+            namespace = repo.get("namespace", "")
+            if not namespace:
+                continue
+            
+            try:
+                docs = await self.sync_repo_docs(client, namespace, with_content=with_content)
+                total_docs += len(docs)
+                repo_stats[namespace] = {
+                    "name": repo.get("name", ""),
+                    "docs_count": len(docs),
+                    "synced_at": datetime.now().isoformat()
+                }
+            except Exception as e:
+                logger.error(f"同步知识库 {namespace} 失败: {e}")
+                repo_stats[namespace] = {"error": str(e)}
+        
+        # 更新同步状态
+        state["last_sync"] = datetime.now().isoformat()
+        state["repos"] = repo_stats
+        state["docs_count"] = total_docs
+        self.save_sync_state(state)
+        
+        return {
+            "repos_count": len(repos),
+            "docs_count": total_docs,
+            "repos": repo_stats
+        }
 
 
 class Storage:
@@ -217,7 +360,7 @@ class ProfileGenerator:
         }
 
 
-@register("novabot", "谷和平", "NOVA 社团智能助手，以语雀知识库为核心", "0.1.0")
+@register("novabot", "谷和平", "NOVA 社团智能助手，以语雀知识库为核心", "0.2.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件类"""
 
@@ -225,11 +368,12 @@ class NovaBotPlugin(Star):
         super().__init__(context)
         self.config = config
         self.storage = Storage()
+        self.yuque_sync = YuqueSync()
         self.profile_generator = ProfileGenerator()
         self.yuque_token = config.get("yuque_token", "")
         self.yuque_base_url = config.get("yuque_base_url", "https://nova.yuque.com/api/v2")
         self.docs_path = Path(config.get("docs_path", "/home/admin/yuque-docs"))
-        logger.info("NovaBot 插件初始化完成")
+        logger.info("NovaBot 插件初始化完成 (v0.2.0)")
 
     @filter.on_llm_request()
     async def on_llm_request(self, event, req):
@@ -251,7 +395,102 @@ class NovaBotPlugin(Star):
 【个人信息】
 - 用户问「我的画像」「我写过什么」→ 引导使用 /profile 指令
 - 用户要绑定语雀 → 引导使用 /bind 指令
+- 用户要同步知识库 → 引导使用 /sync 指令
 """
+
+    @filter.command("sync")
+    async def sync(self, event: AstrMessageEvent, action: str = ""):
+        """同步语雀知识库
+        
+        用法: 
+        - /sync - 全量同步当前绑定用户的知识库
+        - /sync status - 查看同步状态
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+        
+        if not binding:
+            yield event.plain_result(
+                "你还没有绑定语雀账号\n"
+                "请使用 /bind 绑定"
+            )
+            return
+        
+        yuque_id = binding.get("yuque_id")
+        yuque_login = binding.get("yuque_login", "未知")
+        token = binding.get("token", "")
+        
+        # 查看同步状态
+        if action.lower() == "status":
+            state = self.yuque_sync.load_sync_state()
+            
+            if state.get("last_sync"):
+                repos_info = []
+                for ns, info in state.get("repos", {}).items():
+                    if "error" in info:
+                        repos_info.append(f"  ❌ {ns}: {info['error']}")
+                    else:
+                        repos_info.append(f"  ✅ {info.get('name', ns)}: {info.get('docs_count', 0)} 篇")
+                
+                yield event.plain_result(
+                    f"📊 同步状态\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"语雀账号：@{yuque_login}\n"
+                    f"上次同步：{state['last_sync'][:19]}\n"
+                    f"知识库数：{len(state.get('repos', {}))}\n"
+                    f"文档总数：{state.get('docs_count', 0)} 篇\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    + "\n".join(repos_info[:10])
+                )
+            else:
+                yield event.plain_result(
+                    f"📊 同步状态\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"语雀账号：@{yuque_login}\n"
+                    f"尚未同步\n"
+                    f"使用 /sync 开始同步"
+                )
+            return
+        
+        # 执行全量同步
+        if not token:
+            yield event.plain_result("无法同步：Token 未保存，请重新绑定")
+            return
+        
+        yield event.plain_result(f"🔄 开始同步 @{yuque_login} 的知识库...")
+        
+        try:
+            client = YuqueClient(token, self.yuque_base_url)
+            result = await self.yuque_sync.full_sync(client, yuque_id, with_content=True)
+            await client.close()
+            
+            # 更新绑定中的同步时间
+            bindings = self.storage.load_bindings()
+            if platform_id in bindings:
+                bindings[platform_id]["last_sync"] = datetime.now().isoformat()
+                self.storage.save_bindings(bindings)
+            
+            # 构建结果
+            repos_list = []
+            for ns, info in result.get("repos", {}).items():
+                if "error" not in info:
+                    repos_list.append(f"• {info.get('name', ns)}: {info.get('docs_count', 0)} 篇")
+            
+            yield event.plain_result(
+                f"✅ 同步完成！\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"知识库：{result['repos_count']} 个\n"
+                f"文档数：{result['docs_count']} 篇\n"
+                f"━━━━━━━━━━━━━━━\n"
+                + "\n".join(repos_list[:10])
+            )
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"同步失败: {e}")
+            yield event.plain_result("❌ 同步失败：API 请求错误")
+        except Exception as e:
+            logger.error(f"同步失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 同步失败：{str(e)}")
 
     @filter.command("bind")
     async def bind(self, event: AstrMessageEvent, arg: str = ""):
@@ -288,7 +527,7 @@ class NovaBotPlugin(Star):
                 f"✅ 绑定成功！\n"
                 f"语雀账号：@{pending['yuque_info']['yuque_login']} "
                 f"({pending['yuque_info']['yuque_name']})\n"
-                f"正在同步你的文档数据..."
+                f"使用 /sync 同步知识库"
             )
             return
 
@@ -372,11 +611,12 @@ class NovaBotPlugin(Star):
             else:
                 response += "\n画像生成中..."
             
+            response += "\n\n使用 /sync 同步知识库"
             yield event.plain_result(response)
             
         except httpx.HTTPStatusError as e:
             logger.error(f"语雀 Token 验证失败: {e}")
-            yield event.plain_result(f"❌ Token 验证失败，请检查 Token 是否正确")
+            yield event.plain_result("❌ Token 验证失败，请检查 Token 是否正确")
         except Exception as e:
             logger.error(f"绑定过程出错: {e}", exc_info=True)
             yield event.plain_result(f"❌ 绑定失败：{str(e)}")
@@ -495,6 +735,8 @@ class NovaBotPlugin(Star):
             "• /bind <Token> - 绑定语雀账号\n"
             "• /unbind - 解除绑定\n"
             "• /profile - 查看用户画像\n"
+            "• /sync - 同步语雀知识库\n"
+            "• /sync status - 查看同步状态\n"
             "• /novabot - 显示帮助\n"
             "━━━━━━━━━━━━━━━━━━━━━━\n"
             "直接提问即可，我会从语雀知识库中检索答案。"
