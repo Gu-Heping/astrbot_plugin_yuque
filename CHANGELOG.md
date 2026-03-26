@@ -18,10 +18,14 @@
 - **作者解析统一**：Webhook 和全量同步共用 `YuqueClient.author_name_from_detail()`
 - **时间格式统一**：统一使用 `YuqueClient.normalize_timestamp()` 标准化时间
 
+### 新增
+- **`/sync clean` 指令**：清理孤儿知识库目录
+
 ### 性能优化
 - **索引查询优化**：用 SQLite 索引替代全盘扫描查找旧文档（`_get_old_record()`）
 - **RAG 去重优化**：按文档 ID 去重而非标题，避免标题相同误杀
 - **删除时 TOC 更新**：优先重新拉取完整 TOC 覆盖，避免本地修补导致结构破坏
+- **孤儿目录检测**：修复目录命名策略变化导致的误报，同时支持新旧两种命名格式
 
 ### 配置
 - `webhook_secret`: Webhook 访问密钥（强烈建议配置）

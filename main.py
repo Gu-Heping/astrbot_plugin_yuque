@@ -286,9 +286,67 @@ class NovaBotPlugin(Star):
         - /sync - 同步所有知识库（后台运行）
         - /sync members - 同步团队成员
         - /sync status - 查看同步状态/进度
+        - /sync clean - 清理孤儿知识库目录
         """
         if not self.yuque_token:
             yield event.plain_result("❌ 未配置语雀 Token")
+            return
+
+        # 清理孤儿目录
+        if action.lower() == "clean":
+            docs_dir = self.yuque_sync.docs_dir
+            if not docs_dir.exists():
+                yield event.plain_result("文档目录不存在")
+                return
+
+            # 读取当前知识库列表
+            repos_file = docs_dir / ".repos.json"
+            if not repos_file.exists():
+                yield event.plain_result("⚠️ 请先执行 /sync 同步知识库")
+                return
+
+            try:
+                import json
+                from .novabot.yuque_client import YuqueClient
+                repos = json.loads(repos_file.read_text(encoding="utf-8"))
+
+                # 计算有效的目录名
+                valid_dirs = set()
+                for r in repos:
+                    name = r.get("name", "")
+                    ns = r.get("namespace", "")
+                    if name:
+                        valid_dirs.add(YuqueClient.slug_safe(name))
+                    if ns:
+                        valid_dirs.add(ns.replace("/", "_"))
+
+                # 找出孤儿目录并删除
+                deleted = []
+                for d in docs_dir.iterdir():
+                    if d.name.startswith(".") or not d.is_dir():
+                        continue
+                    if d.name not in valid_dirs:
+                        try:
+                            import shutil
+                            shutil.rmtree(d)
+                            deleted.append(d.name)
+                            logger.info(f"[Sync] 清理孤儿目录: {d.name}")
+                        except Exception as e:
+                            logger.warning(f"[Sync] 清理失败 {d.name}: {e}")
+
+                if deleted:
+                    yield event.plain_result(
+                        f"✅ 清理完成\n"
+                        f"删除 {len(deleted)} 个孤儿目录:\n"
+                        + "\n".join(f"• {d}" for d in deleted[:10])
+                        + (f"\n... 还有 {len(deleted) - 10} 个" if len(deleted) > 10 else "")
+                    )
+                else:
+                    yield event.plain_result("✅ 没有孤儿目录需要清理")
+
+            except Exception as e:
+                logger.error(f"清理失败: {e}")
+                yield event.plain_result(f"❌ 清理失败: {e}")
             return
 
         # 同步团队成员

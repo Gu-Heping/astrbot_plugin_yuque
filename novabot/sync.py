@@ -409,13 +409,27 @@ async def sync_all_repos(
     repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 清理孤儿知识库目录（不在当前 API 列表中的目录）
-    current_dirs = {YuqueClient.slug_safe(r.get("name", "") or r.get("namespace", "")) for r in repos_info}
+    # 目录名可能来自两种格式：slug_safe(name) 或 namespace.replace("/", "_")
+    current_dirs = set()
+    for r in repos_info:
+        name = r.get("name", "")
+        ns = r.get("namespace", "")
+        # 优先用 name，否则用 namespace
+        if name:
+            current_dirs.add(YuqueClient.slug_safe(name))
+        if ns:
+            current_dirs.add(ns.replace("/", "_"))
+
+    orphan_dirs = []
     for d in output_dir.iterdir():
         if d.name.startswith(".") or not d.is_dir():
             continue
         if d.name not in current_dirs:
+            orphan_dirs.append(d.name)
             logger.info(f"[Sync] 发现孤儿知识库目录（不在当前列表中）: {d.name}")
-            # 不自动删除，只记录日志，让用户决定是否清理
+
+    if orphan_dirs:
+        logger.warning(f"[Sync] 共 {len(orphan_dirs)} 个孤儿目录，使用 /sync clean 清理")
 
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles, {total_stats['removed']} removed")
     return {
