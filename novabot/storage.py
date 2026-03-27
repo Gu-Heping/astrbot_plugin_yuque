@@ -210,7 +210,10 @@ class Storage:
     def get_docs_by_author(self, author_name: str = None, yuque_id: int = None) -> list[dict]:
         """获取指定作者的文档列表
 
-        优先通过 yuque_id (creator_id) 精确匹配，回退到 author_name 匹配。
+        匹配逻辑：
+        1. 如果提供 yuque_id，优先通过 creator_id 精确匹配
+        2. 如果 creator_id 不匹配或不存在，回退到 author 名字匹配
+        3. 如果只提供 author_name，只用名字匹配
 
         Args:
             author_name: 作者名（团队成员真实姓名）
@@ -233,25 +236,22 @@ class Storage:
                 content = md_file.read_text(encoding="utf-8")
                 metadata, body = YuqueClient.parse_frontmatter(content)
 
-                # 优先通过 creator_id 精确匹配
+                matched = False
+
+                # 1. 尝试通过 creator_id 精确匹配
                 if yuque_id:
                     doc_creator_id = metadata.get("creator_id")
                     if doc_creator_id and str(doc_creator_id) == str(yuque_id):
-                        pass  # 匹配成功
-                    elif doc_creator_id:
-                        continue  # 有 creator_id 但不匹配，跳过
-                    elif author_name:
-                        # 没有 creator_id，回退到 author 匹配
-                        doc_author = metadata.get("author", "")
-                        if doc_author != author_name:
-                            continue
-                    else:
-                        continue
-                elif author_name:
-                    # 只通过 author_name 匹配
+                        matched = True
+
+                # 2. 如果 creator_id 不匹配，回退到 author 名字匹配
+                if not matched and author_name:
                     doc_author = metadata.get("author", "")
-                    if doc_author != author_name:
-                        continue
+                    if doc_author == author_name:
+                        matched = True
+
+                if not matched:
+                    continue
 
                 # 按 yuque_id 去重（可能同一文档在多个位置）
                 doc_id = metadata.get("id")
