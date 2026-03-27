@@ -76,7 +76,7 @@ class PushNotifier:
             encoding="utf-8"
         )
 
-    def get_diff(self, doc_id: int, current_commit: str, doc_path: str) -> str:
+    def get_diff(self, doc_id: int, current_commit: str, doc_path: str) -> tuple[str, bool]:
         """获取与上次推送的 diff
 
         Args:
@@ -85,7 +85,7 @@ class PushNotifier:
             doc_path: 文档相对路径
 
         Returns:
-            diff 文本，失败时返回空字符串
+            (diff 文本, 是否首次推送)
         """
         from .git_ops import GitOps
 
@@ -93,38 +93,43 @@ class PushNotifier:
         last_commit = last_push.get(str(doc_id))
 
         if not last_commit:
-            # 没有上次推送记录，返回提示
-            return "[首次推送，无 diff 信息]"
+            # 首次推送，没有 diff 信息
+            return "[这是新发布的文档，首次推送，无历史 diff 信息]", True
 
         if last_commit == current_commit:
             # commit 相同，跳过
-            return ""
+            return "", False
 
         git = GitOps(self.docs_dir)
         if not git.has_git():
-            return "[无 Git 仓库，无法获取 diff]"
+            return "[无 Git 仓库，无法获取 diff]", False
 
         try:
             diff = git.get_diff(last_commit, current_commit, doc_path)
-            return diff or "[无文本变更]"
+            return diff or "[无文本变更]", False
         except Exception as e:
             logger.warning(f"[Push] 获取 diff 失败: {e}")
-            return f"[获取 diff 失败: {e}]"
+            return f"[获取 diff 失败: {e}]", False
 
-    def pre_check(self, diff: str) -> tuple[bool, str]:
+    def pre_check(self, diff: str, is_first_push: bool = False) -> tuple[bool, str]:
         """预处理检查
 
         Args:
             diff: diff 文本
+            is_first_push: 是否首次推送
 
         Returns:
             (should_skip, reason) 是否跳过，原因
         """
-        # 1. 正文完全没变化
+        # 首次推送，直接让 LLM 判断
+        if is_first_push:
+            return False, ""
+
+        # 正文完全没变化
         if not diff.strip() or diff == "[无文本变更]":
             return True, "正文无变化"
 
-        # 2. diff 太小
+        # diff 太小
         # 只计算实际变更内容（去掉 diff 元数据）
         actual_diff = re.sub(r'^[+-]{3}.*$', '', diff, flags=re.MULTILINE)
         actual_diff = re.sub(r'^@@.*@@$', '', actual_diff, flags=re.MULTILINE)
@@ -139,7 +144,8 @@ class PushNotifier:
     async def agent_should_push(
         self,
         doc_info: dict,
-        diff: str
+        diff: str,
+        is_first_push: bool = False
     ) -> tuple[bool, Optional[dict]]:
         """通过 LLM 判断是否推送
 
@@ -148,7 +154,8 @@ class PushNotifier:
 
         Args:
             doc_info: 文档信息
-            diff: diff 文本
+            diff: diff 文本或文档内容
+            is_first_push: 是否首次推送
 
         Returns:
             (should_push, summary) 是否推送，摘要信息
@@ -165,7 +172,33 @@ class PushNotifier:
             if len(diff) > max_diff_len:
                 diff = diff[:max_diff_len] + "\n... (已截断)"
 
-            prompt = f"""你是一个文档更新推送决策助手。
+            # 根据是否首次推送使用不同的提示词
+            if is_first_push:
+                prompt = f"""你是一个文档推送决策助手。
+
+文档信息：
+- 标题：{doc_info.get('title', '未知')}
+- 作者：{doc_info.get('author', '未知')}
+- 知识库：{doc_info.get('book_name', '未知')}
+
+这是新发布的文档，内容如下：
+{diff}
+
+请分析这篇新文档是否值得推送给订阅者。
+
+判断标准：
+- 推送：有实质内容的文档、教程、笔记、项目文档等
+- 不推送：空白文档、只有占位内容、测试文档
+
+请严格按以下 JSON 格式返回（不要有其他内容）：
+{{
+  "should_push": true 或 false,
+  "highlights": ["文档要点1", "文档要点2"],
+  "reason": "简短说明推送或不推送的原因"
+}}
+"""
+            else:
+                prompt = f"""你是一个文档更新推送决策助手。
 
 文档信息：
 - 标题：{doc_info.get('title', '未知')}

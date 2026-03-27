@@ -292,11 +292,11 @@ class WebhookHandler:
 
         try:
             # 1. 获取 diff
-            diff = self.push_notifier.get_diff(doc_id, commit_hash, rel_path)
-            logger.info(f"[Push] diff 长度: {len(diff)} 字符")
+            diff, is_first_push = self.push_notifier.get_diff(doc_id, commit_hash, rel_path)
+            logger.info(f"[Push] diff 长度: {len(diff)} 字符, 首次推送: {is_first_push}")
 
-            # 2. 预处理检查
-            should_skip, reason = self.push_notifier.pre_check(diff)
+            # 2. 预处理检查（首次推送跳过预处理）
+            should_skip, reason = self.push_notifier.pre_check(diff, is_first_push)
             if should_skip:
                 logger.info(f"[Push] 跳过推送: {reason}")
                 return {"skipped": True, "reason": reason}
@@ -311,13 +311,29 @@ class WebhookHandler:
                 "path": rel_path,
             }
 
-            # 4. LLM 判断是否推送
-            should_push, summary = await self.push_notifier.agent_should_push(doc_info, diff)
+            # 4. 首次推送时读取文档内容作为 diff
+            if is_first_push:
+                doc_file = self.docs_dir / rel_path
+                if doc_file.exists():
+                    try:
+                        content = doc_file.read_text(encoding="utf-8")
+                        # 去掉 frontmatter
+                        _, body = YuqueClient.parse_frontmatter(content)
+                        # 截取前 2000 字符
+                        diff = f"[新文档内容]\n{body[:2000]}"
+                        if len(body) > 2000:
+                            diff += "\n... (内容已截断)"
+                        logger.info(f"[Push] 首次推送，使用文档原文 ({len(body)} 字符)")
+                    except Exception as e:
+                        logger.warning(f"[Push] 读取文档失败: {e}")
+
+            # 5. LLM 判断是否推送
+            should_push, summary = await self.push_notifier.agent_should_push(doc_info, diff, is_first_push)
 
             if should_push:
-                # 5. 推送给订阅者
+                # 6. 推送给订阅者
                 await self.push_notifier.notify_subscribers(doc_info, summary)
-                # 6. 记录推送
+                # 7. 记录推送
                 self.push_notifier.mark_pushed(doc_id, commit_hash)
                 return {"pushed": True, "summary": summary}
             else:
