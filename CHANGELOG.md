@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.1] - 2026-03-27
+
+### 修复
+- **全量同步 Git Commit**：`/sync` 同步后也会执行 git commit，确保 git 历史完整
+  - 解决 `/weekly` 周报依赖 git 历史数据的问题
+  - 全量同步和 Webhook 实时同步现在都会记录到 git 历史
+
 ## [v0.14.0] - 2026-03-27
 
 ### 新增

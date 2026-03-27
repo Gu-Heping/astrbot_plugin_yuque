@@ -27,7 +27,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.0")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -86,7 +86,7 @@ class NovaBotPlugin(Star):
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.14.0)")
+        logger.info("NovaBot 插件初始化完成 (v0.14.1)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -421,6 +421,32 @@ class NovaBotPlugin(Star):
                 docs_count = result.get("docs", 0) if result else 0
                 removed_count = result.get("removed", 0) if result else 0
                 logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
+
+                # Git commit（如果启用）
+                if self.config.get("git_enabled", True):
+                    from .novabot.git_ops import GitOps
+                    git = GitOps(self.storage.docs_dir)
+                    if git.is_git_repo() and git.has_user_identity():
+                        # 获取所有变更的文件
+                        import subprocess
+                        try:
+                            status_result = subprocess.run(
+                                ["git", "status", "--porcelain"],
+                                cwd=self.storage.docs_dir,
+                                capture_output=True,
+                                text=True,
+                            )
+                            changed_files = [
+                                line[3:] for line in status_result.stdout.strip().split("\n")
+                                if line.strip()
+                            ]
+                            if changed_files:
+                                commit_msg = f"sync: 同步 {docs_count} 篇文档"
+                                if removed_count > 0:
+                                    commit_msg += f", 清理 {removed_count} 个文件"
+                                git.add_commit(changed_files, commit_msg)
+                        except Exception as e:
+                            logger.warning(f"[Sync] Git commit 失败: {e}")
 
             except Exception as e:
                 logger.error(f"后台同步失败: {e}", exc_info=True)
