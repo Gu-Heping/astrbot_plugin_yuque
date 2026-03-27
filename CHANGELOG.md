@@ -4,7 +4,7 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
-## [Unreleased]
+## [v0.13.0] - 2026-03-27
 
 ### 新增
 - **伙伴推荐 `/partner`**：基于用户画像匹配学习伙伴和导师
