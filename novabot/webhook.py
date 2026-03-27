@@ -413,10 +413,17 @@ class WebhookHandler:
             namespace = detail.get("namespace", "") or book.get("namespace", "")
             slug = detail.get("slug", "")
 
-            # 构建文档 URL
+            # 构建文档 URL（使用配置的 base_url）
             doc_url = ""
             if namespace and slug:
-                doc_url = f"https://www.yuque.com/{namespace}/{slug}"
+                # 从配置获取 base_url，去掉 /api/v2 后缀
+                base_url = self.config.get("yuque_base_url", "https://www.yuque.com/api/v2")
+                # 去掉 /api/v2 或 /api 后缀
+                if base_url.endswith("/api/v2"):
+                    base_url = base_url[:-7]
+                elif base_url.endswith("/api"):
+                    base_url = base_url[:-4]
+                doc_url = f"{base_url}/{namespace}/{slug}"
 
             # 推送消息显示编辑者（实际更新文档的人）
             # 优先使用 actor（Webhook 操作者），回退到 last_editor_id

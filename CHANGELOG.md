@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.7] - 2026-03-27
+
+### 修复
+- **推送链接使用错误的域名**：使用配置的 `yuque_base_url` 生成文档链接
+  - 修复前：硬编码 `https://www.yuque.com/namespace/slug`
+  - 修复后：使用配置的 base_url（如 `https://nova.yuque.com/namespace/slug`）
+
 ## [v0.14.6] - 2026-03-27
 
 ### 修复
