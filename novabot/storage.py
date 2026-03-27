@@ -29,7 +29,11 @@ class Storage:
 
     def load_bindings(self) -> dict:
         if self.bindings_file.exists():
-            return json.loads(self.bindings_file.read_text(encoding="utf-8"))
+            try:
+                return json.loads(self.bindings_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning(f"绑定文件损坏，已重置: {e}")
+                return {}
         return {}
 
     def save_bindings(self, bindings: dict):
@@ -59,7 +63,11 @@ class Storage:
 
     def load_members(self) -> dict:
         if self.members_file.exists():
-            return json.loads(self.members_file.read_text(encoding="utf-8"))
+            try:
+                return json.loads(self.members_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning(f"成员文件损坏，已重置: {e}")
+                return {}
         return {}
 
     def save_members(self, members: dict):
@@ -95,7 +103,10 @@ class Storage:
 
     def load_sync_state(self) -> dict:
         if self.sync_state_file.exists():
-            return json.loads(self.sync_state_file.read_text(encoding="utf-8"))
+            try:
+                return json.loads(self.sync_state_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning(f"同步状态文件损坏，已重置: {e}")
         return {
             "last_sync": None,
             "repos": {},
@@ -132,7 +143,11 @@ class Storage:
     def load_profile(self, yuque_id: int) -> Optional[dict]:
         profile_file = self.profiles_dir / f"{yuque_id}.json"
         if profile_file.exists():
-            return json.loads(profile_file.read_text(encoding="utf-8"))
+            try:
+                return json.loads(profile_file.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                logger.warning(f"用户画像文件损坏 ({yuque_id}): {e}")
+                return None
         return None
 
     def save_profile(self, yuque_id: int, profile: dict):

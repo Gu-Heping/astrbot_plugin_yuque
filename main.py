@@ -100,6 +100,7 @@ class NovaBotPlugin(Star):
         self._webhook_app: Optional[web.Application] = None
         self._webhook_runner: Optional[web.AppRunner] = None
         self._webhook_site: Optional[web.TCPSite] = None
+        self._sync_lock = asyncio.Lock()  # 保护同步操作，防止并发
 
         # RAG
         self.rag: Optional[RAGEngine] = None
@@ -176,6 +177,7 @@ class NovaBotPlugin(Star):
     async def _handle_webhook_request(self, request: web.Request) -> web.Response:
         """处理语雀 Webhook 请求"""
         client_host = request.remote or "unknown"
+        user_agent = request.headers.get("User-Agent", "")
         logger.info(f"[Webhook] 收到请求: {client_host} -> {request.path}")
 
         if not self.webhook_handler:
@@ -185,24 +187,11 @@ class NovaBotPlugin(Star):
                 status=503,
             )
 
-        # 鉴权
-        secret = self.config.get("webhook_secret", "")
-        if secret:
-            provided = request.headers.get("X-Webhook-Secret", "")
-            if not provided:
-                logger.warning(f"[Webhook] 缺少 Secret，来源: {client_host}")
-                return web.json_response(
-                    {"status": "error", "message": "missing secret"},
-                    status=401,
-                )
-            if provided != secret:
-                logger.warning(f"[Webhook] Secret 校验失败，来源: {client_host}")
-                return web.json_response(
-                    {"status": "error", "message": "invalid secret"},
-                    status=403,
-                )
-        elif not secret:
-            logger.warning("[Webhook] 未配置 webhook_secret，建议配置以防止伪造请求")
+        # 简单验证：检查 User-Agent 是否来自语雀
+        # 注意：语雀不支持自定义 Webhook header，无法进行密钥验证
+        # 可通过 IP 白名单或反向代理增强安全性
+        if "Yuque" not in user_agent and "yueque" not in user_agent.lower():
+            logger.warning(f"[Webhook] 可疑请求 User-Agent: {user_agent}, 来源: {client_host}")
 
         # 解析 JSON
         try:
@@ -286,60 +275,9 @@ class NovaBotPlugin(Star):
         - /sync - 同步所有知识库（后台运行）
         - /sync members - 同步团队成员
         - /sync status - 查看同步状态/进度
-        - /sync clean - 清理孤儿知识库目录
         """
         if not self.yuque_token:
             yield event.plain_result("❌ 未配置语雀 Token")
-            return
-
-        # 清理孤儿目录
-        if action.lower() == "clean":
-            docs_dir = self.yuque_sync.docs_dir
-            if not docs_dir.exists():
-                yield event.plain_result("文档目录不存在")
-                return
-
-            # 读取当前知识库列表
-            repos_file = docs_dir / ".repos.json"
-            if not repos_file.exists():
-                yield event.plain_result("⚠️ 请先执行 /sync 同步知识库")
-                return
-
-            try:
-                import json
-                from .novabot.yuque_client import YuqueClient
-                repos = json.loads(repos_file.read_text(encoding="utf-8"))
-
-                # 计算有效的目录名
-                valid_dirs = {YuqueClient.slug_safe(r.get("name", "")) for r in repos if r.get("name")}
-
-                # 找出孤儿目录并删除
-                deleted = []
-                for d in docs_dir.iterdir():
-                    if d.name.startswith(".") or not d.is_dir():
-                        continue
-                    if d.name not in valid_dirs:
-                        try:
-                            import shutil
-                            shutil.rmtree(d)
-                            deleted.append(d.name)
-                            logger.info(f"[Sync] 清理孤儿目录: {d.name}")
-                        except Exception as e:
-                            logger.warning(f"[Sync] 清理失败 {d.name}: {e}")
-
-                if deleted:
-                    yield event.plain_result(
-                        f"✅ 清理完成\n"
-                        f"删除 {len(deleted)} 个孤儿目录:\n"
-                        + "\n".join(f"• {d}" for d in deleted[:10])
-                        + (f"\n... 还有 {len(deleted) - 10} 个" if len(deleted) > 10 else "")
-                    )
-                else:
-                    yield event.plain_result("✅ 没有孤儿目录需要清理")
-
-            except Exception as e:
-                logger.error(f"清理失败: {e}")
-                yield event.plain_result(f"❌ 清理失败: {e}")
             return
 
         # 同步团队成员
@@ -422,9 +360,8 @@ class NovaBotPlugin(Star):
                 yield event.plain_result("尚未同步，使用 /sync 开始")
             return
 
-        # 检查是否已在同步
-        state = self.storage.load_sync_state()
-        if state.get("in_progress"):
+        # 检查是否已在同步（使用锁保护）
+        if self._sync_lock.locked():
             p = state.get("progress", {})
             yield event.plain_result(
                 f"⏳ 同步已在进行中\n"
@@ -442,21 +379,23 @@ class NovaBotPlugin(Star):
 
     async def _background_sync(self):
         """后台同步任务"""
-        client = self._get_client()
-        try:
-            # 标记开始
-            state = self.storage.load_sync_state()
-            state["in_progress"] = True
-            self.storage.save_sync_state(state)
+        # 使用锁保护，防止并发同步
+        async with self._sync_lock:
+            client = self._get_client()
+            try:
+                # 标记开始
+                state = self.storage.load_sync_state()
+                state["in_progress"] = True
+                self.storage.save_sync_state(state)
 
-            # 使用新模块同步
-            members = self.storage.load_members()
-            result = await sync_all_repos(
-                client=client,
-                output_dir=self.yuque_sync.docs_dir,
-                members=members,
-                progress_callback=self.storage.update_progress,
-            )
+                # 使用新模块同步
+                members = self.storage.load_members()
+                result = await sync_all_repos(
+                    client=client,
+                    output_dir=self.yuque_sync.docs_dir,
+                    members=members,
+                    progress_callback=self.storage.update_progress,
+                )
 
             # 更新同步状态
             state = {
@@ -826,16 +765,3 @@ class NovaBotPlugin(Star):
             "\n"
             "  /novabot - 帮助"
         )
-
-    async def terminate(self):
-        """插件卸载时的清理"""
-        # 停止 Webhook 服务
-        if self._webhook_site:
-            await self._webhook_site.stop()
-            logger.info("Webhook 服务已停止")
-        if self._webhook_runner:
-            await self._webhook_runner.cleanup()
-
-        # 关闭语雀客户端
-        await self._close_client()
-        logger.info("NovaBot 插件已卸载")
