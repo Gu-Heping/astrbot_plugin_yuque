@@ -575,6 +575,7 @@ class NovaBotPlugin(Star):
         yuque_id = binding.get("yuque_id")
         yuque_name = binding.get("yuque_name", "")
         yuque_login = binding.get("yuque_login", "")
+        logger.info(f"[Profile] 绑定信息: yuque_id={yuque_id}, yuque_name={yuque_name}, yuque_login={yuque_login}")
 
         # 领域评估
         if action.lower() == "assess" and domain:

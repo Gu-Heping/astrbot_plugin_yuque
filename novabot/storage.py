@@ -230,6 +230,8 @@ class Storage:
 
         docs = []
         seen_ids = set()  # 去重
+        match_by_id = 0
+        match_by_name = 0
 
         for md_file in self.docs_dir.rglob("*.md"):
             try:
@@ -243,12 +245,14 @@ class Storage:
                     doc_creator_id = metadata.get("creator_id")
                     if doc_creator_id and str(doc_creator_id) == str(yuque_id):
                         matched = True
+                        match_by_id += 1
 
                 # 2. 如果 creator_id 不匹配，回退到 author 名字匹配
                 if not matched and author_name:
                     doc_author = metadata.get("author", "")
                     if doc_author == author_name:
                         matched = True
+                        match_by_name += 1
 
                 if not matched:
                     continue
@@ -273,4 +277,6 @@ class Storage:
             except Exception as e:
                 logger.warning(f"读取文档失败 {md_file}: {e}")
 
+        logger.info(f"[Storage] get_docs_by_author: yuque_id={yuque_id}, author_name={author_name}, "
+                    f"match_by_id={match_by_id}, match_by_name={match_by_name}, total={len(docs)}")
         return docs
