@@ -592,9 +592,28 @@ class NovaBotPlugin(Star):
             # 构建技能显示
             skills = p.get("skills", {})
             skill_lines = []
+
             for interest in p.get("interests", []):
-                skill_level = skills.get(interest, "beginner")
-                skill_lines.append(f"• {interest} ({level_map.get(skill_level, '入门')})")
+                # 精确匹配
+                skill_level = skills.get(interest)
+                if skill_level:
+                    skill_lines.append(f"• {interest} ({level_map.get(skill_level, '入门')})")
+                    continue
+
+                # 模糊匹配：检查 skills 中是否有包含兴趣关键词的 key
+                interest_lower = interest.lower()
+                matched = False
+                for skill_name, level in skills.items():
+                    skill_lower = skill_name.lower()
+                    # 双向包含匹配
+                    if interest_lower in skill_lower or skill_lower in interest_lower:
+                        skill_lines.append(f"• {interest} ({level_map.get(level, '入门')})")
+                        matched = True
+                        break
+
+                if not matched:
+                    # 没有匹配到，显示默认值
+                    skill_lines.append(f"• {interest} (入门)")
 
             # 构建知识库显示
             repos = stats.get("repos", [])

@@ -21,9 +21,9 @@ PROFILE_PROMPT = """你是一个技术能力分析师，善于从文档中读懂
 
 ---JSON---
 {{
-  "interests": ["持续投入的领域"],
+  "interests": ["持续投入的领域1", "持续投入的领域2"],
   "level": "beginner/intermediate/advanced",
-  "skills": {{"领域": "level"}},
+  "skills": {{"领域1": "level", "领域2": "level"}},
   "trajectory": "技术轨迹描述",
   "style": "学习风格",
   "tags": ["标签"],
@@ -41,7 +41,9 @@ PROFILE_PROMPT = """你是一个技术能力分析师，善于从文档中读懂
 - intermediate：有实践经验，能独立完成项目
 - advanced：深入理解原理，有优化和架构经验
 
-## 注意事项
+## 重要注意事项
+- **skills 的 key 必须与 interests 中的元素完全一致**，这是强制要求！
+- 例如：如果 interests 是 ["机器学习", "Python"]，那么 skills 必须是 {{"机器学习": "intermediate", "Python": "advanced"}}
 - interests 优先选择有持续输出的领域（2篇以上）
 - level 基于文档深度判断，不是文档数量
 - trajectory 和 style 用自然语言描述，不要省略细节

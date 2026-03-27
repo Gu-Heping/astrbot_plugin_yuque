@@ -55,12 +55,35 @@ class ProfileGenerator:
                 for k, v in profile_data.get("skills", {}).items()
             }
 
+            # 确保 skills 的 key 与 interests 一致
+            interests = profile_data.get("interests", [])
+            aligned_skills = {}
+            for interest in interests:
+                # 精确匹配
+                if interest in normalized_skills:
+                    aligned_skills[interest] = normalized_skills[interest]
+                    continue
+
+                # 模糊匹配
+                interest_lower = interest.lower()
+                matched = False
+                for skill_name, level in normalized_skills.items():
+                    skill_lower = skill_name.lower()
+                    if interest_lower in skill_lower or skill_lower in interest_lower:
+                        aligned_skills[interest] = level
+                        matched = True
+                        break
+
+                if not matched:
+                    # 没有匹配到，设置默认值
+                    aligned_skills[interest] = "beginner"
+
             # 构建返回格式
             return {
                 "profile": {
-                    "interests": profile_data.get("interests", []),
+                    "interests": interests,
                     "level": self._normalize_level(profile_data.get("level", "beginner")),
-                    "skills": normalized_skills,
+                    "skills": aligned_skills,
                     "tags": profile_data.get("tags", []),
                     "summary": profile_data.get("summary", ""),
                     "trajectory": profile_data.get("trajectory", ""),
