@@ -42,9 +42,9 @@ class NovaBotPlugin(Star):
         self.storage = Storage()
         self.profile_gen = ProfileGenerator()
         self.partner_matcher = PartnerMatcher(self.storage)
-        self.path_recommender = LearningPathRecommender(self.storage, self.rag)
         self.subscription_manager = SubscriptionManager(self.storage)
         self.client: Optional[YuqueClient] = None
+        self.path_recommender: Optional[LearningPathRecommender] = None
 
         # Webhook 服务
         self.webhook_handler: Optional[WebhookHandler] = None
@@ -75,6 +75,9 @@ class NovaBotPlugin(Star):
                     logger.info("RAG 数据库已重置")
             except Exception as e:
                 logger.error(f"RAG 引擎初始化失败: {e}")
+
+        # 初始化学习路径推荐器（依赖 RAG）
+        self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
         logger.info("NovaBot 插件初始化完成 (v0.5.1)")
 
