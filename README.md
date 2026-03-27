@@ -26,6 +26,9 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `webhook_port` | Webhook 服务端口，默认 `8766` |
 | `git_enabled` | 启用 Git 版本控制（保留文档变更历史） |
 | `git_auto_push` | 自动推送到远程仓库（需先配置 git remote） |
+| `push_enabled` | 启用智能推送（文档变更时推送通知给订阅者） |
+| `push_min_diff_chars` | 最小变更字符数（低于此值跳过推送） |
+| `push_max_content_len` | 推送内容最大长度 |
 
 ## 指令
 
@@ -35,11 +38,20 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/unbind` | 解除绑定 |
 | `/profile` | 查看用户画像 |
 | `/profile refresh` | 刷新用户画像 |
+| `/profile assess <领域>` | 评估某领域掌握程度 |
 | `/sync` | 同步知识库 |
 | `/sync status` | 查看同步状态 |
 | `/sync members` | 同步团队成员 |
+| `/sync clean` | 清理孤儿目录 |
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
+| `/partner [主题]` | 伙伴推荐 |
+| `/path <领域>` | 学习路径推荐 |
+| `/subscribe` | 查看订阅 |
+| `/subscribe repo <知识库名>` | 订阅知识库更新 |
+| `/subscribe author <作者名>` | 订阅作者更新 |
+| `/subscribe all` | 订阅全部更新 |
+| `/unsubscribe <ID>` | 取消订阅 |
 | `/webhook` | Webhook 服务状态 |
 | `/novabot` | 帮助信息 |
 
@@ -98,6 +110,8 @@ data/nova/
 ├── user_profiles/          # 用户画像
 ├── yuque-members.json      # 团队成员缓存
 ├── yuque_repos.json        # 知识库列表
+├── subscriptions.json      # 订阅关系
+├── last_push.json          # 推送记录（文档ID→commit）
 ├── yuque_docs/             # 同步的 Markdown 文档
 │   ├── .yuque-id-to-path.json  # 文档 ID→路径 索引
 │   └── <知识库名>/
@@ -170,15 +184,25 @@ NovaBot 维护两套数据：
 
 ```
 astrbot_plugin_yuque/
-├── main.py              # 主入口（插件类 + 工具定义）
+├── main.py              # 主入口（插件类 + 指令处理）
 ├── novabot/
 │   ├── __init__.py
 │   ├── rag.py           # RAG 检索引擎
 │   ├── yuque_client.py  # 语雀 API 客户端
 │   ├── sync.py          # 文档同步
+│   ├── storage.py       # 数据存储
 │   ├── doc_index.py     # SQLite 元数据索引
+│   ├── profile.py       # 用户画像生成
+│   ├── partner.py       # 伙伴推荐
+│   ├── knowledge_card.py # 知识卡片生成
+│   ├── learning_path.py # 学习路径推荐
+│   ├── subscribe.py     # 订阅管理
+│   ├── push_notifier.py # 智能推送
 │   ├── webhook.py       # Webhook 处理器
-│   └── git_ops.py       # Git 操作封装
+│   ├── git_ops.py       # Git 操作封装
+│   └── tools/           # LLM 工具
+│       ├── search.py    # 搜索工具
+│       └── metadata.py  # 元数据工具
 ├── metadata.yaml        # 插件元数据
 └── requirements.txt     # Python 依赖
 ```
@@ -189,6 +213,8 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.13.0 | 伙伴推荐、知识卡片、学习路径、智能推送订阅 |
+| v0.12.x | 安全修复、依赖兼容、架构改进 |
 | v0.11.0 | Webhook 实时同步、Git 版本控制 |
 | v0.10.0 | 元数据索引（SQLite）、按作者/知识库查询 |
 | v0.9.x | grep 优化、read_doc 工具、孤儿文件清理 |

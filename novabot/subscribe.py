@@ -254,7 +254,7 @@ def format_subscription_list(subscriptions: list[dict]) -> str:
             try:
                 dt = datetime.fromisoformat(created)
                 lines.append(f"   订阅于 {dt.strftime('%Y-%m-%d %H:%M')}")
-            except:
+            except (ValueError, TypeError):
                 pass
         lines.append("")
 
