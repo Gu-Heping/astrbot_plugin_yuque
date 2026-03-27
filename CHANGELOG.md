@@ -4,6 +4,30 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.13.1] - 2026-03-27
+
+### 重构
+- **LLM 提示词优化**：改进提示词设计，提升输出质量
+  - 引入思维链（Chain of Thought）：要求 LLM 先分析再输出
+  - 添加 Few-shot 示例：为推送判断提供正反例示范
+  - 统一 JSON 提取：使用 `---JSON---` 分隔符，提高解析稳定性
+  - 明确判断标准：为用户画像、推送判断定义清晰的边界条件
+- **统一 LLM 调用封装**：`novabot/llm_utils.py`
+  - `call_llm()`: 统一的 LLM 调用接口
+  - `extract_json()`: 支持 `---JSON---` 和 ` ```json ` 两种格式
+  - 自动重试机制：JSON 解析失败时提示重试
+- **提示词模块化**：`novabot/prompts/`
+  - `profile.py`: 用户画像和领域评估提示词
+  - `knowledge_card.py`: 知识卡片生成提示词
+  - `learning_path.py`: 学习路径推荐提示词（含无资源备选）
+  - `push.py`: 智能推送判断提示词
+
+### 改进
+- 用户画像新增 `trajectory`（技术轨迹）和 `style`（学习风格）字段
+- 知识卡片新增 `structure`（知识结构）和 `learning_order`（学习顺序）
+- 学习路径新增 `gap_analysis`（差距分析）和 `milestones`（里程碑）
+- 推送判断区分首次发布和更新两种场景，各有独立判断逻辑
+
 ## [v0.13.0] - 2026-03-27
 
 ### 新增

@@ -3,10 +3,12 @@ NovaBot 知识卡片生成模块
 聚合多篇文档生成结构化的知识卡片
 """
 
-import json
 from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
+
+from .llm_utils import call_llm
+from .prompts import CARD_PROMPT
 
 if TYPE_CHECKING:
     from .rag import RAGEngine
@@ -14,49 +16,6 @@ if TYPE_CHECKING:
 
 class KnowledgeCardGenerator:
     """知识卡片生成器"""
-
-    CARD_PROMPT = """你是一个知识整理助手。请根据以下文档内容，生成一份结构化的知识卡片。
-
-## 主题
-{topic}
-
-## 相关文档
-{docs_content}
-
-## 输出要求
-
-请生成一份知识卡片，包含以下内容：
-
-1. **核心知识**：提取该主题的核心知识点（3-5 条），简洁明了
-2. **学习路径**：建议的学习顺序（如果适用）
-3. **工具/资源**：涉及的工具、库、框架等
-4. **个人思考**：从文档中提取作者的个人见解、踩坑经验、建议等
-
-## 输出格式
-
-请严格按以下 JSON 格式输出，不要有多余内容：
-
-```json
-{{
-  "topic": "主题名称",
-  "core_knowledge": [
-    "知识点1",
-    "知识点2",
-    "知识点3"
-  ],
-  "tools": ["工具1", "工具2"],
-  "personal_insights": [
-    {{"author": "作者", "insight": "个人见解"}},
-    {{"author": "作者", "insight": "踩坑经验"}}
-  ],
-  "summary": "一句话总结"
-}}
-```
-
-注意：
-- 核心知识要简洁，每条不超过 50 字
-- 个人思考要保留原作者信息
-- 如果文档中没有个人思考，personal_insights 可以是空数组"""
 
     def __init__(self, rag: "RAGEngine"):
         """初始化生成器
@@ -127,28 +86,15 @@ class KnowledgeCardGenerator:
         docs_content = self.build_docs_content(docs[:max_docs], max_docs)
 
         # 3. 调用 LLM 生成卡片
-        prompt = self.CARD_PROMPT.format(topic=topic, docs_content=docs_content)
+        prompt = CARD_PROMPT.format(topic=topic, docs_content=docs_content)
 
         try:
-            resp = await provider.text_chat(
+            card_data = await call_llm(
+                provider=provider,
                 prompt=prompt,
-                context=[],
-                system_prompt="你是一个知识整理助手，输出格式必须是 JSON。"
+                system_prompt="你是一个知识整理专家，善于从多篇文档中提炼核心知识。",
+                require_json=True,
             )
-
-            result_text = resp.completion_text.strip()
-
-            # 提取 JSON
-            if "```json" in result_text:
-                start = result_text.find("```json") + 7
-                end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
-            elif "```" in result_text:
-                start = result_text.find("```") + 3
-                end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
-
-            card_data = json.loads(result_text)
 
             # 4. 添加来源文档信息
             card_data["source_docs"] = [
@@ -162,11 +108,8 @@ class KnowledgeCardGenerator:
 
             return card_data
 
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON 解析失败: {e}")
-            return {"topic": topic, "error": "生成结果解析失败"}
         except Exception as e:
-            logger.error(f"LLM 生成失败: {e}")
+            logger.error(f"知识卡片生成失败: {e}")
             return {"topic": topic, "error": f"生成失败: {e}"}
 
 
@@ -185,6 +128,12 @@ def format_knowledge_card(card: dict) -> str:
     lines = [f"📚 知识卡片：{card.get('topic', '未知主题')}"]
     lines.append("")
 
+    # 知识结构描述
+    structure = card.get("structure", "")
+    if structure:
+        lines.append(f"📖 {structure}")
+        lines.append("")
+
     # 核心知识
     core_knowledge = card.get("core_knowledge", [])
     if core_knowledge:
@@ -192,7 +141,13 @@ def format_knowledge_card(card: dict) -> str:
         lines.append("📖 核心知识")
         lines.append("")
         for k in core_knowledge:
-            lines.append(f"• {k}")
+            # 支持新格式（对象）和旧格式（字符串）
+            if isinstance(k, dict):
+                point = k.get("point", "")
+                source = k.get("source", "")
+                lines.append(f"• {point}" + (f" ({source})" if source else ""))
+            else:
+                lines.append(f"• {k}")
         lines.append("")
 
     # 工具/资源
@@ -204,17 +159,28 @@ def format_knowledge_card(card: dict) -> str:
         lines.append(f"• {', '.join(tools)}")
         lines.append("")
 
-    # 个人思考
-    insights = card.get("personal_insights", [])
+    # 个人洞见
+    insights = card.get("insights", card.get("personal_insights", []))
     if insights:
         lines.append("━━━━━━━━━━━━━━━")
-        lines.append("💡 个人思考")
+        lines.append("💡 个人洞见")
         lines.append("")
         for insight in insights:
             author = insight.get("author", "")
             text = insight.get("insight", "")
+            source = insight.get("source", "")
             if author and text:
-                lines.append(f"• {author}：{text}")
+                lines.append(f"• {author}：{text}" + (f" ({source})" if source else ""))
+        lines.append("")
+
+    # 学习顺序
+    learning_order = card.get("learning_order", [])
+    if learning_order:
+        lines.append("━━━━━━━━━━━━━━━")
+        lines.append("📋 建议学习顺序")
+        lines.append("")
+        for i, step in enumerate(learning_order, 1):
+            lines.append(f"{i}. {step}")
         lines.append("")
 
     # 来源文档

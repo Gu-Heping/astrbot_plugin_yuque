@@ -1,6 +1,6 @@
 """
 NovaBot 智能推送模块
-基于 tool_loop_agent 判断文档更新价值，智能推送给订阅者
+基于 LLM 判断文档更新价值，智能推送给订阅者
 """
 
 import json
@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from astrbot.api import logger
+
+from .llm_utils import call_llm
+from .prompts import FIRST_PUSH_PROMPT, UPDATE_PUSH_PROMPT
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
@@ -155,8 +158,7 @@ class PushNotifier:
     ) -> tuple[bool, Optional[dict]]:
         """通过 LLM 判断是否推送
 
-        由于 tool_loop_agent 需要 event 对象，而 Webhook 上下文中没有 event，
-        改用简单的 LLM 调用进行判断。
+        使用统一的 call_llm 封装和新提示词模板。
 
         Args:
             doc_info: 文档信息
@@ -179,74 +181,28 @@ class PushNotifier:
 
             # 根据是否首次推送使用不同的提示词
             if is_first_push:
-                prompt = f"""你是一个文档推送决策助手。
-
-文档信息：
-- 标题：{doc_info.get('title', '未知')}
-- 作者：{doc_info.get('author', '未知')}
-- 知识库：{doc_info.get('book_name', '未知')}
-
-这是新发布的文档，以下是文档内容：
-{content}
-
-请分析这篇新文档是否值得推送给订阅者。
-
-判断标准：
-- 推送：有实质内容的文档、教程、笔记、项目文档等
-- 不推送：空白文档、只有占位内容、测试文档
-
-请严格按以下 JSON 格式返回（不要有其他内容）：
-{{
-  "should_push": true 或 false,
-  "highlights": ["文档要点1", "文档要点2"],
-  "reason": "简短说明推送或不推送的原因"
-}}
-"""
+                prompt = FIRST_PUSH_PROMPT.format(
+                    title=doc_info.get("title", "未知"),
+                    author=doc_info.get("author", "未知"),
+                    book_name=doc_info.get("book_name", "未知"),
+                    content=content
+                )
+                system_prompt = "你是一个技术文档推送决策专家，善于判断内容价值。"
             else:
-                prompt = f"""你是一个文档更新推送决策助手。
+                prompt = UPDATE_PUSH_PROMPT.format(
+                    title=doc_info.get("title", "未知"),
+                    author=doc_info.get("author", "未知"),
+                    diff=content
+                )
+                system_prompt = "你是一个技术文档更新判断专家，善于判断变更价值。"
 
-文档信息：
-- 标题：{doc_info.get('title', '未知')}
-- 作者：{doc_info.get('author', '未知')}
-- 知识库：{doc_info.get('book_name', '未知')}
-
-以下是文档的变更内容（diff）：
-{content}
-
-请分析变更是否对读者有实质价值，判断是否值得推送。
-
-判断标准：
-- 不推送：错别字/标点、纯格式调整、无关紧要的链接修改
-- 推送：新增内容、重写段落、重要结论变更、API 变更
-
-请严格按以下 JSON 格式返回（不要有其他内容）：
-{{
-  "should_push": true 或 false,
-  "highlights": ["变更要点1", "变更要点2"],
-  "reason": "简短说明推送或不推送的原因"
-}}
-"""
-
-            resp = await prov.text_chat(
+            result = await call_llm(
+                provider=prov,
                 prompt=prompt,
-                context=[],
-                system_prompt="你是一个文档更新推送决策助手，善于判断内容价值。必须返回 JSON 格式。"
+                system_prompt=system_prompt,
+                require_json=True,
             )
 
-            result_text = resp.completion_text.strip()
-
-            # 提取 JSON
-            if "```json" in result_text:
-                start = result_text.find("```json") + 7
-                end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
-            elif "```" in result_text:
-                start = result_text.find("```") + 3
-                end = result_text.find("```", start)
-                result_text = result_text[start:end].strip()
-
-            # 解析 JSON
-            result = json.loads(result_text)
             should_push = result.get("should_push", True)
             highlights = result.get("highlights", [])
             reason = result.get("reason", "")
@@ -258,9 +214,6 @@ class PushNotifier:
                 "reason": reason
             }
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"[Push] JSON 解析失败: {e}")
-            return True, {"highlights": ["文档有更新"], "reason": "解析失败，默认推送"}
         except Exception as e:
             logger.error(f"[Push] LLM 判断失败: {e}")
             return True, {"highlights": ["文档有更新"], "reason": f"判断失败: {e}"}
