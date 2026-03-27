@@ -60,22 +60,38 @@ class WebhookHandler:
         self.subscription_manager = subscription_manager
         self.storage = storage
 
-    def _match_team_member_name(self, yuque_name: str) -> Optional[str]:
+    def _match_team_member_name(self, detail: dict) -> Optional[str]:
         """从团队成员中匹配真实姓名
 
+        优先通过 user_id 精确匹配，回退到名字模糊匹配。
+
         Args:
-            yuque_name: 语雀用户昵称
+            detail: 文档详情
 
         Returns:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
-        if not self.storage or not yuque_name:
+        if not self.storage:
             return None
 
         try:
-            member = self.storage.find_member_by_name(yuque_name)
-            if member:
-                return member.get("name", yuque_name)
+            # 1. 优先通过 user_id 精确匹配
+            for key in ("last_editor", "creator", "user"):
+                obj = detail.get(key)
+                if isinstance(obj, dict):
+                    user_id = obj.get("id")
+                    if user_id:
+                        member = self.storage.find_member_by_id(str(user_id))
+                        if member:
+                            return member.get("name")
+
+            # 2. 回退：通过语雀用户名模糊匹配
+            yuque_name = YuqueClient.author_name_from_detail(detail)
+            if yuque_name:
+                member = self.storage.find_member_by_name(yuque_name)
+                if member:
+                    return member.get("name", yuque_name)
+
         except Exception as e:
             logger.debug(f"[Webhook] 匹配团队成员失败: {e}")
 
@@ -337,8 +353,7 @@ class WebhookHandler:
                 doc_url = f"https://www.yuque.com/{namespace}/{slug}"
 
             # 获取作者名（优先从团队成员匹配）
-            yuque_author = self._resolve_author(detail)
-            author_name = self._match_team_member_name(yuque_author) or yuque_author
+            author_name = self._match_team_member_name(detail) or self._resolve_author(detail)
 
             doc_info = {
                 "id": doc_id,
@@ -479,7 +494,8 @@ class WebhookHandler:
         """写入 Markdown 文件"""
         out_file.parent.mkdir(parents=True, exist_ok=True)
 
-        author = self._resolve_author(detail)
+        # 优先使用团队成员真实姓名
+        author = self._match_team_member_name(detail) or self._resolve_author(detail)
         book = detail.get("book", {})
         fm = {
             "id": detail.get("id", 0),
@@ -539,7 +555,8 @@ class WebhookHandler:
             with DocIndex(str(db_path)) as doc_index:
                 book = detail.get("book", {})
                 body = detail.get("body", "") or detail.get("content", "") or ""
-                author = self._resolve_author(detail)
+                # 优先使用团队成员真实姓名
+                author = self._match_team_member_name(detail) or self._resolve_author(detail)
 
                 doc_index.add_doc({
                     "yuque_id": detail.get("id"),
@@ -592,7 +609,7 @@ class WebhookHandler:
                 "content": body,
                 "title": detail.get("title", ""),
                 "slug": detail.get("slug", ""),
-                "author": self._resolve_author(detail),
+                "author": self._match_team_member_name(detail) or self._resolve_author(detail),
                 "book_name": book.get("name", "") if book else "",
                 "repo_namespace": str(file_path.parent.relative_to(self.docs_dir)),
             })

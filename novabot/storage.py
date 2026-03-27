@@ -80,6 +80,21 @@ class Storage:
             encoding="utf-8"
         )
 
+    def find_member_by_id(self, user_id: str) -> Optional[dict]:
+        """通过用户 ID 精确查找团队成员
+
+        Args:
+            user_id: 语雀用户 ID
+
+        Returns:
+            成员信息字典，未找到返回 None
+        """
+        members = self.load_members()
+        info = members.get(str(user_id))
+        if info:
+            return {"id": int(user_id), **info}
+        return None
+
     def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
         members = self.load_members()
         name_lower = name_or_login.lower()
