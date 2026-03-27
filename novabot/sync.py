@@ -428,7 +428,15 @@ async def sync_all_repos(
     repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 清理孤儿知识库目录（不在当前 API 列表中的目录）
-    current_dirs = {YuqueClient.slug_safe(r.get("name", "")) for r in repos_info if r.get("name")}
+    # 注意：目录名可能是 slug_safe(name) 或 namespace.replace("/", "_")
+    current_dirs = set()
+    for r in repos_info:
+        name = r.get("name", "")
+        namespace = r.get("namespace", "")
+        # 与 sync_repo 中的目录命名逻辑一致
+        dir_name = YuqueClient.slug_safe(name) or (namespace.replace("/", "_") if namespace else "")
+        if dir_name:
+            current_dirs.add(dir_name)
 
     orphan_dirs = []
     for d in output_dir.iterdir():
