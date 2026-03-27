@@ -439,6 +439,65 @@ GET /repos/{namespace}/docs/{slug}     # 文档详情（含正文）
 GET /groups/{id}/statistics/members    # 团队成员（分页）
 ```
 
+### 3.4 语雀 API 关键字段说明
+
+**团队成员 API 返回结构** (`GET /groups/{id}/users`):
+
+```json
+{
+  "data": [{
+    "user_id": 22463641,           // 用户 ID（用于匹配文档创建者）
+    "user": {
+      "id": 22463641,              // 同 user_id
+      "login": "heping-qcbue",     // 登录名
+      "name": "谷和平"              // 显示名
+    }
+  }]
+}
+```
+
+**文档详情 API 返回结构** (`GET /repos/{namespace}/docs/{slug}`):
+
+```json
+{
+  "data": {
+    "id": 261881563,
+    "title": "文档标题",
+    "slug": "doc-slug",
+    "user_id": 22463641,           // 创建者 ID（重要！用于匹配作者）
+    "creator_id": null,            // 通常为 null，不可用！
+    "last_editor_id": 22463641,    // 最后编辑者 ID
+    "creator": {                   // 创建者信息（嵌套对象）
+      "id": 22463641,
+      "name": "谷和平",
+      "login": "heping-qcbue"
+    },
+    "user": {                      // 同 creator
+      "id": 22463641,
+      "name": "谷和平"
+    }
+  }
+}
+```
+
+**关键发现**：
+- `creator_id` 字段通常为 `null`，不能用于匹配作者
+- `user_id` 才是创建者 ID，用于文档作者匹配
+- 团队成员的 `user_id` 与文档的 `user_id` 对应
+
+**本地存储格式** (Markdown frontmatter):
+
+```yaml
+---
+id: 261881563
+title: 文档标题
+slug: doc-slug
+creator_id: 22463641    # 存储的是 user_id
+author: 谷和平           # 从团队成员解析的真实姓名
+book_name: 知识库名
+---
+```
+
 ---
 
 ## 4. 人性化设计原则
