@@ -42,8 +42,11 @@ class NovaBotPlugin(Star):
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
 
+        # 获取插件数据目录（AstrBot 标准路径）
+        self.data_dir = context.get_data_dir()
+
         # 组件
-        self.storage = Storage()
+        self.storage = Storage(data_dir=str(self.data_dir))
         self.token_monitor = TokenMonitor(self.storage.data_dir)  # 必须先初始化
         self.profile_gen = ProfileGenerator(self.token_monitor)
         self.partner_matcher = PartnerMatcher(self.storage)
