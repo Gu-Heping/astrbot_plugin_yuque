@@ -4,6 +4,20 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.13.2] - 2026-03-27
+
+### 修复
+- **日志版本号过时**：更新 main.py 初始化日志为 v0.13.1
+- **SQLite 异常处理**：为 DocIndex 所有数据库操作添加 sqlite3.Error 捕获
+  - `_get_conn()`: 连接失败时抛出异常
+  - `_init_db()`: 初始化失败时抛出异常
+  - `add_doc()`, `add_docs()`: 添加文档失败时记录错误
+  - `delete_doc()`: 删除文档失败时返回 False
+  - `get_doc_by_yuque_id()`: 查询失败时返回 None
+  - `search()`, `list_authors()`, `list_books()`: 查询失败时返回空列表
+  - `get_stats()`: 统计失败时返回零值
+  - `clear()`: 清空失败时记录错误
+
 ## [v0.13.1] - 2026-03-27
 
 ### 重构
