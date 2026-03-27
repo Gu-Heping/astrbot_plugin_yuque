@@ -44,12 +44,12 @@ class NovaBotPlugin(Star):
 
         # 组件
         self.storage = Storage()
+        self.token_monitor = TokenMonitor(self.storage.data_dir)  # 必须先初始化
         self.profile_gen = ProfileGenerator(self.token_monitor)
         self.partner_matcher = PartnerMatcher(self.storage)
         self.subscription_manager = SubscriptionManager(self.storage)
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.gap_analyzer = KnowledgeGapAnalyzer(self.storage.data_dir, self.storage.docs_dir)
-        self.token_monitor = TokenMonitor(self.storage.data_dir)
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
 
