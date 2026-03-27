@@ -5,9 +5,12 @@ NovaBot LLM 调用封装
 
 import json
 import re
-from typing import Optional, Union
+from typing import TYPE_CHECKING, Optional, Union
 
 from astrbot.api import logger
+
+if TYPE_CHECKING:
+    from .token_monitor import TokenMonitor
 
 
 async def call_llm(
@@ -16,6 +19,9 @@ async def call_llm(
     system_prompt: str = "你是一个专业助手。",
     require_json: bool = True,
     max_retries: int = 2,
+    token_monitor: Optional["TokenMonitor"] = None,
+    feature: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> Union[dict, str]:
     """统一的 LLM 调用封装
 
@@ -25,12 +31,16 @@ async def call_llm(
         system_prompt: 系统提示词
         require_json: 是否需要返回 JSON
         max_retries: 最大重试次数
+        token_monitor: Token 监控器（可选）
+        feature: 功能名称（用于 token 记录）
+        user_id: 用户 ID（用于 token 记录）
 
     Returns:
         如果 require_json=True，返回解析后的 dict
         否则返回原始文本
     """
     last_error = None
+    last_result = None
 
     for attempt in range(max_retries + 1):
         try:
@@ -41,6 +51,33 @@ async def call_llm(
             )
 
             result = resp.completion_text.strip()
+            last_result = result
+
+            # 记录 token 使用
+            if token_monitor and feature:
+                try:
+                    # 尝试从响应中获取 token 使用量
+                    input_tokens = 0
+                    output_tokens = 0
+
+                    # AstrBot 的响应可能包含 usage 信息
+                    if hasattr(resp, "usage") and resp.usage:
+                        input_tokens = getattr(resp.usage, "prompt_tokens", 0) or 0
+                        output_tokens = getattr(resp.usage, "completion_tokens", 0) or 0
+                    elif hasattr(resp, "prompt_tokens"):
+                        input_tokens = resp.prompt_tokens or 0
+                        output_tokens = resp.completion_tokens or 0
+
+                    if input_tokens > 0 or output_tokens > 0:
+                        token_monitor.log_usage(
+                            feature=feature,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            model=getattr(provider, "model", None),
+                            user_id=user_id,
+                        )
+                except Exception as e:
+                    logger.debug(f"[LLM] 记录 token 使用失败: {e}")
 
             if not require_json:
                 return result
@@ -64,7 +101,7 @@ async def call_llm(
         logger.error(f"[LLM] JSON 解析最终失败: {last_error}")
         raise last_error or ValueError("JSON 解析失败")
 
-    return result
+    return last_result or ""
 
 
 def extract_json(text: str) -> dict:

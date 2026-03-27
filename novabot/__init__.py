@@ -10,11 +10,16 @@ from .storage import Storage
 from .profile import ProfileGenerator
 from .webhook import WebhookHandler
 from .git_ops import GitOps
+from .git_analyzer import GitAnalyzer
 from .partner import PartnerMatcher, format_partner_result
 from .knowledge_card import KnowledgeCardGenerator, format_knowledge_card
 from .learning_path import LearningPathRecommender, format_learning_path
 from .subscribe import SubscriptionManager, format_subscription_list
 from .push_notifier import PushNotifier
+from .weekly import WeeklyReporter, format_weekly_report
+from .search_log import SearchLogger
+from .knowledge_gap import KnowledgeGapAnalyzer, format_gap_report
+from .token_monitor import TokenMonitor
 from . import tools
 
 __all__ = [
@@ -28,6 +33,7 @@ __all__ = [
     "ProfileGenerator",
     "WebhookHandler",
     "GitOps",
+    "GitAnalyzer",
     "PartnerMatcher",
     "format_partner_result",
     "KnowledgeCardGenerator",
@@ -37,5 +43,11 @@ __all__ = [
     "SubscriptionManager",
     "format_subscription_list",
     "PushNotifier",
+    "WeeklyReporter",
+    "format_weekly_report",
+    "SearchLogger",
+    "KnowledgeGapAnalyzer",
+    "format_gap_report",
+    "TokenMonitor",
     "tools",
 ]

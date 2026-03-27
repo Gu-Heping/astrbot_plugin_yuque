@@ -4,6 +4,40 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.0] - 2026-03-27
+
+### 新增
+- **Git 历史分析器** (`novabot/git_analyzer.py`)
+  - `GitAnalyzer` 类：提取 commit 历史统计数据
+  - 支持贡献统计、活跃度分析、热门文档识别、趋势分析
+  - 为周报和活跃度排行提供数据源
+- **周报生成** (`/weekly` 指令)
+  - 基于 Git commit 历史生成本周知识周报
+  - 热门文档 TOP 5（按修改次数）
+  - 活跃作者排行（按提交数和变更量）
+  - 知识趋势分析
+- **知识缺口发现** (`/gap` 指令)
+  - 搜索日志记录 (`novabot/search_log.py`)
+  - 分析无结果查询，识别知识盲区
+  - 提供知识补充建议
+- **Token 消耗监控** (`/tokens` 指令)
+  - 记录 LLM 调用的 token 使用量
+  - 按功能分类统计
+  - 最近 7 天消耗趋势
+- **RAG 搜索日志**：搜索时自动记录查询和结果数
+
+### 架构
+- `novabot/git_analyzer.py`：Git 历史分析器
+- `novabot/weekly.py`：周报生成器
+- `novabot/search_log.py`：搜索日志记录
+- `novabot/knowledge_gap.py`：知识缺口分析
+- `novabot/token_monitor.py`：Token 消耗监控
+
+### 帮助信息更新
+- 新增 `/weekly` - 本周知识周报
+- 新增 `/gap` - 知识缺口分析
+- 新增 `/tokens` - Token 消耗统计
+
 ## [v0.13.3] - 2026-03-27
 
 ### 修复

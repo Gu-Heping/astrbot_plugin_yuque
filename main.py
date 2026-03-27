@@ -16,6 +16,10 @@ from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGen
 from .novabot.profile import format_domain_assessment
 from .novabot.subscribe import SubscriptionManager, format_subscription_list
 from .novabot.push_notifier import PushNotifier
+from .novabot.weekly import WeeklyReporter
+from .novabot.search_log import SearchLogger
+from .novabot.knowledge_gap import KnowledgeGapAnalyzer
+from .novabot.token_monitor import TokenMonitor
 from .novabot.tools import ALL_TOOLS
 
 
@@ -23,7 +27,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.13.3")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -43,6 +47,9 @@ class NovaBotPlugin(Star):
         self.profile_gen = ProfileGenerator()
         self.partner_matcher = PartnerMatcher(self.storage)
         self.subscription_manager = SubscriptionManager(self.storage)
+        self.search_logger = SearchLogger(self.storage.data_dir)
+        self.gap_analyzer = KnowledgeGapAnalyzer(self.storage.data_dir, self.storage.docs_dir)
+        self.token_monitor = TokenMonitor(self.storage.data_dir)
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
 
@@ -79,7 +86,7 @@ class NovaBotPlugin(Star):
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.13.3)")
+        logger.info("NovaBot 插件初始化完成 (v0.14.0)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -876,6 +883,13 @@ class NovaBotPlugin(Star):
         if action.lower() == "search" and query:
             try:
                 results = self.rag.search(query, k=5)
+                # 记录搜索日志
+                self.search_logger.log_search(
+                    query=query,
+                    results_count=len(results),
+                    search_type="rag",
+                    user_id=event.get_sender_id(),
+                )
                 if not results:
                     yield event.plain_result(f"未找到相关文档: {query}")
                     return
@@ -940,6 +954,41 @@ class NovaBotPlugin(Star):
                 f"端口: {port}"
             )
 
+    @filter.command("weekly")
+    async def weekly_cmd(self, event: AstrMessageEvent):
+        """生成本周知识周报"""
+        docs_dir = self.storage.docs_dir
+        reporter = WeeklyReporter(docs_dir)
+
+        try:
+            report = reporter.generate_weekly_report()
+            yield event.plain_result(report)
+        except Exception as e:
+            logger.error(f"生成周报失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 生成周报失败: {e}")
+
+    @filter.command("gap")
+    async def gap_cmd(self, event: AstrMessageEvent):
+        """分析知识缺口"""
+        try:
+            analysis = self.gap_analyzer.analyze_gaps(days=30)
+            report = self.gap_analyzer.format_gap_report(analysis)
+            yield event.plain_result(report)
+        except Exception as e:
+            logger.error(f"知识缺口分析失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 分析失败: {e}")
+
+    @filter.command("tokens")
+    async def tokens_cmd(self, event: AstrMessageEvent):
+        """查看 Token 消耗统计"""
+        try:
+            stats = self.token_monitor.get_stats(days=30)
+            report = self.token_monitor.format_stats_report(stats)
+            yield event.plain_result(report)
+        except Exception as e:
+            logger.error(f"获取 Token 统计失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 获取失败: {e}")
+
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
@@ -977,6 +1026,13 @@ class NovaBotPlugin(Star):
             "\n"
             "🌐 Webhook\n"
             "  /webhook - 查看状态\n"
+            "\n"
+            "📊 周报\n"
+            "  /weekly - 本周知识周报\n"
+            "\n"
+            "📈 分析\n"
+            "  /gap - 知识缺口分析\n"
+            "  /tokens - Token 消耗统计\n"
             "\n"
             "  /novabot - 帮助"
         )
