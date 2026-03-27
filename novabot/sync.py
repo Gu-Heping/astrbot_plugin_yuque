@@ -318,6 +318,11 @@ class DocSyncer:
         if detail.get("description"):
             fm["description"] = detail["description"]
 
+        # 存储 creator_id 用于精确匹配
+        creator_id = detail.get("user_id") or detail.get("creator_id")
+        if creator_id:
+            fm["creator_id"] = creator_id
+
         yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
 
         # 正文

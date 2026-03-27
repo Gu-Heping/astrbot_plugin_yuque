@@ -519,7 +519,7 @@ class NovaBotPlugin(Star):
 
         # 领域评估
         if action.lower() == "assess" and domain:
-            docs = self.storage.get_docs_by_author(yuque_name)
+            docs = self.storage.get_docs_by_author(yuque_name, yuque_id)
             if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
                 return
@@ -543,8 +543,8 @@ class NovaBotPlugin(Star):
 
         # 刷新画像（使用 LLM 深度分析）
         if action.lower() == "refresh":
-            # 获取文档
-            docs = self.storage.get_docs_by_author(yuque_name)
+            # 获取文档（优先通过 yuque_id 精确匹配）
+            docs = self.storage.get_docs_by_author(yuque_name, yuque_id)
             if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
                 return

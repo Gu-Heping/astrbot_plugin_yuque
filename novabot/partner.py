@@ -252,9 +252,9 @@ class PartnerMatcher:
             if level_gap <= 0:
                 continue
 
-            # 获取相关文档
+            # 获取相关文档（优先通过 yuque_id 匹配）
             member_info = self.get_member_info(yuque_id) or {}
-            docs = self.storage.get_docs_by_author(member_info.get("name", ""))
+            docs = self.storage.get_docs_by_author(member_info.get("name", ""), yuque_id)
             related_docs = []
             if topic:
                 for doc in docs:

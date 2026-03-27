@@ -197,38 +197,69 @@ class Storage:
 
     # ========== 文档查询 ==========
 
-    def get_docs_by_author(self, author_name: str) -> list[dict]:
+    def get_docs_by_author(self, author_name: str = None, yuque_id: int = None) -> list[dict]:
         """获取指定作者的文档列表
 
+        优先通过 yuque_id (creator_id) 精确匹配，回退到 author_name 匹配。
+
         Args:
-            author_name: 作者名
+            author_name: 作者名（团队成员真实姓名）
+            yuque_id: 语雀用户 ID（优先使用）
 
         Returns:
             文档列表，每个文档包含 id, title, slug, description, author, book_name, content
         """
-        if not author_name:
+        if not author_name and not yuque_id:
             return []
 
         # 延迟导入避免循环依赖
         from .yuque_client import YuqueClient
 
         docs = []
+        seen_ids = set()  # 去重
+
         for md_file in self.docs_dir.rglob("*.md"):
             try:
                 content = md_file.read_text(encoding="utf-8")
                 metadata, body = YuqueClient.parse_frontmatter(content)
 
-                doc_author = metadata.get("author", "")
-                if doc_author == author_name:
-                    docs.append({
-                        "id": metadata.get("id"),
-                        "title": metadata.get("title", ""),
-                        "slug": metadata.get("slug", ""),
-                        "description": metadata.get("description", ""),
-                        "author": doc_author,
-                        "book_name": metadata.get("book_name", ""),
-                        "content": body,
-                    })
+                # 优先通过 creator_id 精确匹配
+                if yuque_id:
+                    doc_creator_id = metadata.get("creator_id")
+                    if doc_creator_id and str(doc_creator_id) == str(yuque_id):
+                        pass  # 匹配成功
+                    elif doc_creator_id:
+                        continue  # 有 creator_id 但不匹配，跳过
+                    elif author_name:
+                        # 没有 creator_id，回退到 author 匹配
+                        doc_author = metadata.get("author", "")
+                        if doc_author != author_name:
+                            continue
+                    else:
+                        continue
+                elif author_name:
+                    # 只通过 author_name 匹配
+                    doc_author = metadata.get("author", "")
+                    if doc_author != author_name:
+                        continue
+
+                # 按 yuque_id 去重（可能同一文档在多个位置）
+                doc_id = metadata.get("id")
+                if doc_id and doc_id in seen_ids:
+                    continue
+                if doc_id:
+                    seen_ids.add(doc_id)
+
+                docs.append({
+                    "id": doc_id,
+                    "title": metadata.get("title", ""),
+                    "slug": metadata.get("slug", ""),
+                    "description": metadata.get("description", ""),
+                    "author": metadata.get("author", ""),
+                    "book_name": metadata.get("book_name", ""),
+                    "content": body,
+                    "creator_id": metadata.get("creator_id"),
+                })
             except Exception as e:
                 logger.warning(f"读取文档失败 {md_file}: {e}")
 
