@@ -260,19 +260,24 @@ class DocSyncer:
                 )
 
     def _resolve_author(self, detail: Dict) -> str:
-        """解析作者名
+        """解析文档创建者姓名（用于文档元数据）
 
         优先通过 user_id 从团队成员中查找真实姓名。
         """
-        # 1. 优先通过 user_id 精确匹配团队成员
-        for key in ("last_editor", "creator", "user"):
+        # 1. 优先通过 user_id/creator_id 匹配团队成员（创建者）
+        creator_id = detail.get("user_id") or detail.get("creator_id")
+        if creator_id and str(creator_id) in self.members:
+            return self.members[str(creator_id)].get("name", "")
+
+        # 2. 尝试从嵌套对象获取（creator 或 user）
+        for key in ("creator", "user"):
             obj = detail.get(key)
             if isinstance(obj, dict):
                 user_id = obj.get("id")
                 if user_id and str(user_id) in self.members:
                     return self.members[str(user_id)].get("name", "")
 
-        # 2. 回退：使用语雀返回的名字
+        # 3. 回退：使用语雀返回的名字
         return YuqueClient.author_name_from_detail(detail)
 
     def _resolve_basename(self, repo_name: str, parent_path: str, base: str) -> str:

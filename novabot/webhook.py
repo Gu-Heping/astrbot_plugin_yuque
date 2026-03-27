@@ -60,10 +60,10 @@ class WebhookHandler:
         self.subscription_manager = subscription_manager
         self.storage = storage
 
-    def _match_team_member_name(self, detail: dict) -> Optional[str]:
-        """从团队成员中匹配真实姓名
+    def _match_editor_name(self, detail: dict) -> Optional[str]:
+        """匹配文档编辑者姓名（用于推送消息）
 
-        优先通过 user_id 精确匹配，回退到名字模糊匹配。
+        优先通过 last_editor_id 匹配，回退到名字模糊匹配。
 
         Args:
             detail: 文档详情
@@ -75,7 +75,14 @@ class WebhookHandler:
             return None
 
         try:
-            # 1. 优先通过 user_id 精确匹配
+            # 1. 优先通过 last_editor_id 匹配（文档详情 API 不返回 last_editor 对象）
+            last_editor_id = detail.get("last_editor_id")
+            if last_editor_id:
+                member = self.storage.find_member_by_id(str(last_editor_id))
+                if member:
+                    return member.get("name")
+
+            # 2. 尝试从嵌套对象获取（文档列表 API 会返回 last_editor 对象）
             for key in ("last_editor", "creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
@@ -85,7 +92,7 @@ class WebhookHandler:
                         if member:
                             return member.get("name")
 
-            # 2. 回退：通过语雀用户名模糊匹配
+            # 3. 回退：通过语雀用户名模糊匹配
             yuque_name = YuqueClient.author_name_from_detail(detail)
             if yuque_name:
                 member = self.storage.find_member_by_name(yuque_name)
@@ -93,7 +100,42 @@ class WebhookHandler:
                     return member.get("name", yuque_name)
 
         except Exception as e:
-            logger.debug(f"[Webhook] 匹配团队成员失败: {e}")
+            logger.debug(f"[Webhook] 匹配编辑者失败: {e}")
+
+        return None
+
+    def _match_creator_name(self, detail: dict) -> Optional[str]:
+        """匹配文档创建者姓名（用于文档元数据）
+
+        Args:
+            detail: 文档详情
+
+        Returns:
+            匹配到的团队成员真实姓名，未匹配返回 None
+        """
+        if not self.storage:
+            return None
+
+        try:
+            # 1. 优先通过 user_id/creator_id 匹配
+            creator_id = detail.get("user_id") or detail.get("creator_id")
+            if creator_id:
+                member = self.storage.find_member_by_id(str(creator_id))
+                if member:
+                    return member.get("name")
+
+            # 2. 尝试从嵌套对象获取
+            for key in ("creator", "user"):
+                obj = detail.get(key)
+                if isinstance(obj, dict):
+                    user_id = obj.get("id")
+                    if user_id:
+                        member = self.storage.find_member_by_id(str(user_id))
+                        if member:
+                            return member.get("name")
+
+        except Exception as e:
+            logger.debug(f"[Webhook] 匹配创建者失败: {e}")
 
         return None
 
@@ -352,13 +394,14 @@ class WebhookHandler:
             if namespace and slug:
                 doc_url = f"https://www.yuque.com/{namespace}/{slug}"
 
-            # 获取作者名（优先从团队成员匹配）
-            author_name = self._match_team_member_name(detail) or self._resolve_author(detail)
+            # 推送消息显示编辑者（实际更新文档的人）
+            # 优先使用 actor（Webhook 操作者），回退到 last_editor_id
+            editor_name = self._match_editor_name(detail) or self._resolve_author(detail)
 
             doc_info = {
                 "id": doc_id,
                 "title": detail.get("title", ""),
-                "author": author_name,
+                "author": editor_name,  # 推送消息显示编辑者
                 "book_name": book.get("name", "") if book else "",
                 "path": rel_path,
                 "url": doc_url,
@@ -495,7 +538,7 @@ class WebhookHandler:
         out_file.parent.mkdir(parents=True, exist_ok=True)
 
         # 优先使用团队成员真实姓名
-        author = self._match_team_member_name(detail) or self._resolve_author(detail)
+        author = self._match_creator_name(detail) or self._resolve_author(detail)
         book = detail.get("book", {})
         fm = {
             "id": detail.get("id", 0),
@@ -555,8 +598,8 @@ class WebhookHandler:
             with DocIndex(str(db_path)) as doc_index:
                 book = detail.get("book", {})
                 body = detail.get("body", "") or detail.get("content", "") or ""
-                # 优先使用团队成员真实姓名
-                author = self._match_team_member_name(detail) or self._resolve_author(detail)
+                # 优先使用团队成员真实姓名（创建者）
+                author = self._match_creator_name(detail) or self._resolve_author(detail)
 
                 doc_index.add_doc({
                     "yuque_id": detail.get("id"),
@@ -609,7 +652,7 @@ class WebhookHandler:
                 "content": body,
                 "title": detail.get("title", ""),
                 "slug": detail.get("slug", ""),
-                "author": self._match_team_member_name(detail) or self._resolve_author(detail),
+                "author": self._match_creator_name(detail) or self._resolve_author(detail),
                 "book_name": book.get("name", "") if book else "",
                 "repo_namespace": str(file_path.parent.relative_to(self.docs_dir)),
             })
