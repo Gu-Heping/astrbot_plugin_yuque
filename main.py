@@ -27,7 +27,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.3")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.4")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -98,7 +98,7 @@ class NovaBotPlugin(Star):
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.14.3)")
+        logger.info("NovaBot 插件初始化完成 (v0.14.4)")
 
         # 注册 FunctionTool
         self._register_tools()

@@ -16,6 +16,9 @@ def _sanitize_git_path(path: str) -> str:
 
     防止命令注入和路径遍历攻击
 
+    注意：我们使用 subprocess 列表参数，不会经过 shell 解析，
+    所以 &, |, ; 等字符在文件名中是安全的。
+
     Args:
         path: 文件路径
 
@@ -40,11 +43,12 @@ def _sanitize_git_path(path: str) -> str:
     if path.startswith('-'):
         raise ValueError(f"Path cannot start with '-': {path}")
 
-    # 检查特殊字符（命令注入风险）
-    dangerous_chars = ['`', '$', ';', '|', '&', '\n', '\r', '<', '>']
+    # 只检查真正危险的字符（换行符可能导致命令分割）
+    # 注意：在 subprocess 列表参数中，&, |, ; 等是安全的
+    dangerous_chars = ['\n', '\r', '\x00']
     for char in dangerous_chars:
         if char in path:
-            raise ValueError(f"Dangerous character '{char}' in path: {path}")
+            raise ValueError(f"Dangerous character in path: {path}")
 
     return path
 
@@ -139,7 +143,7 @@ class GitOps:
         """添加文件并提交
 
         Args:
-            files: 相对路径文件列表
+            files: 相对路径文件列表（用于日志和验证，实际使用 git add -A）
             message: 提交消息
 
         Returns:
@@ -156,30 +160,21 @@ class GitOps:
             logger.warning("[GitOps] 未配置 user.name/user.email，跳过 commit")
             return None
 
-        # 验证输入安全性
-        safe_files = []
-        for f in files:
-            try:
-                safe_files.append(_sanitize_git_path(f))
-            except ValueError as e:
-                logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
-                continue
-
-        if not safe_files:
-            logger.warning("[GitOps] 没有安全的文件可提交")
-            return None
-
         safe_message = _sanitize_commit_message(message)
 
         try:
+            # 使用 git add -A 添加所有变更
+            # 这避免了路径编码问题（中文、特殊字符等）
             add_result = subprocess.run(
-                ["git", "add", "--", *safe_files],
+                ["git", "add", "-A"],
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
             )
             if add_result.returncode != 0:
-                logger.warning(f"[GitOps] git add 失败: {add_result.stderr}")
+                logger.warning(f"[GitOps] git add -A 失败: {add_result.stderr}")
                 return None
 
             commit_result = subprocess.run(
@@ -187,6 +182,8 @@ class GitOps:
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
             )
 
             if commit_result.returncode != 0:
