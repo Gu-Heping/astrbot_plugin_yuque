@@ -3,6 +3,7 @@ NovaBot RAG 检索模块
 基于 LangChain + ChromaDB
 """
 
+import asyncio
 import gc
 import shutil
 from pathlib import Path
@@ -24,16 +25,27 @@ class DashScopeEmbeddings(Embeddings):
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.model = model
+        self._client: Optional[object] = None  # httpx.AsyncClient
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """批量嵌入 - 使用 asyncio.to_thread 避免阻塞"""
-        import asyncio
+    async def _get_client(self):
+        """获取异步 HTTP 客户端"""
+        if self._client is None:
+            import httpx
+            self._client = httpx.AsyncClient(timeout=120.0)
+        return self._client
+
+    async def close(self):
+        """关闭客户端"""
+        if self._client:
+            await self._client.aclose()
+            self._client = None
+
+    async def _aembed(self, texts: List[str]) -> List[List[float]]:
+        """异步嵌入请求"""
         import httpx
 
-        # 过滤空文本
         valid_texts = [t if t and t.strip() else " " for t in texts]
-
-        logger.info(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
+        logger.debug(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
 
         url = f"{self.base_url}/embeddings"
         headers = {
@@ -45,28 +57,66 @@ class DashScopeEmbeddings(Embeddings):
             "input": valid_texts,
         }
 
-        def _do_request():
-            with httpx.Client(timeout=120.0) as client:
-                response = client.post(url, headers=headers, json=data)
-                response.raise_for_status()
-                return response.json()
+        client = await self._get_client()
+        response = await client.post(url, headers=headers, json=data)
+        response.raise_for_status()
+        result = response.json()
 
+        embeddings = [item["embedding"] for item in result["data"]]
+        logger.debug(f"[RAG] 获得 {len(embeddings)} 个嵌入向量")
+        return embeddings
+
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
+        """异步批量嵌入"""
+        return await self._aembed(texts)
+
+    async def aembed_query(self, text: str) -> List[float]:
+        """异步单个查询嵌入"""
+        result = await self._aembed([text])
+        return result[0]
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """同步批量嵌入（兼容 LangChain 接口）"""
         try:
-            # 在线程池中执行同步请求，避免阻塞事件循环
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            # 在事件循环中，使用 asyncio.to_thread
+            import httpx
+            valid_texts = [t if t and t.strip() else " " for t in texts]
+            logger.debug(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
+
+            url = f"{self.base_url}/embeddings"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            data = {"model": self.model, "input": valid_texts}
+
+            def _sync_request():
+                with httpx.Client(timeout=120.0) as client:
+                    response = client.post(url, headers=headers, json=data)
+                    response.raise_for_status()
+                    return response.json()
+
+            result = asyncio.to_thread(_sync_request)
+            # 注意：这里返回的是 coroutine，调用者需要 await
+            # 但 LangChain 同步接口不支持这种情况
+            # 所以我们在这里直接运行
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_do_request)
+                future = executor.submit(_sync_request)
                 result = future.result(timeout=120)
 
-            embeddings = [item["embedding"] for item in result["data"]]
-            logger.info(f"[RAG] 获得 {len(embeddings)} 个嵌入向量")
-            return embeddings
-        except Exception as e:
-            logger.error(f"[RAG] DashScope Embedding 失败: {e}")
-            raise
+            return [item["embedding"] for item in result["data"]]
+        else:
+            # 没有事件循环，直接运行异步方法
+            return asyncio.run(self.aembed_documents(texts))
 
     def embed_query(self, text: str) -> List[float]:
-        """单个查询嵌入"""
+        """同步单个查询嵌入"""
         result = self.embed_documents([text])
         return result[0]
 

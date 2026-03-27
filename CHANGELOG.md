@@ -4,6 +4,16 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.6] - 2026-03-27
+
+### 性能优化
+- **DashScopeEmbeddings 改用异步请求**：新增 `aembed_documents`/`aembed_query` 异步方法，使用 `httpx.AsyncClient` 避免阻塞事件循环
+
+### 依赖管理
+- **锁定依赖版本上限**：requirements.txt 添加 `<` 限制，避免版本不兼容
+  - httpx<1.0.0, aiohttp<4.0.0, pyyaml<7.0
+  - langchain 系列 <0.4.0, chromadb<0.6.0
+
 ## [v0.12.5] - 2026-03-27
 
 ### 架构改进
