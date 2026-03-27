@@ -35,6 +35,12 @@
     "type": "int",
     "default": 8766
   },
+  "webhook_ip_whitelist": {
+    "description": "Webhook IP 白名单（逗号分隔，留空则允许所有）",
+    "type": "string",
+    "default": "",
+    "hint": "语雀服务器 IP: 47.96.64.251, 47.96.64.252 等"
+  },
   "git_enabled": {
     "description": "启用 Git 版本控制（保留文档变更历史）",
     "type": "bool",

@@ -27,7 +27,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.7")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.8")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -98,7 +98,7 @@ class NovaBotPlugin(Star):
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.14.7)")
+        logger.info("NovaBot 插件初始化完成 (v0.14.8)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -180,11 +180,24 @@ class NovaBotPlugin(Star):
                 status=503,
             )
 
-        # 简单验证：检查 User-Agent 是否来自语雀
-        # 注意：语雀不支持自定义 Webhook header，无法进行密钥验证
-        # 可通过 IP 白名单或反向代理增强安全性
-        if "Yuque" not in user_agent and "yueque" not in user_agent.lower():
+        # IP 白名单验证
+        ip_whitelist = self.config.get("webhook_ip_whitelist", "")
+        if ip_whitelist:
+            allowed_ips = [ip.strip() for ip in ip_whitelist.split(",") if ip.strip()]
+            if allowed_ips and client_host not in allowed_ips:
+                logger.warning(f"[Webhook] IP 不在白名单中: {client_host}, 允许: {allowed_ips}")
+                return web.json_response(
+                    {"status": "error", "message": "forbidden"},
+                    status=403,
+                )
+
+        # User-Agent 验证（语雀官方请求特征）
+        # 语雀 Webhook User-Agent 格式: YUQUE_WEBHOOK
+        if "Yuque" not in user_agent and "YUQUE" not in user_agent.upper():
             logger.warning(f"[Webhook] 可疑请求 User-Agent: {user_agent}, 来源: {client_host}")
+            # 如果设置了 IP 白名单，则已通过验证；否则只警告不拒绝
+            if not ip_whitelist:
+                logger.warning("[Webhook] 建议: 设置 webhook_ip_whitelist 配置项增强安全性")
 
         # 解析 JSON
         try:

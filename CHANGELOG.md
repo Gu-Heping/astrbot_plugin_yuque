@@ -4,6 +4,20 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.8] - 2026-03-27
+
+### 新增
+- **Webhook IP 白名单**：新增 `webhook_ip_whitelist` 配置项
+  - 支持逗号分隔的 IP 列表（如 `47.96.64.251, 47.96.64.252`）
+  - 留空则允许所有 IP 访问
+  - 语雀官方 Webhook 服务器 IP：`47.96.64.251`
+
+### 改进
+- **Webhook 安全验证**：
+  - IP 白名单验证优先于 User-Agent 验证
+  - 通过白名单后不再警告可疑 User-Agent
+  - 未设置白名单时提示建议配置
+
 ## [v0.14.7] - 2026-03-27
 
 ### 修复
