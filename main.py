@@ -10,6 +10,7 @@ from typing import Optional
 from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -28,7 +29,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.9")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.14.9")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -43,8 +44,9 @@ class NovaBotPlugin(Star):
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
 
-        # 获取插件数据目录（AstrBot 标准路径）
-        self.data_dir = get_astrbot_data_path() / "plugin_data" / "astrbot_plugin_yuque"
+        # 获取插件数据目录（AstrBot 标准路径，使用 self.name）
+        # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
+        self.data_dir = get_astrbot_data_path() / "plugin_data" / self.name
 
         # 组件
         self.storage = Storage(data_dir=str(self.data_dir))
@@ -138,8 +140,9 @@ class NovaBotPlugin(Star):
             storage=self.storage,
         )
 
-    async def initialize(self):
-        """插件初始化完成后的回调（AstrBot 已完全启动）"""
+    @filter.on_astrbot_loaded()
+    async def on_astrbot_loaded(self):
+        """AstrBot 初始化完成后启动 Webhook 服务"""
         if self._webhook_app and self.config.get("webhook_enabled", False):
             port = self.config.get("webhook_port", 8766)
             try:
@@ -261,7 +264,7 @@ class NovaBotPlugin(Star):
     # ========== LLM 钩子 ==========
 
     @filter.on_llm_request()
-    async def on_llm_request(self, event, req):
+    async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
         req.system_prompt += """
 
 你是 NovaBot，NOVA 社团的智能助手。

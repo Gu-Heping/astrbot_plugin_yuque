@@ -6,7 +6,7 @@ NovaBot 文档同步模块
 import json
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set
 
 import yaml
 
@@ -348,7 +348,7 @@ async def sync_all_repos(
     client: YuqueClient,
     output_dir: Path,
     members: Optional[Dict[str, Dict]] = None,
-    progress_callback: Optional[callable] = None,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict:
     """同步所有知识库
 

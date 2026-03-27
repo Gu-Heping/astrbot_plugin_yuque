@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from astrbot.api import FunctionTool
+from astrbot.api.event import AstrMessageEvent
 
 if TYPE_CHECKING:
     from ..doc_index import DocIndex
@@ -20,6 +21,10 @@ class BaseTool(FunctionTool):
     description: str = ""
     parameters: dict = field(default_factory=dict)
     plugin: Any = None
+
+    async def run(self, event: AstrMessageEvent, **kwargs):
+        """工具执行方法，子类需要重写"""
+        raise NotImplementedError("Subclasses must implement run()")
 
     def get_docs_dir(self) -> Path:
         """获取文档目录"""

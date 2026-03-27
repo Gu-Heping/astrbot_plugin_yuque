@@ -307,7 +307,7 @@ class RAGEngine:
                     logger.error(f"[RAG] 目录删除失败: {e2}")
                     raise
 
-    def index_docs(self, docs: list[dict], progress_callback: callable = None) -> int:
+    def index_docs(self, docs: list[dict], progress_callback: Optional[Callable[[int, int], None]] = None) -> int:
         """索引文档到向量库
 
         Args:
@@ -464,7 +464,7 @@ class RAGEngine:
             logger.error(f"[RAG] 删除向量失败: {e}")
             return False
 
-    def index_from_sync(self, docs_dir: str, progress_callback: callable = None) -> int:
+    def index_from_sync(self, docs_dir: str, progress_callback: Optional[Callable[[int, int], None]] = None) -> int:
         """从同步目录读取 Markdown 并索引（全量重建）
 
         Args:
