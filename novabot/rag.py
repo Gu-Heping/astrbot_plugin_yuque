@@ -7,7 +7,7 @@ import asyncio
 import gc
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -21,11 +21,18 @@ from astrbot.api import logger
 class DashScopeEmbeddings(Embeddings):
     """DashScope Embedding 封装（兼容 OpenAI 格式）"""
 
-    def __init__(self, api_key: str, base_url: str, model: str):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        model: str,
+        token_usage_callback: Optional[Callable[[int], None]] = None,
+    ):
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.model = model
         self._client: Optional[object] = None  # httpx.AsyncClient
+        self.token_usage_callback = token_usage_callback
 
     async def _get_client(self):
         """获取异步 HTTP 客户端"""
@@ -62,8 +69,17 @@ class DashScopeEmbeddings(Embeddings):
         response.raise_for_status()
         result = response.json()
 
+        # 记录 token 使用
+        usage = result.get("usage", {})
+        total_tokens = usage.get("total_tokens", 0)
+        if total_tokens > 0 and self.token_usage_callback:
+            try:
+                self.token_usage_callback(total_tokens)
+            except Exception as e:
+                logger.debug(f"[RAG] Token 回调失败: {e}")
+
         embeddings = [item["embedding"] for item in result["data"]]
-        logger.debug(f"[RAG] 获得 {len(embeddings)} 个嵌入向量")
+        logger.debug(f"[RAG] 获得 {len(embeddings)} 个嵌入向量, tokens: {total_tokens}")
         return embeddings
 
     async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -129,12 +145,15 @@ class RAGEngine:
         persist_directory: str,
         embedding_api_key: str,
         embedding_base_url: Optional[str] = None,
-        embedding_model: str = "text-embedding-3-small"
+        embedding_model: str = "text-embedding-3-small",
+        token_usage_callback: Optional[Callable[[int], None]] = None,
     ):
         self.persist_directory = Path(persist_directory)
         self.embedding_api_key = embedding_api_key
         self.embedding_base_url = embedding_base_url
         self.embedding_model = embedding_model
+        self.token_usage_callback = token_usage_callback
+        self._total_embedding_tokens = 0  # 累计 embedding token 数
 
         # 初始化 embedding
         if embedding_base_url and "dashscope" in embedding_base_url.lower():
@@ -144,6 +163,7 @@ class RAGEngine:
                 api_key=embedding_api_key,
                 base_url=embedding_base_url,
                 model=embedding_model,
+                token_usage_callback=self._on_embedding_tokens,
             )
         else:
             # 其他使用 LangChain OpenAIEmbeddings
@@ -159,6 +179,19 @@ class RAGEngine:
         # 延迟初始化
         self._vectorstore: Optional[Chroma] = None
         self._client: Optional[chromadb.ClientAPI] = None
+
+    def _on_embedding_tokens(self, tokens: int):
+        """Embedding token 使用回调"""
+        self._total_embedding_tokens += tokens
+        if self.token_usage_callback:
+            try:
+                self.token_usage_callback(tokens)
+            except Exception as e:
+                logger.debug(f"[RAG] Token 回调失败: {e}")
+
+    def get_embedding_tokens(self) -> int:
+        """获取累计 embedding token 数"""
+        return self._total_embedding_tokens
 
     @property
     def vectorstore(self) -> Chroma:

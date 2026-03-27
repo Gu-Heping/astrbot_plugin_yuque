@@ -27,7 +27,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.1")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.14.2")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -66,11 +66,23 @@ class NovaBotPlugin(Star):
         if self.embedding_api_key:
             try:
                 rag_dir = self.storage.data_dir / "chroma_db"
+
+                # Token 使用回调
+                def on_embedding_tokens(tokens: int):
+                    if hasattr(self, 'token_monitor') and self.token_monitor:
+                        self.token_monitor.log_usage(
+                            feature="embedding",
+                            input_tokens=tokens,
+                            output_tokens=0,
+                            model=self.embedding_model,
+                        )
+
                 self.rag = RAGEngine(
                     persist_directory=str(rag_dir),
                     embedding_api_key=self.embedding_api_key,
                     embedding_base_url=self.embedding_base_url or None,
                     embedding_model=self.embedding_model,
+                    token_usage_callback=on_embedding_tokens,
                 )
                 # 验证数据库是否可用
                 try:
@@ -86,7 +98,7 @@ class NovaBotPlugin(Star):
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.14.1)")
+        logger.info("NovaBot 插件初始化完成 (v0.14.2)")
 
         # 注册 FunctionTool
         self._register_tools()

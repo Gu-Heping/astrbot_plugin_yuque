@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.2] - 2026-03-27
+
+### 新增
+- **Embedding Token 监控**：RAG embedding 调用现在会记录 token 消耗
+  - `/tokens` 指令现在包含 embedding 功能的 token 统计
+  - 支持 DashScope embedding API（OpenAI embedding 需后续适配）
+
 ## [v0.14.1] - 2026-03-27
 
 ### 修复

@@ -260,3 +260,4 @@ FEATURE_LEARNING_PATH = "learning_path"  # 学习路径
 FEATURE_PARTNER = "partner"  # 伙伴推荐
 FEATURE_PUSH = "push"  # 智能推送
 FEATURE_CHAT = "chat"  # 普通对话
+FEATURE_EMBEDDING = "embedding"  # Embedding 向量化
