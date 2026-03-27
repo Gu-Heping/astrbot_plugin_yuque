@@ -4,6 +4,16 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.4] - 2026-03-27
+
+### 架构改进
+- **消除循环依赖**：WebhookHandler 不再依赖 NovaBotPlugin，改为通过构造函数注入具体依赖
+- **合并 YuqueSync**：删除冗余的 YuqueSync 类，`get_docs_by_author()` 移至 Storage 类
+- **Storage 添加 docs_dir 属性**：统一管理文档目录
+
+### 代码精简
+- main.py 减少约 40 行代码
+
 ## [v0.12.3] - 2026-03-27
 
 ### 改进

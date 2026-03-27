@@ -40,7 +40,11 @@
       "WebSearch",
       "Bash(ls:*)",
       "Bash(pip show:*)",
-      "Bash(ruff check:*)"
+      "Bash(ruff check:*)",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Read(//d/repos/astrbot_plugin_yuque/**)",
+      "Bash(done)"
     ]
   }
 }

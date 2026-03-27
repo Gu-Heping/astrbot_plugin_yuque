@@ -25,6 +25,10 @@ class Storage:
         self.profiles_dir = self.data_dir / "user_profiles"
         self.profiles_dir.mkdir(parents=True, exist_ok=True)
 
+        # 文档目录
+        self.docs_dir = self.data_dir / "yuque_docs"
+        self.docs_dir.mkdir(parents=True, exist_ok=True)
+
     # ========== 绑定关系 ==========
 
     def load_bindings(self) -> dict:
@@ -157,3 +161,42 @@ class Storage:
             json.dumps(profile, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+
+    # ========== 文档查询 ==========
+
+    def get_docs_by_author(self, author_name: str) -> list[dict]:
+        """获取指定作者的文档列表
+
+        Args:
+            author_name: 作者名
+
+        Returns:
+            文档列表，每个文档包含 id, title, slug, description, author, book_name, content
+        """
+        if not author_name:
+            return []
+
+        # 延迟导入避免循环依赖
+        from .yuque_client import YuqueClient
+
+        docs = []
+        for md_file in self.docs_dir.rglob("*.md"):
+            try:
+                content = md_file.read_text(encoding="utf-8")
+                metadata, body = YuqueClient.parse_frontmatter(content)
+
+                doc_author = metadata.get("author", "")
+                if doc_author == author_name:
+                    docs.append({
+                        "id": metadata.get("id"),
+                        "title": metadata.get("title", ""),
+                        "slug": metadata.get("slug", ""),
+                        "description": metadata.get("description", ""),
+                        "author": doc_author,
+                        "book_name": metadata.get("book_name", ""),
+                        "content": body,
+                    })
+            except Exception as e:
+                logger.warning(f"读取文档失败 {md_file}: {e}")
+
+        return docs

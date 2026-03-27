@@ -17,49 +17,6 @@ from .novabot.tools import ALL_TOOLS
 
 
 # ============================================================================
-# 文档同步器
-# ============================================================================
-
-class YuqueSync:
-    """语雀文档辅助工具（主要提供 get_docs_by_author）"""
-
-    def __init__(self, storage: Storage):
-        self.storage = storage
-        self.docs_dir = storage.data_dir / "yuque_docs"
-        self.docs_dir.mkdir(parents=True, exist_ok=True)
-
-    def get_docs_by_author(self, author_name: str) -> list[dict]:
-        """获取指定作者的文档列表"""
-        if not author_name:
-            return []
-
-        docs = []
-        for md_file in self.docs_dir.rglob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-
-                # 解析 frontmatter
-                metadata, body = YuqueClient.parse_frontmatter(content)
-
-                # 匹配作者
-                doc_author = metadata.get("author", "")
-                if doc_author == author_name:
-                    docs.append({
-                        "id": metadata.get("id"),
-                        "title": metadata.get("title", ""),
-                        "slug": metadata.get("slug", ""),
-                        "description": metadata.get("description", ""),
-                        "author": doc_author,
-                        "book_name": metadata.get("book_name", ""),
-                        "content": body,  # 添加正文内容
-                    })
-            except Exception as e:
-                logger.warning(f"读取文档失败 {md_file}: {e}")
-
-        return docs
-
-
-# ============================================================================
 # 主插件类
 # ============================================================================
 
@@ -80,7 +37,6 @@ class NovaBotPlugin(Star):
 
         # 组件
         self.storage = Storage()
-        self.yuque_sync = YuqueSync(self.storage)
         self.profile_gen = ProfileGenerator()
         self.client: Optional[YuqueClient] = None
 
@@ -127,7 +83,13 @@ class NovaBotPlugin(Star):
         self._webhook_app = web.Application()
         self._webhook_app.router.add_post("/yuque/webhook", self._handle_webhook_request)
         self._webhook_app.router.add_get("/health", self._health_check)
-        self.webhook_handler = WebhookHandler(self)
+        self.webhook_handler = WebhookHandler(
+            docs_dir=self.storage.data_dir / "yuque_docs",
+            data_dir=self.storage.data_dir,
+            get_client=self._get_client,
+            rag=self.rag,
+            config=self.config,
+        )
 
     async def initialize(self):
         """插件初始化完成后的回调（AstrBot 已完全启动）"""
@@ -381,7 +343,7 @@ class NovaBotPlugin(Star):
                 members = self.storage.load_members()
                 result = await sync_all_repos(
                     client=client,
-                    output_dir=self.yuque_sync.docs_dir,
+                    output_dir=self.storage.docs_dir,
                     members=members,
                     progress_callback=self.storage.update_progress,
                 )
@@ -412,7 +374,7 @@ class NovaBotPlugin(Star):
 
                         indexed = await asyncio.to_thread(
                             self.rag.index_from_sync,
-                            str(self.yuque_sync.docs_dir),
+                            str(self.storage.docs_dir),
                             rag_progress
                         )
                         logger.info(f"RAG 索引完成: {indexed} 篇")
@@ -533,7 +495,7 @@ class NovaBotPlugin(Star):
         # 刷新画像（使用 LLM 深度分析）
         if action.lower() == "refresh":
             # 获取文档
-            docs = self.yuque_sync.get_docs_by_author(yuque_name)
+            docs = self.storage.get_docs_by_author(yuque_name)
             if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
                 return
@@ -684,7 +646,7 @@ class NovaBotPlugin(Star):
                 if not self.rag.clear():
                     yield event.plain_result("❌ 清空向量库失败")
                     return
-                indexed = self.rag.index_from_sync(str(self.yuque_sync.docs_dir))
+                indexed = self.rag.index_from_sync(str(self.storage.docs_dir))
                 yield event.plain_result(f"✅ 重建完成，索引 {indexed} 篇文档")
             except Exception as e:
                 logger.error(f"RAG 重建失败: {e}", exc_info=True)

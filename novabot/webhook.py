@@ -6,26 +6,44 @@ NovaBot Webhook 处理器
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import Callable, Optional
 
 import yaml
 
 from astrbot.api import logger
 
 from .git_ops import GitOps
+from .rag import RAGEngine
 from .sync import toc_list_children
 from .yuque_client import YuqueClient
-
-if TYPE_CHECKING:
-    from ..main import NovaBotPlugin
 
 
 class WebhookHandler:
     """语雀 Webhook 处理器"""
 
-    def __init__(self, plugin: "NovaBotPlugin"):
-        self.plugin = plugin
-        self.docs_dir = plugin.storage.data_dir / "yuque_docs"
+    def __init__(
+        self,
+        docs_dir: Path,
+        data_dir: Path,
+        get_client: Callable[[], YuqueClient],
+        rag: Optional[RAGEngine],
+        config: dict,
+    ):
+        """
+        初始化 Webhook 处理器
+
+        Args:
+            docs_dir: 文档目录
+            data_dir: 数据目录
+            get_client: 获取语雀客户端的回调函数
+            rag: RAG 引擎实例
+            config: 配置字典
+        """
+        self.docs_dir = docs_dir
+        self.data_dir = data_dir
+        self.get_client = get_client
+        self.rag = rag
+        self.config = config
 
     def _resolve_author(self, detail: dict) -> str:
         """解析文档作者名"""
@@ -142,7 +160,7 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
 
-        client = self.plugin._get_client()
+        client = self.get_client()
 
         # 获取 TOC
         toc_list = None
@@ -268,20 +286,20 @@ class WebhookHandler:
         logger.info(f"[Webhook] 步骤 1/4: 删除 SQLite 记录")
         from .doc_index import DocIndex
 
-        db_path = self.plugin.storage.data_dir / "doc_index.db"
+        db_path = self.data_dir / "doc_index.db"
         doc_index = DocIndex(str(db_path))
         doc_index.delete_doc(doc_id)
 
         # 删除 ChromaDB 向量
         logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
-        if self.plugin.rag:
-            self.plugin.rag.delete_doc(doc_id)
+        if self.rag:
+            self.rag.delete_doc(doc_id)
 
         # 更新 .toc.json：优先重新拉取完整 TOC 覆盖
         logger.info(f"[Webhook] 步骤 3/4: 更新 .toc.json")
         if repo_dir and book.get("id"):
             try:
-                client = self.plugin._get_client()
+                client = self.get_client()
                 toc_list = await client.get_repo_toc(book.get("id"))
                 self._update_toc_json(repo_dir, toc_list)
             except Exception as e:
@@ -313,7 +331,7 @@ class WebhookHandler:
         from .doc_index import DocIndex
 
         try:
-            db_path = self.plugin.storage.data_dir / "doc_index.db"
+            db_path = self.data_dir / "doc_index.db"
             doc_index = DocIndex(str(db_path))
             return doc_index.get_doc_by_yuque_id(doc_id)
         except Exception as e:
@@ -378,7 +396,7 @@ class WebhookHandler:
         """更新 SQLite 元数据索引"""
         from .doc_index import DocIndex
 
-        db_path = self.plugin.storage.data_dir / "doc_index.db"
+        db_path = self.data_dir / "doc_index.db"
 
         try:
             doc_index = DocIndex(str(db_path))
@@ -406,7 +424,7 @@ class WebhookHandler:
 
     def _update_rag(self, detail: dict, rel_path: str):
         """更新 ChromaDB 向量索引"""
-        if not self.plugin.rag:
+        if not self.rag:
             return
 
         try:
@@ -433,7 +451,7 @@ class WebhookHandler:
 
             book = detail.get("book", {})
 
-            self.plugin.rag.upsert_doc({
+            self.rag.upsert_doc({
                 "id": detail.get("id"),
                 "content": body,
                 "title": detail.get("title", ""),
@@ -449,7 +467,7 @@ class WebhookHandler:
 
     def _git_commit(self, files, action: str, title: str) -> Optional[str]:
         """Git 提交"""
-        if not self.plugin.config.get("git_enabled", True):
+        if not self.config.get("git_enabled", True):
             return None
 
         git = GitOps(self.docs_dir)
