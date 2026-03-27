@@ -5,6 +5,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from astrbot.api.event import AstrMessageEvent
+
 from .base import BaseTool
 
 
@@ -44,7 +46,7 @@ class SearchDocsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, author: str = "", book: str = "", title: str = "", order_by: str = "updated_at", limit: int = 10):
+    async def run(self, event: AstrMessageEvent, author: str = "", book: str = "", title: str = "", order_by: str = "updated_at", limit: int = 10) -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
@@ -101,7 +103,7 @@ class ListAuthorsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event):
+    async def run(self, event: AstrMessageEvent) -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
@@ -142,7 +144,7 @@ class DocStatsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, author: str = ""):
+    async def run(self, event: AstrMessageEvent, author: str = "") -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"

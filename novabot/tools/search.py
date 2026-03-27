@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
 
 from .base import BaseTool
 
@@ -36,7 +37,7 @@ class SearchKnowledgeBaseTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, query: str, top_k: int = 5):
+    async def run(self, event: AstrMessageEvent, query: str, top_k: int = 5) -> str:
         if not self.plugin or not self.plugin.rag:
             return "知识库未初始化，请检查 embedding 配置"
 
@@ -89,7 +90,7 @@ class GrepLocalDocsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, keyword: str, repo_filter: str = "", max_results: int = 10):
+    async def run(self, event: AstrMessageEvent, keyword: str, repo_filter: str = "", max_results: int = 10) -> str:
         docs_dir = self.get_docs_dir()
         if not docs_dir.exists():
             return "文档目录不存在，请先执行 /sync 同步"
@@ -182,7 +183,7 @@ class ReadDocTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, path: str):
+    async def run(self, event: AstrMessageEvent, path: str) -> str:
         docs_dir = self.get_docs_dir()
         doc_file = docs_dir / path
 
@@ -219,7 +220,7 @@ class KnowledgeCardTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event, topic: str):
+    async def run(self, event: AstrMessageEvent, topic: str) -> str:
         if not self.plugin or not self.plugin.rag:
             return "知识库未初始化，请检查 embedding 配置"
 

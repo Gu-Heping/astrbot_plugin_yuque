@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
 
 from .base import BaseTool
 
@@ -24,7 +25,7 @@ class ListKnowledgeBasesTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event):
+    async def run(self, event: AstrMessageEvent) -> str:
         repos_file = self.plugin.storage.data_dir / "yuque_repos.json"
         docs_dir = self.get_docs_dir()
 
@@ -110,7 +111,7 @@ class ListRepoDocsTool(BaseTool):
                 lines.extend(self._format_tree(node["children"], author_map, indent + "  "))
         return lines
 
-    async def run(self, event, repo_name: str):
+    async def run(self, event: AstrMessageEvent, repo_name: str) -> str:
         docs_dir = self.get_docs_dir()
         if not docs_dir.exists():
             return "文档目录不存在，请先执行 /sync 同步"

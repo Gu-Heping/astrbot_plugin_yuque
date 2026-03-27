@@ -22,8 +22,16 @@ class BaseTool(FunctionTool):
     parameters: dict = field(default_factory=dict)
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, **kwargs):
-        """工具执行方法，子类需要重写"""
+    async def run(self, event: AstrMessageEvent, **kwargs) -> str:
+        """工具执行方法，子类需要重写
+
+        Args:
+            event: 消息事件对象
+            **kwargs: 工具参数
+
+        Returns:
+            工具执行结果字符串
+        """
         raise NotImplementedError("Subclasses must implement run()")
 
     def get_docs_dir(self) -> Path:
