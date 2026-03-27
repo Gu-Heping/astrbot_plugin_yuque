@@ -12,7 +12,10 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
-from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler
+from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler, PartnerMatcher, format_partner_result, LearningPathRecommender, format_learning_path
+from .novabot.profile import format_domain_assessment
+from .novabot.subscribe import SubscriptionManager, format_subscription_list
+from .novabot.push_notifier import PushNotifier
 from .novabot.tools import ALL_TOOLS
 
 
@@ -38,10 +41,14 @@ class NovaBotPlugin(Star):
         # 组件
         self.storage = Storage()
         self.profile_gen = ProfileGenerator()
+        self.partner_matcher = PartnerMatcher(self.storage)
+        self.path_recommender = LearningPathRecommender(self.storage, self.rag)
+        self.subscription_manager = SubscriptionManager(self.storage)
         self.client: Optional[YuqueClient] = None
 
         # Webhook 服务
         self.webhook_handler: Optional[WebhookHandler] = None
+        self.push_notifier: Optional[PushNotifier] = None
         self._webhook_app: Optional[web.Application] = None
         self._webhook_runner: Optional[web.AppRunner] = None
         self._webhook_site: Optional[web.TCPSite] = None
@@ -83,12 +90,24 @@ class NovaBotPlugin(Star):
         self._webhook_app = web.Application()
         self._webhook_app.router.add_post("/yuque/webhook", self._handle_webhook_request)
         self._webhook_app.router.add_get("/health", self._health_check)
+
+        # 初始化推送管理器
+        self.push_notifier = PushNotifier(
+            docs_dir=self.storage.data_dir / "yuque_docs",
+            data_dir=self.storage.data_dir,
+            context=self.context,
+            subscription_manager=self.subscription_manager,
+            config=self.config,
+        )
+
         self.webhook_handler = WebhookHandler(
             docs_dir=self.storage.data_dir / "yuque_docs",
             data_dir=self.storage.data_dir,
             get_client=self._get_client,
             rag=self.rag,
             config=self.config,
+            push_notifier=self.push_notifier,
+            subscription_manager=self.subscription_manager,
         )
 
     async def initialize(self):
@@ -474,12 +493,13 @@ class NovaBotPlugin(Star):
         yield event.plain_result(f"✅ 已解除绑定 @{binding.get('yuque_login', '')}")
 
     @filter.command("profile")
-    async def profile_cmd(self, event: AstrMessageEvent, action: str = ""):
+    async def profile_cmd(self, event: AstrMessageEvent, action: str = "", domain: str = ""):
         """查看用户画像
 
         用法:
         - /profile - 查看画像
         - /profile refresh - 使用 AI 深度分析生成画像
+        - /profile assess <领域> - 评估某领域的掌握程度
         """
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
@@ -491,6 +511,30 @@ class NovaBotPlugin(Star):
         yuque_id = binding.get("yuque_id")
         yuque_name = binding.get("yuque_name", "")
         yuque_login = binding.get("yuque_login", "")
+
+        # 领域评估
+        if action.lower() == "assess" and domain:
+            docs = self.storage.get_docs_by_author(yuque_name)
+            if not docs:
+                yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
+                return
+
+            try:
+                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                if not provider:
+                    yield event.plain_result("❌ LLM 未配置，请先配置模型 Provider")
+                    return
+
+                yield event.plain_result(f"🔍 正在评估你在「{domain}」领域的学习情况...")
+
+                assessment = await self.profile_gen.assess_domain_level(docs, domain, provider)
+                result = format_domain_assessment(assessment)
+                yield event.plain_result(result)
+
+            except Exception as e:
+                logger.error(f"领域评估失败: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 评估失败: {e}")
+            return
 
         # 刷新画像（使用 LLM 深度分析）
         if action.lower() == "refresh":
@@ -595,6 +639,189 @@ class NovaBotPlugin(Star):
                 f"画像未生成\n"
                 f"使用 /profile refresh 生成画像"
             )
+
+    @filter.command("partner")
+    async def partner_cmd(self, event: AstrMessageEvent, topic: str = ""):
+        """伙伴推荐
+
+        用法:
+        - /partner - 查看推荐（所有兴趣）
+        - /partner 爬虫 - 查找某主题的学习伙伴/导师
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先使用 /bind 绑定账号")
+            return
+
+        yuque_id = binding.get("yuque_id")
+
+        # 检查画像
+        profile = self.storage.load_profile(yuque_id)
+        if not profile:
+            yield event.plain_result(
+                "⚠️ 你还没有画像\n"
+                "使用 /profile refresh 生成画像后再来找我推荐伙伴"
+            )
+            return
+
+        # 查找伙伴和导师
+        try:
+            partners = self.partner_matcher.find_partners(yuque_id, topic if topic else None)
+            mentors = self.partner_matcher.find_mentors(yuque_id, topic if topic else None)
+
+            if not partners and not mentors:
+                if topic:
+                    yield event.plain_result(
+                        f"未找到「{topic}」相关的学习伙伴\n"
+                        f"试试其他主题，或使用 /partner 查看所有推荐"
+                    )
+                else:
+                    yield event.plain_result(
+                        "暂无匹配的学习伙伴\n"
+                        "可能是因为社团成员画像数据不足"
+                    )
+                return
+
+            result = format_partner_result(partners, mentors, topic if topic else None)
+            yield event.plain_result(result)
+
+        except Exception as e:
+            logger.error(f"伙伴推荐失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 推荐失败: {e}")
+
+    @filter.command("path")
+    async def path_cmd(self, event: AstrMessageEvent, domain: str = ""):
+        """学习路径推荐
+
+        用法:
+        - /path <领域> - 生成该领域的学习路径
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先使用 /bind 绑定账号")
+            return
+
+        if not domain:
+            yield event.plain_result(
+                "请指定要学习的领域\n"
+                "用法: /path <领域>\n"
+                "例如: /path 爬虫\n"
+                "      /path LLM应用开发"
+            )
+            return
+
+        yuque_id = binding.get("yuque_id")
+
+        # 获取画像
+        profile = self.storage.load_profile(yuque_id)
+        if not profile:
+            yield event.plain_result(
+                "⚠️ 你还没有画像\n"
+                "使用 /profile refresh 生成画像后才能推荐学习路径"
+            )
+            return
+
+        # 获取 LLM Provider
+        try:
+            provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+            if not provider:
+                yield event.plain_result("❌ LLM 未配置，请先配置模型 Provider")
+                return
+
+            yield event.plain_result(f"🔍 正在为「{domain}」规划学习路径...")
+
+            path = await self.path_recommender.recommend(profile, domain, provider)
+            result = format_learning_path(path)
+            yield event.plain_result(result)
+
+        except Exception as e:
+            logger.error(f"学习路径生成失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 生成失败: {e}")
+
+    @filter.command("subscribe")
+    async def subscribe_cmd(self, event: AstrMessageEvent, sub_type: str = "", target: str = ""):
+        """订阅管理
+
+        用法:
+        - /subscribe - 查看我的订阅
+        - /subscribe repo <知识库名> - 订阅知识库
+        - /subscribe author <作者名> - 订阅作者
+        - /subscribe all - 订阅全部更新
+        """
+        umo = event.unified_msg_origin
+        platform_id = event.get_sender_id()
+
+        if not sub_type:
+            # 显示订阅列表
+            subs = self.subscription_manager.get_subscriptions(platform_id, umo)
+            result = format_subscription_list(subs)
+            yield event.plain_result(result)
+            return
+
+        sub_type = sub_type.lower()
+
+        if sub_type == "all":
+            success, msg = self.subscription_manager.subscribe(platform_id, umo, "all")
+        elif sub_type == "repo":
+            if not target:
+                yield event.plain_result(
+                    "请指定知识库名\n"
+                    "用法: /subscribe repo <知识库名>"
+                )
+                return
+            success, msg = self.subscription_manager.subscribe(platform_id, umo, "repo", target)
+        elif sub_type == "author":
+            if not target:
+                yield event.plain_result(
+                    "请指定作者名\n"
+                    "用法: /subscribe author <作者名>"
+                )
+                return
+            success, msg = self.subscription_manager.subscribe(platform_id, umo, "author", target)
+        else:
+            yield event.plain_result(
+                "无效的订阅类型\n"
+                "用法: /subscribe [repo|author|all] [目标]"
+            )
+            return
+
+        yield event.plain_result(f"{'✅' if success else '❌'} {msg}")
+
+    @filter.command("unsubscribe")
+    async def unsubscribe_cmd(self, event: AstrMessageEvent, sub_id: str = ""):
+        """取消订阅
+
+        用法:
+        - /unsubscribe <ID> - 取消指定订阅
+        - /unsubscribe all - 取消所有订阅
+        """
+        umo = event.unified_msg_origin
+        platform_id = event.get_sender_id()
+
+        if not sub_id:
+            yield event.plain_result(
+                "请指定要取消的订阅 ID\n"
+                "用法: /unsubscribe <ID>\n"
+                "      /unsubscribe all\n"
+                "使用 /subscribe 查看订阅列表"
+            )
+            return
+
+        if sub_id.lower() == "all":
+            success, msg = self.subscription_manager.unsubscribe(platform_id, umo)
+        else:
+            try:
+                sid = int(sub_id)
+                success, msg = self.subscription_manager.unsubscribe(platform_id, umo, sid)
+            except ValueError:
+                yield event.plain_result("ID 必须是数字")
+                return
+
+        yield event.plain_result(f"{'✅' if success else '❌'} {msg}")
 
     @filter.command("rag")
     async def rag_cmd(self, event: AstrMessageEvent, action: str = "", query: str = ""):
@@ -705,6 +932,19 @@ class NovaBotPlugin(Star):
             "  /unbind - 解除绑定\n"
             "  /profile - 查看画像\n"
             "  /profile refresh - 刷新画像\n"
+            "  /profile assess <领域> - 领域评估\n"
+            "\n"
+            "👥 伙伴\n"
+            "  /partner - 学习伙伴推荐\n"
+            "  /partner <主题> - 按主题推荐\n"
+            "  /path <领域> - 学习路径推荐\n"
+            "\n"
+            "🔔 订阅\n"
+            "  /subscribe - 查看订阅\n"
+            "  /subscribe repo <知识库> - 订阅知识库\n"
+            "  /subscribe author <作者> - 订阅作者\n"
+            "  /subscribe all - 订阅全部\n"
+            "  /unsubscribe <ID> - 取消订阅\n"
             "\n"
             "🔍 RAG 检索\n"
             "  /rag status - 查看状态\n"

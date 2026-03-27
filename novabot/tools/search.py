@@ -1,5 +1,5 @@
 """
-搜索相关工具：语义搜索、关键词搜索、文档读取
+搜索相关工具：语义搜索、关键词搜索、文档读取、知识卡片
 """
 
 import json
@@ -199,3 +199,44 @@ class ReadDocTool(BaseTool):
             return f"📄 文档内容:\n\n{content}"
         except Exception as e:
             return f"读取失败: {e}"
+
+
+@dataclass
+class KnowledgeCardTool(BaseTool):
+    """知识卡片生成工具"""
+
+    name: str = "generate_knowledge_card"
+    description: str = "根据主题生成知识卡片，聚合多篇相关文档的核心知识点和个人思考。当用户想学习某个领域或主题时调用此工具。"
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string",
+                "description": "要学习的主题或领域，如'爬虫'、'Python基础'、'机器学习'等"
+            }
+        },
+        "required": ["topic"]
+    })
+    plugin: Any = None
+
+    async def run(self, event, topic: str):
+        if not self.plugin or not self.plugin.rag:
+            return "知识库未初始化，请检查 embedding 配置"
+
+        try:
+            # 获取 LLM Provider
+            provider = self.plugin.context.get_using_provider(umo=event.unified_msg_origin)
+            if not provider:
+                return "LLM 未配置，无法生成知识卡片"
+
+            # 导入并使用知识卡片生成器
+            from ..knowledge_card import KnowledgeCardGenerator, format_knowledge_card
+
+            generator = KnowledgeCardGenerator(self.plugin.rag)
+            card = await generator.generate(topic, provider)
+
+            return format_knowledge_card(card)
+
+        except Exception as e:
+            logger.error(f"知识卡片生成失败: {e}", exc_info=True)
+            return f"生成失败: {e}"

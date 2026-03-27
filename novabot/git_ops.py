@@ -132,12 +132,17 @@ class GitOps:
 
         return None
 
-    def get_diff(self, commit: str, file_path: str) -> str:
-        """获取指定 commit 与当前文件的 diff
+    def has_git(self) -> bool:
+        """检查是否有 Git 仓库"""
+        return self.is_git_repo()
+
+    def get_diff(self, commit1: str, commit2: str = None, file_path: str = None) -> str:
+        """获取两个 commit 之间的 diff
 
         Args:
-            commit: commit hash
-            file_path: 相对路径文件
+            commit1: 旧 commit hash
+            commit2: 新 commit hash（None 则比较工作区）
+            file_path: 相对路径文件（可选）
 
         Returns:
             diff 文本
@@ -146,8 +151,14 @@ class GitOps:
             return ""
 
         try:
+            cmd = ["git", "diff", commit1]
+            if commit2:
+                cmd.append(commit2)
+            if file_path:
+                cmd.extend(["--", file_path])
+
             result = subprocess.run(
-                ["git", "diff", commit, "--", file_path],
+                cmd,
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
@@ -156,6 +167,18 @@ class GitOps:
         except Exception as e:
             logger.error(f"[GitOps] get_diff 异常: {e}")
             return ""
+
+    def get_file_diff(self, commit: str, file_path: str) -> str:
+        """获取指定 commit 与当前文件的 diff（兼容旧接口）
+
+        Args:
+            commit: commit hash
+            file_path: 相对路径文件
+
+        Returns:
+            diff 文本
+        """
+        return self.get_diff(commit, None, file_path)
 
     def get_last_commit_hash(self) -> Optional[str]:
         """获取最新 commit hash"""

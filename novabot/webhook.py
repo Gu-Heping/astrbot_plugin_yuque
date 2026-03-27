@@ -1,12 +1,13 @@
 """
 NovaBot Webhook 处理器
 处理语雀 Webhook 事件，同步更新本地文档和索引
+支持智能推送订阅
 """
 
 import json
 import re
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 import yaml
 
@@ -16,6 +17,10 @@ from .git_ops import GitOps
 from .rag import RAGEngine
 from .sync import toc_list_children
 from .yuque_client import YuqueClient
+
+if TYPE_CHECKING:
+    from .push_notifier import PushNotifier
+    from .subscribe import SubscriptionManager
 
 
 class WebhookHandler:
@@ -28,6 +33,8 @@ class WebhookHandler:
         get_client: Callable[[], YuqueClient],
         rag: Optional[RAGEngine],
         config: dict,
+        push_notifier: Optional["PushNotifier"] = None,
+        subscription_manager: Optional["SubscriptionManager"] = None,
     ):
         """
         初始化 Webhook 处理器
@@ -38,12 +45,16 @@ class WebhookHandler:
             get_client: 获取语雀客户端的回调函数
             rag: RAG 引擎实例
             config: 配置字典
+            push_notifier: 推送管理器（可选）
+            subscription_manager: 订阅管理器（可选）
         """
         self.docs_dir = docs_dir
         self.data_dir = data_dir
         self.get_client = get_client
         self.rag = rag
         self.config = config
+        self.push_notifier = push_notifier
+        self.subscription_manager = subscription_manager
 
     def _resolve_author(self, detail: dict) -> str:
         """解析文档作者名"""
@@ -238,13 +249,84 @@ class WebhookHandler:
         if commit_hash:
             logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
 
+        # 智能推送判断
+        push_result = await self._handle_push(doc_id, commit_hash, rel_path, detail)
+
         return {
             "status": "ok",
             "doc_id": doc_id,
             "title": detail.get("title", ""),
             "path": rel_path,
             "commit": commit_hash,
+            "push": push_result,
         }
+
+    async def _handle_push(
+        self,
+        doc_id: int,
+        commit_hash: Optional[str],
+        rel_path: str,
+        detail: dict
+    ) -> Optional[dict]:
+        """处理智能推送
+
+        Args:
+            doc_id: 文档 ID
+            commit_hash: Git commit hash
+            rel_path: 文档相对路径
+            detail: 文档详情
+
+        Returns:
+            推送结果
+        """
+        if not self.push_notifier:
+            return None
+
+        if not commit_hash:
+            logger.debug("[Push] 无 commit hash，跳过推送")
+            return None
+
+        if not self.push_notifier.should_enable():
+            logger.debug("[Push] 推送功能已禁用")
+            return None
+
+        try:
+            # 1. 获取 diff
+            diff = self.push_notifier.get_diff(doc_id, commit_hash, rel_path)
+            logger.info(f"[Push] diff 长度: {len(diff)} 字符")
+
+            # 2. 预处理检查
+            should_skip, reason = self.push_notifier.pre_check(diff)
+            if should_skip:
+                logger.info(f"[Push] 跳过推送: {reason}")
+                return {"skipped": True, "reason": reason}
+
+            # 3. 构建文档信息
+            book = detail.get("book", {})
+            doc_info = {
+                "id": doc_id,
+                "title": detail.get("title", ""),
+                "author": self._resolve_author(detail),
+                "book_name": book.get("name", "") if book else "",
+                "path": rel_path,
+            }
+
+            # 4. LLM 判断是否推送
+            should_push, summary = await self.push_notifier.agent_should_push(doc_info, diff)
+
+            if should_push:
+                # 5. 推送给订阅者
+                await self.push_notifier.notify_subscribers(doc_info, summary)
+                # 6. 记录推送
+                self.push_notifier.mark_pushed(doc_id, commit_hash)
+                return {"pushed": True, "summary": summary}
+            else:
+                logger.info(f"[Push] LLM 判断不推送: {summary.get('reason', '')}")
+                return {"pushed": False, "reason": summary.get("reason", "")}
+
+        except Exception as e:
+            logger.error(f"[Push] 推送处理失败: {e}", exc_info=True)
+            return {"error": str(e)}
 
     async def _handle_doc_delete(self, payload: dict) -> dict:
         """处理文档删除事件"""
