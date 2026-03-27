@@ -4,6 +4,7 @@ NovaBot 订阅管理模块
 支持多群、私聊推送目标
 """
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -36,9 +37,10 @@ class SubscriptionManager:
         """
         self.storage = storage
         self.subscriptions_file = storage.data_dir / "subscriptions.json"
+        self._lock = asyncio.Lock()  # 保护并发读写
 
-    def _load_subscriptions(self) -> dict:
-        """加载订阅数据"""
+    def _load_subscriptions_sync(self) -> dict:
+        """加载订阅数据（同步方法，需在锁内调用）"""
         if self.subscriptions_file.exists():
             try:
                 return json.loads(self.subscriptions_file.read_text(encoding="utf-8"))
@@ -47,14 +49,14 @@ class SubscriptionManager:
                 return {"subscriptions": [], "next_id": 1}
         return {"subscriptions": [], "next_id": 1}
 
-    def _save_subscriptions(self, data: dict):
-        """保存订阅数据"""
+    def _save_subscriptions_sync(self, data: dict):
+        """保存订阅数据（同步方法，需在锁内调用）"""
         self.subscriptions_file.write_text(
             json.dumps(data, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
 
-    def subscribe(
+    async def subscribe(
         self,
         platform_id: str,
         umo: str,
@@ -78,33 +80,34 @@ class SubscriptionManager:
         if sub_type != "all" and not target:
             return False, f"订阅类型 {sub_type} 需要指定目标"
 
-        data = self._load_subscriptions()
+        async with self._lock:
+            data = self._load_subscriptions_sync()
 
-        # 检查是否已存在相同订阅
-        for sub in data["subscriptions"]:
-            if (sub["platform_id"] == platform_id and
-                sub["umo"] == umo and
-                sub["sub_type"] == sub_type and
-                sub.get("target") == target):
-                return False, "您已订阅此项"
+            # 检查是否已存在相同订阅
+            for sub in data["subscriptions"]:
+                if (sub["platform_id"] == platform_id and
+                    sub["umo"] == umo and
+                    sub["sub_type"] == sub_type and
+                    sub.get("target") == target):
+                    return False, "您已订阅此项"
 
-        # 添加新订阅
-        sub_id = data["next_id"]
-        data["subscriptions"].append({
-            "id": sub_id,
-            "platform_id": platform_id,
-            "umo": umo,
-            "sub_type": sub_type,
-            "target": target,
-            "created_at": datetime.now().isoformat(),
-        })
-        data["next_id"] = sub_id + 1
-        self._save_subscriptions(data)
+            # 添加新订阅
+            sub_id = data["next_id"]
+            data["subscriptions"].append({
+                "id": sub_id,
+                "platform_id": platform_id,
+                "umo": umo,
+                "sub_type": sub_type,
+                "target": target,
+                "created_at": datetime.now().isoformat(),
+            })
+            data["next_id"] = sub_id + 1
+            self._save_subscriptions_sync(data)
 
         logger.info(f"[Subscribe] {platform_id} 订阅 {sub_type}: {target or 'all'}")
         return True, f"订阅成功 (ID: {sub_id})"
 
-    def unsubscribe(
+    async def unsubscribe(
         self,
         platform_id: str,
         umo: str,
@@ -120,29 +123,31 @@ class SubscriptionManager:
         Returns:
             (成功与否, 消息)
         """
-        data = self._load_subscriptions()
-        original_count = len(data["subscriptions"])
+        async with self._lock:
+            data = self._load_subscriptions_sync()
+            original_count = len(data["subscriptions"])
 
-        if sub_id is not None:
-            # 取消指定订阅
-            data["subscriptions"] = [
-                sub for sub in data["subscriptions"]
-                if not (sub["id"] == sub_id and
-                        sub["platform_id"] == platform_id and
-                        sub["umo"] == umo)
-            ]
-        else:
-            # 取消该用户在该会话的所有订阅
-            data["subscriptions"] = [
-                sub for sub in data["subscriptions"]
-                if not (sub["platform_id"] == platform_id and sub["umo"] == umo)
-            ]
+            if sub_id is not None:
+                # 取消指定订阅
+                data["subscriptions"] = [
+                    sub for sub in data["subscriptions"]
+                    if not (sub["id"] == sub_id and
+                            sub["platform_id"] == platform_id and
+                            sub["umo"] == umo)
+                ]
+            else:
+                # 取消该用户在该会话的所有订阅
+                data["subscriptions"] = [
+                    sub for sub in data["subscriptions"]
+                    if not (sub["platform_id"] == platform_id and sub["umo"] == umo)
+                ]
 
-        removed = original_count - len(data["subscriptions"])
-        if removed == 0:
-            return False, "未找到订阅"
+            removed = original_count - len(data["subscriptions"])
+            if removed == 0:
+                return False, "未找到订阅"
 
-        self._save_subscriptions(data)
+            self._save_subscriptions_sync(data)
+
         logger.info(f"[Subscribe] {platform_id} 取消订阅 {removed} 项")
         return True, f"已取消 {removed} 项订阅"
 
@@ -151,7 +156,7 @@ class SubscriptionManager:
         platform_id: str,
         umo: Optional[str] = None
     ) -> list[dict]:
-        """获取用户订阅列表
+        """获取用户订阅列表（只读操作，不需要锁）
 
         Args:
             platform_id: 平台用户 ID
@@ -160,7 +165,7 @@ class SubscriptionManager:
         Returns:
             订阅列表
         """
-        data = self._load_subscriptions()
+        data = self._load_subscriptions_sync()
         result = []
 
         for sub in data["subscriptions"]:
@@ -171,7 +176,7 @@ class SubscriptionManager:
         return result
 
     def get_subscribers(self, doc_info: dict) -> list[tuple[str, str]]:
-        """根据文档信息匹配订阅者
+        """根据文档信息匹配订阅者（只读操作，不需要锁）
 
         匹配逻辑：
         1. all 类型订阅 → 所有订阅者
@@ -184,7 +189,7 @@ class SubscriptionManager:
         Returns:
             订阅者列表 [(umo, platform_id), ...]，已去重
         """
-        data = self._load_subscriptions()
+        data = self._load_subscriptions_sync()
         subscribers = set()
 
         book_name = doc_info.get("book_name", "")
@@ -208,8 +213,8 @@ class SubscriptionManager:
         return list(subscribers)
 
     def get_all_subscriptions(self) -> list[dict]:
-        """获取所有订阅（用于管理）"""
-        data = self._load_subscriptions()
+        """获取所有订阅（用于管理，只读操作）"""
+        data = self._load_subscriptions_sync()
         return data["subscriptions"]
 
 

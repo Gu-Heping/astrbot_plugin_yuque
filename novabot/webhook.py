@@ -386,8 +386,8 @@ class WebhookHandler:
         from .doc_index import DocIndex
 
         db_path = self.data_dir / "doc_index.db"
-        doc_index = DocIndex(str(db_path))
-        doc_index.delete_doc(doc_id)
+        with DocIndex(str(db_path)) as doc_index:
+            doc_index.delete_doc(doc_id)
 
         # 删除 ChromaDB 向量
         logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
@@ -431,8 +431,8 @@ class WebhookHandler:
 
         try:
             db_path = self.data_dir / "doc_index.db"
-            doc_index = DocIndex(str(db_path))
-            return doc_index.get_doc_by_yuque_id(doc_id)
+            with DocIndex(str(db_path)) as doc_index:
+                return doc_index.get_doc_by_yuque_id(doc_id)
         except Exception as e:
             logger.debug(f"[Webhook] 读取旧索引失败: {e}")
             return None
@@ -498,24 +498,23 @@ class WebhookHandler:
         db_path = self.data_dir / "doc_index.db"
 
         try:
-            doc_index = DocIndex(str(db_path))
+            with DocIndex(str(db_path)) as doc_index:
+                book = detail.get("book", {})
+                body = detail.get("body", "") or detail.get("content", "") or ""
+                author = self._resolve_author(detail)
 
-            book = detail.get("book", {})
-            body = detail.get("body", "") or detail.get("content", "") or ""
-            author = self._resolve_author(detail)
-
-            doc_index.add_doc({
-                "yuque_id": detail.get("id"),
-                "title": detail.get("title", ""),
-                "slug": detail.get("slug", ""),
-                "author": author,
-                "book_name": book.get("name", "") if book else "",
-                "book_namespace": book.get("namespace", "") if book else "",
-                "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-                "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-                "word_count": len(body),
-                "file_path": rel_path,
-            })
+                doc_index.add_doc({
+                    "yuque_id": detail.get("id"),
+                    "title": detail.get("title", ""),
+                    "slug": detail.get("slug", ""),
+                    "author": author,
+                    "book_name": book.get("name", "") if book else "",
+                    "book_namespace": book.get("namespace", "") if book else "",
+                    "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
+                    "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
+                    "word_count": len(body),
+                    "file_path": rel_path,
+                })
 
             logger.info(f"[Webhook] 更新索引: {detail.get('title', '')}")
         except Exception as e:

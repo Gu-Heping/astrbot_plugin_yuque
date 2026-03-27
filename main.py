@@ -768,7 +768,7 @@ class NovaBotPlugin(Star):
         sub_type = sub_type.lower()
 
         if sub_type == "all":
-            success, msg = self.subscription_manager.subscribe(platform_id, umo, "all")
+            success, msg = await self.subscription_manager.subscribe(platform_id, umo, "all")
         elif sub_type == "repo":
             if not target:
                 yield event.plain_result(
@@ -776,7 +776,7 @@ class NovaBotPlugin(Star):
                     "用法: /subscribe repo <知识库名>"
                 )
                 return
-            success, msg = self.subscription_manager.subscribe(platform_id, umo, "repo", target)
+            success, msg = await self.subscription_manager.subscribe(platform_id, umo, "repo", target)
         elif sub_type == "author":
             if not target:
                 yield event.plain_result(
@@ -784,7 +784,7 @@ class NovaBotPlugin(Star):
                     "用法: /subscribe author <作者名>"
                 )
                 return
-            success, msg = self.subscription_manager.subscribe(platform_id, umo, "author", target)
+            success, msg = await self.subscription_manager.subscribe(platform_id, umo, "author", target)
         else:
             yield event.plain_result(
                 "无效的订阅类型\n"
@@ -815,11 +815,11 @@ class NovaBotPlugin(Star):
             return
 
         if sub_id.lower() == "all":
-            success, msg = self.subscription_manager.unsubscribe(platform_id, umo)
+            success, msg = await self.subscription_manager.unsubscribe(platform_id, umo)
         else:
             try:
                 sid = int(sub_id)
-                success, msg = self.subscription_manager.unsubscribe(platform_id, umo, sid)
+                success, msg = await self.subscription_manager.unsubscribe(platform_id, umo, sid)
             except ValueError:
                 yield event.plain_result("ID 必须是数字")
                 return

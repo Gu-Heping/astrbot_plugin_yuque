@@ -17,7 +17,9 @@ if TYPE_CHECKING:
     from .subscribe import SubscriptionManager
 
 
-MIN_DIFF_CHARS = 100  # 最小 diff 字符数
+# 默认配置值
+DEFAULT_MIN_DIFF_CHARS = 100
+DEFAULT_MAX_CONTENT_LEN = 2000
 
 
 class PushNotifier:
@@ -54,6 +56,10 @@ class PushNotifier:
         self.config = config
 
         self.last_push_file = data_dir / "last_push.json"
+
+        # 从配置读取参数
+        self.min_diff_chars = config.get("push_min_diff_chars", DEFAULT_MIN_DIFF_CHARS)
+        self.max_content_len = config.get("push_max_content_len", DEFAULT_MAX_CONTENT_LEN)
 
     def load_last_push(self) -> dict[str, str]:
         """加载上次推送记录
@@ -136,8 +142,8 @@ class PushNotifier:
         actual_diff = re.sub(r'^[+-]\s*$', '', actual_diff, flags=re.MULTILINE)
         actual_diff = actual_diff.strip()
 
-        if len(actual_diff) < MIN_DIFF_CHARS:
-            return True, f"变更太小 ({len(actual_diff)} 字符 < {MIN_DIFF_CHARS})"
+        if len(actual_diff) < self.min_diff_chars:
+            return True, f"变更太小 ({len(actual_diff)} 字符 < {self.min_diff_chars})"
 
         return False, ""
 
@@ -168,9 +174,8 @@ class PushNotifier:
                 return True, {"highlights": ["文档有更新"], "reason": "无 LLM，默认推送"}
 
             # 截断内容避免过长
-            max_len = 2000
-            if len(content) > max_len:
-                content = content[:max_len] + "\n... (已截断)"
+            if len(content) > self.max_content_len:
+                content = content[:self.max_content_len] + "\n... (已截断)"
 
             # 根据是否首次推送使用不同的提示词
             if is_first_push:

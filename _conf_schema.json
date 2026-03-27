@@ -44,5 +44,20 @@
     "description": "自动推送到远程仓库（需先配置 git remote）",
     "type": "bool",
     "default": false
+  },
+  "push_enabled": {
+    "description": "启用智能推送（文档变更时推送通知给订阅者）",
+    "type": "bool",
+    "default": true
+  },
+  "push_min_diff_chars": {
+    "description": "最小变更字符数（低于此值跳过 LLM 判断，直接不推送）",
+    "type": "int",
+    "default": 100
+  },
+  "push_max_content_len": {
+    "description": "推送内容最大长度（字符数，超出会被截断）",
+    "type": "int",
+    "default": 2000
   }
 }

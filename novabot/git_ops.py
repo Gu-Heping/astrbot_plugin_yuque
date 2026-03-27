@@ -3,11 +3,78 @@ NovaBot Git 操作封装
 用于 Webhook 触发时自动 commit 文档变更
 """
 
+import re
 import subprocess
 from pathlib import Path
 from typing import List, Optional
 
 from astrbot.api import logger
+
+
+def _sanitize_git_path(path: str) -> str:
+    """验证 Git 路径安全性
+
+    防止命令注入和路径遍历攻击
+
+    Args:
+        path: 文件路径
+
+    Returns:
+        验证后的路径
+
+    Raises:
+        ValueError: 如果路径不安全
+    """
+    if not path:
+        raise ValueError("Empty path")
+
+    # 检查路径遍历
+    if '..' in path:
+        raise ValueError(f"Path traversal detected: {path}")
+
+    # 检查绝对路径
+    if path.startswith('/') or (len(path) > 1 and path[1] == ':'):
+        raise ValueError(f"Absolute path not allowed: {path}")
+
+    # 检查以 - 开头（可能被解释为选项）
+    if path.startswith('-'):
+        raise ValueError(f"Path cannot start with '-': {path}")
+
+    # 检查特殊字符（命令注入风险）
+    dangerous_chars = ['`', '$', ';', '|', '&', '\n', '\r', '<', '>']
+    for char in dangerous_chars:
+        if char in path:
+            raise ValueError(f"Dangerous character '{char}' in path: {path}")
+
+    return path
+
+
+def _sanitize_commit_message(message: str) -> str:
+    """验证 commit message 安全性
+
+    Args:
+        message: commit message
+
+    Returns:
+        验证后的 message
+
+    Raises:
+        ValueError: 如果 message 不安全
+    """
+    if not message:
+        return "update"
+
+    # 移除危险字符
+    dangerous_chars = ['`', '$', '\n', '\r']
+    sanitized = message
+    for char in dangerous_chars:
+        sanitized = sanitized.replace(char, '')
+
+    # 限制长度
+    if len(sanitized) > 200:
+        sanitized = sanitized[:200] + '...'
+
+    return sanitized or "update"
 
 
 class GitOps:
@@ -89,9 +156,24 @@ class GitOps:
             logger.warning("[GitOps] 未配置 user.name/user.email，跳过 commit")
             return None
 
+        # 验证输入安全性
+        safe_files = []
+        for f in files:
+            try:
+                safe_files.append(_sanitize_git_path(f))
+            except ValueError as e:
+                logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
+                continue
+
+        if not safe_files:
+            logger.warning("[GitOps] 没有安全的文件可提交")
+            return None
+
+        safe_message = _sanitize_commit_message(message)
+
         try:
             add_result = subprocess.run(
-                ["git", "add", *files],
+                ["git", "add", "--", *safe_files],
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
@@ -101,7 +183,7 @@ class GitOps:
                 return None
 
             commit_result = subprocess.run(
-                ["git", "commit", "-m", message],
+                ["git", "commit", "-m", safe_message],
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
@@ -150,12 +232,24 @@ class GitOps:
         if not self.is_git_repo():
             return ""
 
+        # 验证 commit hash 格式（只允许十六进制字符）
+        if not re.match(r'^[0-9a-fA-F]+$', commit1):
+            logger.warning(f"[GitOps] 无效的 commit hash: {commit1}")
+            return ""
+        if commit2 and not re.match(r'^[0-9a-fA-F]+$', commit2):
+            logger.warning(f"[GitOps] 无效的 commit hash: {commit2}")
+            return ""
+
         try:
             cmd = ["git", "diff", commit1]
             if commit2:
                 cmd.append(commit2)
             if file_path:
-                cmd.extend(["--", file_path])
+                try:
+                    safe_path = _sanitize_git_path(file_path)
+                    cmd.extend(["--", safe_path])
+                except ValueError as e:
+                    logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
 
             result = subprocess.run(
                 cmd,
