@@ -9,24 +9,33 @@ from astrbot.api import logger
 
 from .llm_utils import call_llm, format_resources_for_path
 from .prompts import PATH_PROMPT, PATH_FALLBACK_PROMPT
+from .token_monitor import FEATURE_LEARNING_PATH
 
 if TYPE_CHECKING:
     from .rag import RAGEngine
     from .storage import Storage
+    from .token_monitor import TokenMonitor
 
 
 class LearningPathRecommender:
     """学习路径推荐器"""
 
-    def __init__(self, storage: "Storage", rag: Optional["RAGEngine"] = None):
+    def __init__(
+        self,
+        storage: "Storage",
+        rag: Optional["RAGEngine"] = None,
+        token_monitor: Optional["TokenMonitor"] = None,
+    ):
         """初始化推荐器
 
         Args:
             storage: Storage 实例
             rag: RAG 引擎（可选）
+            token_monitor: Token 监控器（可选）
         """
         self.storage = storage
         self.rag = rag
+        self.token_monitor = token_monitor
 
     def get_user_level(self, profile: dict, domain: str) -> str:
         """获取用户在特定领域的水平
@@ -142,6 +151,8 @@ class LearningPathRecommender:
                 prompt=prompt,
                 system_prompt="你是一个学习规划顾问，善于根据学习者现状设计高效路径。",
                 require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_LEARNING_PATH,
             )
             result["target_domain"] = target_domain
             result["current_level"] = current_level

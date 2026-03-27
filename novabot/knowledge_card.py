@@ -9,21 +9,29 @@ from astrbot.api import logger
 
 from .llm_utils import call_llm
 from .prompts import CARD_PROMPT
+from .token_monitor import FEATURE_KNOWLEDGE_CARD
 
 if TYPE_CHECKING:
     from .rag import RAGEngine
+    from .token_monitor import TokenMonitor
 
 
 class KnowledgeCardGenerator:
     """知识卡片生成器"""
 
-    def __init__(self, rag: "RAGEngine"):
+    def __init__(
+        self,
+        rag: "RAGEngine",
+        token_monitor: Optional["TokenMonitor"] = None,
+    ):
         """初始化生成器
 
         Args:
             rag: RAG 引擎实例
+            token_monitor: Token 监控器（可选）
         """
         self.rag = rag
+        self.token_monitor = token_monitor
 
     def build_docs_content(self, docs: list, max_docs: int = 5) -> str:
         """构建文档内容字符串
@@ -94,6 +102,8 @@ class KnowledgeCardGenerator:
                 prompt=prompt,
                 system_prompt="你是一个知识整理专家，善于从多篇文档中提炼核心知识。",
                 require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_KNOWLEDGE_CARD,
             )
 
             # 4. 添加来源文档信息

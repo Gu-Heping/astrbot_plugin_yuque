@@ -232,7 +232,7 @@ class KnowledgeCardTool(BaseTool):
             # 导入并使用知识卡片生成器
             from ..knowledge_card import KnowledgeCardGenerator, format_knowledge_card
 
-            generator = KnowledgeCardGenerator(self.plugin.rag)
+            generator = KnowledgeCardGenerator(self.plugin.rag, self.plugin.token_monitor)
             card = await generator.generate(topic, provider)
 
             return format_knowledge_card(card)

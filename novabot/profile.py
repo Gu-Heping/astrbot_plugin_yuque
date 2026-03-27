@@ -3,14 +3,23 @@ NovaBot 用户画像生成模块
 基于 LLM 分析用户文档，生成技术画像
 """
 
+from typing import TYPE_CHECKING, Optional
+
 from astrbot.api import logger
 
 from .llm_utils import call_llm, extract_json, format_docs_for_profile
 from .prompts import PROFILE_PROMPT, DOMAIN_ASSESS_PROMPT
+from .token_monitor import FEATURE_PROFILE, FEATURE_ASSESS
+
+if TYPE_CHECKING:
+    from .token_monitor import TokenMonitor
 
 
 class ProfileGenerator:
     """用户画像生成器（LLM 驱动）"""
+
+    def __init__(self, token_monitor: Optional["TokenMonitor"] = None):
+        self.token_monitor = token_monitor
 
     def build_docs_info(self, docs: list) -> str:
         """构建文档信息字符串"""
@@ -47,6 +56,8 @@ class ProfileGenerator:
                 prompt=prompt,
                 system_prompt="你是一个技术能力分析师，善于从文档中读懂一个人的技术成长轨迹。",
                 require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_PROFILE,
             )
 
             # 标准化水平值
@@ -189,6 +200,8 @@ class ProfileGenerator:
                 prompt=prompt,
                 system_prompt="你是一个技术能力评估专家，善于判断学习者在特定领域的掌握程度。",
                 require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_ASSESS,
             )
 
             # 标准化水平值

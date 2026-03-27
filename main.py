@@ -44,7 +44,7 @@ class NovaBotPlugin(Star):
 
         # 组件
         self.storage = Storage()
-        self.profile_gen = ProfileGenerator()
+        self.profile_gen = ProfileGenerator(self.token_monitor)
         self.partner_matcher = PartnerMatcher(self.storage)
         self.subscription_manager = SubscriptionManager(self.storage)
         self.search_logger = SearchLogger(self.storage.data_dir)
@@ -96,7 +96,7 @@ class NovaBotPlugin(Star):
                 logger.error(f"RAG 引擎初始化失败: {e}")
 
         # 初始化学习路径推荐器（依赖 RAG）
-        self.path_recommender = LearningPathRecommender(self.storage, self.rag)
+        self.path_recommender = LearningPathRecommender(self.storage, self.rag, self.token_monitor)
 
         logger.info("NovaBot 插件初始化完成 (v0.14.9)")
 
@@ -120,6 +120,7 @@ class NovaBotPlugin(Star):
             context=self.context,
             subscription_manager=self.subscription_manager,
             config=self.config,
+            token_monitor=self.token_monitor,
         )
 
         self.webhook_handler = WebhookHandler(

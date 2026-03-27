@@ -13,11 +13,13 @@ from astrbot.api import logger
 
 from .llm_utils import call_llm
 from .prompts import FIRST_PUSH_PROMPT, UPDATE_PUSH_PROMPT
+from .token_monitor import FEATURE_PUSH
 
 if TYPE_CHECKING:
     from astrbot.api.star import Context
 
     from .subscribe import SubscriptionManager
+    from .token_monitor import TokenMonitor
 
 
 # 默认配置值
@@ -42,6 +44,7 @@ class PushNotifier:
         context: "Context",
         subscription_manager: "SubscriptionManager",
         config: dict,
+        token_monitor: Optional["TokenMonitor"] = None,
     ):
         """初始化推送管理器
 
@@ -51,12 +54,14 @@ class PushNotifier:
             context: AstrBot Context
             subscription_manager: 订阅管理器
             config: 配置字典
+            token_monitor: Token 监控器（可选）
         """
         self.docs_dir = docs_dir
         self.data_dir = data_dir
         self.context = context
         self.subscription_manager = subscription_manager
         self.config = config
+        self.token_monitor = token_monitor
 
         self.last_push_file = data_dir / "last_push.json"
 
@@ -201,6 +206,8 @@ class PushNotifier:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_PUSH,
             )
 
             should_push = result.get("should_push", True)
