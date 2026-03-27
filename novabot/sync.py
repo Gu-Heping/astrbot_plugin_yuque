@@ -438,16 +438,22 @@ async def sync_all_repos(
         if dir_name:
             current_dirs.add(dir_name)
 
-    orphan_dirs = []
+    orphan_count = 0
     for d in output_dir.iterdir():
         if d.name.startswith(".") or not d.is_dir():
             continue
         if d.name not in current_dirs:
-            orphan_dirs.append(d.name)
-            logger.info(f"[Sync] 发现孤儿知识库目录: {d.name}")
+            # 自动删除孤儿目录
+            try:
+                import shutil
+                shutil.rmtree(d)
+                orphan_count += 1
+                logger.info(f"[Sync] 清理孤儿目录: {d.name}")
+            except Exception as e:
+                logger.warning(f"[Sync] 清理目录失败 {d.name}: {e}")
 
-    if orphan_dirs:
-        logger.warning(f"[Sync] 共 {len(orphan_dirs)} 个孤儿目录，使用 /sync clean 清理")
+    if orphan_count > 0:
+        logger.info(f"[Sync] 已清理 {orphan_count} 个孤儿目录")
 
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles, {total_stats['removed']} removed")
     return {
