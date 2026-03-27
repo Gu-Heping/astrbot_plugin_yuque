@@ -11,6 +11,7 @@ from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
 from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler, PartnerMatcher, format_partner_result, LearningPathRecommender, format_learning_path
 from .novabot.profile import format_domain_assessment
@@ -43,7 +44,7 @@ class NovaBotPlugin(Star):
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
 
         # 获取插件数据目录（AstrBot 标准路径）
-        self.data_dir = context.get_data_dir()
+        self.data_dir = get_astrbot_data_path() / "plugin_data" / "astrbot_plugin_yuque"
 
         # 组件
         self.storage = Storage(data_dir=str(self.data_dir))
