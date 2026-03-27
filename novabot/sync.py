@@ -262,10 +262,11 @@ class DocSyncer:
     def _resolve_author(self, detail: Dict) -> str:
         """解析文档创建者姓名（用于文档元数据）
 
-        优先通过 user_id 从团队成员中查找真实姓名。
+        优先通过 creator_id 从团队成员中查找真实姓名。
         """
-        # 1. 优先通过 user_id/creator_id 匹配团队成员（创建者）
-        creator_id = detail.get("user_id") or detail.get("creator_id")
+        # 1. 优先通过 creator_id 匹配团队成员（创建者）
+        # 注意：user_id 是最后编辑者，creator_id 才是创建者
+        creator_id = detail.get("creator_id") or detail.get("user_id")
         if creator_id and str(creator_id) in self.members:
             return self.members[str(creator_id)].get("name", "")
 
@@ -318,8 +319,8 @@ class DocSyncer:
         if detail.get("description"):
             fm["description"] = detail["description"]
 
-        # 存储 creator_id 用于精确匹配
-        creator_id = detail.get("user_id") or detail.get("creator_id")
+        # 存储 creator_id 用于精确匹配（创建者，而非最后编辑者）
+        creator_id = detail.get("creator_id") or detail.get("user_id")
         if creator_id:
             fm["creator_id"] = creator_id
 
