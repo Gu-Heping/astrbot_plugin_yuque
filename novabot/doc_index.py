@@ -282,8 +282,15 @@ class DocIndex:
     def close(self):
         """关闭连接"""
         if self._conn:
-            self._conn.close()
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
             self._conn = None
+
+    def __del__(self):
+        """析构时关闭连接"""
+        self.close()
 
     def __enter__(self):
         """支持 with 语句"""

@@ -4,6 +4,16 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.13.3] - 2026-03-27
+
+### 修复
+- **SQLite 连接泄漏**：为 DocIndex 添加 `__del__` 析构方法，确保对象销毁时关闭连接
+- **未使用的缓存字段**：移除 Storage 中未使用的 `_cache_dirty` 字段，新增 `invalidate_cache()` 方法
+
+### 改进
+- **缓存失效机制**：Storage 新增 `invalidate_cache(cache_type)` 方法，支持手动清除缓存
+- **close() 异常保护**：DocIndex.close() 添加 try-except，避免关闭时异常
+
 ## [v0.13.2] - 2026-03-27
 
 ### 修复

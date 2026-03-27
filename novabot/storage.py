@@ -32,12 +32,22 @@ class Storage:
         # 缓存
         self._bindings_cache: Optional[dict] = None
         self._members_cache: Optional[dict] = None
-        self._cache_dirty = {"bindings": False, "members": False}
+
+    def invalidate_cache(self, cache_type: str = "all"):
+        """清除缓存，下次读取时重新加载文件
+
+        Args:
+            cache_type: "bindings", "members", 或 "all"
+        """
+        if cache_type in ("bindings", "all"):
+            self._bindings_cache = None
+        if cache_type in ("members", "all"):
+            self._members_cache = None
 
     # ========== 绑定关系 ==========
 
     def load_bindings(self) -> dict:
-        if self._bindings_cache is not None and not self._cache_dirty.get("bindings", False):
+        if self._bindings_cache is not None:
             return self._bindings_cache
         if self.bindings_file.exists():
             try:
@@ -78,7 +88,7 @@ class Storage:
     # ========== 团队成员 ==========
 
     def load_members(self) -> dict:
-        if self._members_cache is not None and not self._cache_dirty.get("members", False):
+        if self._members_cache is not None:
             return self._members_cache
         if self.members_file.exists():
             try:
