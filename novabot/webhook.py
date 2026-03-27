@@ -414,11 +414,8 @@ class WebhookHandler:
             file_path = self.docs_dir / rel_path
             content = file_path.read_text(encoding="utf-8")
 
-            body = content
-            if content.startswith("---"):
-                end = content.find("\n---", 3)
-                if end != -1:
-                    body = content[end + 4:].strip()
+            # 解析 frontmatter
+            _, body = YuqueClient.parse_frontmatter(content)
 
             # 去掉元信息表格
             lines = body.split('\n')

@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.3] - 2026-03-27
+
+### 改进
+- **DocIndex/YuqueClient 支持上下文管理器**：支持 `with` 和 `async with` 语法，自动关闭连接
+- **提取公共 frontmatter 解析函数**：`YuqueClient.parse_frontmatter()` 统一处理 YAML 解析，减少代码重复
+
 ## [v0.12.2] - 2026-03-27
 
 ### 安全修复

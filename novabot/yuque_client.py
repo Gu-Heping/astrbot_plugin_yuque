@@ -60,6 +60,15 @@ class YuqueClient:
             await self._client.aclose()
             self._client = None
 
+    async def __aenter__(self):
+        """支持 async with 语句"""
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """退出时自动关闭客户端"""
+        await self.close()
+        return False
+
     async def _request_with_retry(self, method: str, url: str) -> httpx.Response:
         """带重试的请求"""
         last_exc = None
@@ -235,3 +244,29 @@ class YuqueClient:
                 if name:
                     return name
         return ""
+
+    @staticmethod
+    def parse_frontmatter(content: str) -> tuple[dict, str]:
+        """解析 Markdown 文件的 YAML frontmatter
+
+        Args:
+            content: Markdown 文件内容
+
+        Returns:
+            (metadata, body): 元数据字典和正文内容
+        """
+        import yaml
+
+        metadata = {}
+        body = content
+
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            if end != -1:
+                try:
+                    metadata = yaml.safe_load(content[3:end].strip()) or {}
+                    body = content[end + 4:].strip()
+                except yaml.YAMLError:
+                    pass
+
+        return metadata, body

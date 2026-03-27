@@ -7,7 +7,6 @@ import asyncio
 from datetime import datetime
 from typing import Optional
 
-import yaml
 from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -40,17 +39,7 @@ class YuqueSync:
                 content = md_file.read_text(encoding="utf-8")
 
                 # 解析 frontmatter
-                metadata = {}
-                body = content
-
-                if content.startswith("---"):
-                    end = content.find("\n---", 3)
-                    if end != -1:
-                        try:
-                            metadata = yaml.safe_load(content[3:end].strip()) or {}
-                            body = content[end + 4:].strip()
-                        except yaml.YAMLError as e:
-                            logger.debug(f"YAML 解析失败: {e}")
+                metadata, body = YuqueClient.parse_frontmatter(content)
 
                 # 匹配作者
                 doc_author = metadata.get("author", "")
@@ -397,58 +386,58 @@ class NovaBotPlugin(Star):
                     progress_callback=self.storage.update_progress,
                 )
 
-            # 更新同步状态
-            state = {
-                "last_sync": datetime.now().isoformat(),
-                "repos_count": result.get("repos_count", 0) if result else 0,
-                "docs_count": result.get("docs", 0) if result else 0,
-                "token_type": result.get("token_type", "未知") if result else "未知",
-                "in_progress": False,
-                "progress": None
-            }
-            self.storage.save_sync_state(state)
+                # 更新同步状态
+                state = {
+                    "last_sync": datetime.now().isoformat(),
+                    "repos_count": result.get("repos_count", 0) if result else 0,
+                    "docs_count": result.get("docs", 0) if result else 0,
+                    "token_type": result.get("token_type", "未知") if result else "未知",
+                    "in_progress": False,
+                    "progress": None
+                }
+                self.storage.save_sync_state(state)
 
-            # RAG 索引
-            if self.rag and result and result.get("docs", 0) > 0:
-                try:
-                    # RAG 索引进度回调
-                    def rag_progress(current, total):
-                        state = self.storage.load_sync_state()
-                        state["status"] = "rag_indexing"
-                        state["rag_progress"] = {"current": current, "total": total}
-                        self.storage.save_sync_state(state)
+                # RAG 索引
+                if self.rag and result and result.get("docs", 0) > 0:
+                    try:
+                        # RAG 索引进度回调
+                        def rag_progress(current, total):
+                            state = self.storage.load_sync_state()
+                            state["status"] = "rag_indexing"
+                            state["rag_progress"] = {"current": current, "total": total}
+                            self.storage.save_sync_state(state)
 
-                    # 初始化状态
-                    rag_progress(0, result.get("docs", 0))
+                        # 初始化状态
+                        rag_progress(0, result.get("docs", 0))
 
-                    indexed = await asyncio.to_thread(
-                        self.rag.index_from_sync,
-                        str(self.yuque_sync.docs_dir),
-                        rag_progress
-                    )
-                    logger.info(f"RAG 索引完成: {indexed} 篇")
-                except Exception as e:
-                    logger.error(f"RAG 索引失败: {e}")
+                        indexed = await asyncio.to_thread(
+                            self.rag.index_from_sync,
+                            str(self.yuque_sync.docs_dir),
+                            rag_progress
+                        )
+                        logger.info(f"RAG 索引完成: {indexed} 篇")
+                    except Exception as e:
+                        logger.error(f"RAG 索引失败: {e}")
 
-            # 清除 RAG 索引状态
-            state = self.storage.load_sync_state()
-            state.pop("status", None)
-            state.pop("rag_progress", None)
-            self.storage.save_sync_state(state)
+                # 清除 RAG 索引状态
+                state = self.storage.load_sync_state()
+                state.pop("status", None)
+                state.pop("rag_progress", None)
+                self.storage.save_sync_state(state)
 
-            docs_count = result.get("docs", 0) if result else 0
-            removed_count = result.get("removed", 0) if result else 0
-            logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
+                docs_count = result.get("docs", 0) if result else 0
+                removed_count = result.get("removed", 0) if result else 0
+                logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
 
-        except Exception as e:
-            logger.error(f"后台同步失败: {e}", exc_info=True)
-            # 标记同步结束
-            state = self.storage.load_sync_state()
-            state["in_progress"] = False
-            state["progress"] = None
-            state.pop("status", None)
-            state.pop("rag_progress", None)
-            self.storage.save_sync_state(state)
+            except Exception as e:
+                logger.error(f"后台同步失败: {e}", exc_info=True)
+                # 标记同步结束
+                state = self.storage.load_sync_state()
+                state["in_progress"] = False
+                state["progress"] = None
+                state.pop("status", None)
+                state.pop("rag_progress", None)
+                self.storage.save_sync_state(state)
 
     @filter.command("bind")
     async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):

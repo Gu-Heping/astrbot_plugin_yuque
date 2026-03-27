@@ -243,3 +243,12 @@ class DocIndex:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+    def __enter__(self):
+        """支持 with 语句"""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """退出时自动关闭连接"""
+        self.close()
+        return False
