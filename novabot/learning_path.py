@@ -143,6 +143,7 @@ class LearningPathRecommender:
                 system_prompt="你是一个学习规划顾问，善于根据学习者现状设计高效路径。",
                 require_json=True,
             )
+            result["target_domain"] = target_domain
             result["current_level"] = current_level
 
             return result
