@@ -29,15 +29,25 @@ class Storage:
         self.docs_dir = self.data_dir / "yuque_docs"
         self.docs_dir.mkdir(parents=True, exist_ok=True)
 
+        # 缓存
+        self._bindings_cache: Optional[dict] = None
+        self._members_cache: Optional[dict] = None
+        self._cache_dirty = {"bindings": False, "members": False}
+
     # ========== 绑定关系 ==========
 
     def load_bindings(self) -> dict:
+        if self._bindings_cache is not None and not self._cache_dirty.get("bindings", False):
+            return self._bindings_cache
         if self.bindings_file.exists():
             try:
-                return json.loads(self.bindings_file.read_text(encoding="utf-8"))
+                self._bindings_cache = json.loads(self.bindings_file.read_text(encoding="utf-8"))
+                return self._bindings_cache
             except json.JSONDecodeError as e:
                 logger.warning(f"绑定文件损坏，已重置: {e}")
+                self._bindings_cache = {}
                 return {}
+        self._bindings_cache = {}
         return {}
 
     def save_bindings(self, bindings: dict):
@@ -45,9 +55,11 @@ class Storage:
             json.dumps(bindings, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+        self._bindings_cache = bindings
 
     def get_binding(self, platform_id: str) -> Optional[dict]:
-        return self.load_bindings().get(platform_id)
+        bindings = self.load_bindings()
+        return bindings.get(platform_id)
 
     def add_binding(self, platform_id: str, yuque_info: dict):
         bindings = self.load_bindings()
@@ -66,12 +78,17 @@ class Storage:
     # ========== 团队成员 ==========
 
     def load_members(self) -> dict:
+        if self._members_cache is not None and not self._cache_dirty.get("members", False):
+            return self._members_cache
         if self.members_file.exists():
             try:
-                return json.loads(self.members_file.read_text(encoding="utf-8"))
+                self._members_cache = json.loads(self.members_file.read_text(encoding="utf-8"))
+                return self._members_cache
             except json.JSONDecodeError as e:
                 logger.warning(f"成员文件损坏，已重置: {e}")
+                self._members_cache = {}
                 return {}
+        self._members_cache = {}
         return {}
 
     def save_members(self, members: dict):
@@ -79,6 +96,7 @@ class Storage:
             json.dumps(members, ensure_ascii=False, indent=2),
             encoding="utf-8"
         )
+        self._members_cache = members
 
     def find_member_by_id(self, user_id: str) -> Optional[dict]:
         """通过用户 ID 精确查找团队成员

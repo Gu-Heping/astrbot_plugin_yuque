@@ -23,7 +23,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("novabot", "peace", "NOVA 社团智能助手", "0.5.0")
+@register("novabot", "peace", "NOVA 社团智能助手", "v0.13.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -335,6 +335,7 @@ class NovaBotPlugin(Star):
             return
 
         # 检查是否已在同步（使用锁保护）
+        state = self.storage.load_sync_state()
         if self._sync_lock.locked():
             p = state.get("progress", {})
             yield event.plain_result(

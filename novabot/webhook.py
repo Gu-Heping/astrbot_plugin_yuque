@@ -4,6 +4,7 @@ NovaBot Webhook 处理器
 支持智能推送订阅
 """
 
+import asyncio
 import json
 import re
 from pathlib import Path
@@ -22,6 +23,19 @@ if TYPE_CHECKING:
     from .push_notifier import PushNotifier
     from .storage import Storage
     from .subscribe import SubscriptionManager
+
+
+# 文档级别的锁，防止同一文档并发处理
+_doc_locks: dict[int, asyncio.Lock] = {}
+_doc_locks_lock = asyncio.Lock()  # 保护 _doc_locks 字典本身
+
+
+async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
+    """获取文档级别的锁"""
+    async with _doc_locks_lock:
+        if doc_id not in _doc_locks:
+            _doc_locks[doc_id] = asyncio.Lock()
+        return _doc_locks[doc_id]
 
 
 class WebhookHandler:
@@ -223,6 +237,16 @@ class WebhookHandler:
         # Debug: 完整 payload（仅在需要时启用）
         logger.debug(f"[Webhook] 完整payload: {json.dumps(payload, ensure_ascii=False)[:500]}")
 
+        # 获取文档级别的锁，防止同一文档并发处理
+        if doc_id:
+            doc_lock = await _get_doc_lock(doc_id)
+            async with doc_lock:
+                return await self._handle_event(action, payload, doc_id, book)
+        else:
+            return await self._handle_event(action, payload, doc_id, book)
+
+    async def _handle_event(self, action: str, payload: dict, doc_id: int, book: dict) -> dict:
+        """内部事件处理方法"""
         if action in ("publish", "update"):
             result = await self._handle_doc_change(payload)
         elif action == "delete":

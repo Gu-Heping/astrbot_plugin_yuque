@@ -283,6 +283,9 @@ class PartnerMatcher:
     ) -> dict:
         """请求匹配（人工确认）
 
+        注意：此功能当前只返回匹配状态，未实现推送通知。
+        后续可通过 context.send_message() 实现消息推送。
+
         Args:
             from_platform_id: 发起者的平台 ID
             to_yuque_id: 目标用户的语雀 ID
@@ -301,8 +304,8 @@ class PartnerMatcher:
         if not to_member:
             return {"status": "error", "message": "目标用户不存在"}
 
-        # TODO: 实现推送通知给目标用户
         # 当前只返回状态，后续可扩展为推送消息
+        # 需要注入 context 才能使用 context.send_message() 推送通知
 
         return {
             "status": "pending",

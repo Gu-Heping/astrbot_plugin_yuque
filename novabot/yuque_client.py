@@ -51,7 +51,13 @@ class YuqueClient:
     async def _get_client(self) -> httpx.AsyncClient:
         """获取 HTTP 客户端（懒加载）"""
         if self._client is None:
-            self._client = httpx.AsyncClient(headers=self.headers, timeout=30.0)
+            timeout = httpx.Timeout(
+                connect=10.0,   # 连接超时
+                read=30.0,      # 读取超时
+                write=30.0,     # 写入超时
+                pool=10.0,      # 连接池超时
+            )
+            self._client = httpx.AsyncClient(headers=self.headers, timeout=timeout)
         return self._client
 
     async def close(self):
