@@ -13,6 +13,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.provider import ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from pathlib import Path as PathlibPath
 
 from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler, PartnerMatcher, format_partner_result, LearningPathRecommender, format_learning_path
 from .novabot.profile import format_domain_assessment
@@ -46,7 +47,8 @@ class NovaBotPlugin(Star):
 
         # 获取插件数据目录（AstrBot 标准路径，使用 self.name）
         # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
-        self.data_dir = get_astrbot_data_path() / "plugin_data" / self.name
+        # get_astrbot_data_path() 返回 str，需要转换为 Path
+        self.data_dir = PathlibPath(get_astrbot_data_path()) / "plugin_data" / self.name
 
         # 组件
         self.storage = Storage(data_dir=str(self.data_dir))
