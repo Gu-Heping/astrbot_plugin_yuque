@@ -80,6 +80,8 @@ class DocSyncer:
         self.used_basenames: Dict[tuple, set] = {}  # (repo_name, parent_path) -> set of basenames
         self.global_index = global_index or {}  # yuque_id -> path (跨知识库)
         self.doc_metadata: List[Dict] = []  # 收集文档元数据
+        # 统计 user_id 分布
+        self._user_id_stats: Dict[str, int] = {}
 
     async def sync_repo(self, namespace: str, repo_name: str) -> Dict:
         """同步单个知识库
@@ -217,6 +219,12 @@ class DocSyncer:
                 # 写入新文件
                 content = self._build_markdown(detail, author)
                 out_file.write_text(content, encoding="utf-8")
+
+                # 统计 user_id
+                user_id = detail.get("user_id")
+                if user_id:
+                    uid_str = str(user_id)
+                    self._user_id_stats[uid_str] = self._user_id_stats.get(uid_str, 0) + 1
 
                 # 更新索引
                 if yuque_id:
@@ -456,6 +464,12 @@ async def sync_all_repos(
 
     if orphan_count > 0:
         logger.info(f"[Sync] 已清理 {orphan_count} 个孤儿目录")
+
+    # 输出 user_id 统计
+    if syncer._user_id_stats:
+        top_users = sorted(syncer._user_id_stats.items(), key=lambda x: -x[1])[:5]
+        stats_str = ", ".join(f"{uid}: {count}" for uid, count in top_users)
+        logger.info(f"[Sync] 作者统计 (user_id): {stats_str}")
 
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles, {total_stats['removed']} removed")
     return {
