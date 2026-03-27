@@ -311,7 +311,8 @@ class WebhookHandler:
                 "path": rel_path,
             }
 
-            # 4. 首次推送时读取文档内容作为 diff
+            # 4. 首次推送时读取文档内容
+            doc_content = diff  # 默认使用 diff
             if is_first_push:
                 doc_file = self.docs_dir / rel_path
                 if doc_file.exists():
@@ -320,15 +321,15 @@ class WebhookHandler:
                         # 去掉 frontmatter
                         _, body = YuqueClient.parse_frontmatter(content)
                         # 截取前 2000 字符
-                        diff = f"[新文档内容]\n{body[:2000]}"
+                        doc_content = body[:2000]
                         if len(body) > 2000:
-                            diff += "\n... (内容已截断)"
+                            doc_content += "\n... (内容已截断)"
                         logger.info(f"[Push] 首次推送，使用文档原文 ({len(body)} 字符)")
                     except Exception as e:
                         logger.warning(f"[Push] 读取文档失败: {e}")
 
             # 5. LLM 判断是否推送
-            should_push, summary = await self.push_notifier.agent_should_push(doc_info, diff, is_first_push)
+            should_push, summary = await self.push_notifier.agent_should_push(doc_info, doc_content, is_first_push)
 
             if should_push:
                 # 6. 推送给订阅者

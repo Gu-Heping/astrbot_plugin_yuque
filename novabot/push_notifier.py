@@ -144,7 +144,7 @@ class PushNotifier:
     async def agent_should_push(
         self,
         doc_info: dict,
-        diff: str,
+        content: str,
         is_first_push: bool = False
     ) -> tuple[bool, Optional[dict]]:
         """通过 LLM 判断是否推送
@@ -154,7 +154,7 @@ class PushNotifier:
 
         Args:
             doc_info: 文档信息
-            diff: diff 文本或文档内容
+            content: 文档内容（首次推送为原文，否则为 diff）
             is_first_push: 是否首次推送
 
         Returns:
@@ -167,10 +167,10 @@ class PushNotifier:
                 logger.warning("[Push] 无可用的 LLM Provider")
                 return True, {"highlights": ["文档有更新"], "reason": "无 LLM，默认推送"}
 
-            # 截断 diff 避免过长
-            max_diff_len = 2000
-            if len(diff) > max_diff_len:
-                diff = diff[:max_diff_len] + "\n... (已截断)"
+            # 截断内容避免过长
+            max_len = 2000
+            if len(content) > max_len:
+                content = content[:max_len] + "\n... (已截断)"
 
             # 根据是否首次推送使用不同的提示词
             if is_first_push:
@@ -181,8 +181,8 @@ class PushNotifier:
 - 作者：{doc_info.get('author', '未知')}
 - 知识库：{doc_info.get('book_name', '未知')}
 
-这是新发布的文档，内容如下：
-{diff}
+这是新发布的文档，以下是文档内容：
+{content}
 
 请分析这篇新文档是否值得推送给订阅者。
 
@@ -205,8 +205,8 @@ class PushNotifier:
 - 作者：{doc_info.get('author', '未知')}
 - 知识库：{doc_info.get('book_name', '未知')}
 
-变更内容（diff）：
-{diff}
+以下是文档的变更内容（diff）：
+{content}
 
 请分析变更是否对读者有实质价值，判断是否值得推送。
 
