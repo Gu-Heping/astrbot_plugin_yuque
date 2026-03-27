@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.7] - 2026-03-27
+
+### 依赖修复
+- **修复 langchain/tenacity 版本冲突**：langchain 0.3.10+ 支持 tenacity>=9.0.0，兼容 AstrBot 核心
+- 更新 requirements.txt 最小版本要求
+
 ## [v0.12.6] - 2026-03-27
 
 ### 性能优化
