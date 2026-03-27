@@ -310,6 +310,7 @@ class PushNotifier:
         author = doc_info.get("author", "未知作者")
         book_name = doc_info.get("book_name", "")
         highlights = summary.get("highlights", [])
+        doc_url = doc_info.get("url", "")
 
         lines = [
             f"📄 《{title}》有更新",
@@ -325,6 +326,8 @@ class PushNotifier:
         lines.append(f"✍️ {author}")
         if book_name:
             lines.append(f"📚 {book_name}")
+        if doc_url:
+            lines.append(f"🔗 {doc_url}")
 
         return "\n".join(lines)
 

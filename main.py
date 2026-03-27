@@ -111,6 +111,7 @@ class NovaBotPlugin(Star):
             config=self.config,
             push_notifier=self.push_notifier,
             subscription_manager=self.subscription_manager,
+            storage=self.storage,
         )
 
     async def initialize(self):

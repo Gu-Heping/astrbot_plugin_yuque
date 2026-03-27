@@ -20,6 +20,7 @@ from .yuque_client import YuqueClient
 
 if TYPE_CHECKING:
     from .push_notifier import PushNotifier
+    from .storage import Storage
     from .subscribe import SubscriptionManager
 
 
@@ -35,6 +36,7 @@ class WebhookHandler:
         config: dict,
         push_notifier: Optional["PushNotifier"] = None,
         subscription_manager: Optional["SubscriptionManager"] = None,
+        storage: Optional["Storage"] = None,
     ):
         """
         初始化 Webhook 处理器
@@ -47,6 +49,7 @@ class WebhookHandler:
             config: 配置字典
             push_notifier: 推送管理器（可选）
             subscription_manager: 订阅管理器（可选）
+            storage: 存储实例（可选，用于匹配团队成员）
         """
         self.docs_dir = docs_dir
         self.data_dir = data_dir
@@ -55,6 +58,28 @@ class WebhookHandler:
         self.config = config
         self.push_notifier = push_notifier
         self.subscription_manager = subscription_manager
+        self.storage = storage
+
+    def _match_team_member_name(self, yuque_name: str) -> Optional[str]:
+        """从团队成员中匹配真实姓名
+
+        Args:
+            yuque_name: 语雀用户昵称
+
+        Returns:
+            匹配到的团队成员真实姓名，未匹配返回 None
+        """
+        if not self.storage or not yuque_name:
+            return None
+
+        try:
+            member = self.storage.find_member_by_name(yuque_name)
+            if member:
+                return member.get("name", yuque_name)
+        except Exception as e:
+            logger.debug(f"[Webhook] 匹配团队成员失败: {e}")
+
+        return None
 
     def _resolve_author(self, detail: dict) -> str:
         """解析文档作者名"""
@@ -303,12 +328,25 @@ class WebhookHandler:
 
             # 3. 构建文档信息
             book = detail.get("book", {})
+            namespace = detail.get("namespace", "") or book.get("namespace", "")
+            slug = detail.get("slug", "")
+
+            # 构建文档 URL
+            doc_url = ""
+            if namespace and slug:
+                doc_url = f"https://www.yuque.com/{namespace}/{slug}"
+
+            # 获取作者名（优先从团队成员匹配）
+            yuque_author = self._resolve_author(detail)
+            author_name = self._match_team_member_name(yuque_author) or yuque_author
+
             doc_info = {
                 "id": doc_id,
                 "title": detail.get("title", ""),
-                "author": self._resolve_author(detail),
+                "author": author_name,
                 "book_name": book.get("name", "") if book else "",
                 "path": rel_path,
+                "url": doc_url,
             }
 
             # 4. 首次推送时读取文档内容
