@@ -262,23 +262,24 @@ class DocSyncer:
     def _resolve_author(self, detail: Dict) -> str:
         """解析文档创建者姓名（用于文档元数据）
 
-        优先通过 creator_id 从团队成员中查找真实姓名。
+        语雀 API 返回结构：
+        - user_id: 创建者 ID（整数）
+        - creator_id: 通常为 None，不可用
+        - creator/user: 嵌套对象，包含 id, name, login
         """
-        # 1. 优先通过 creator_id 匹配团队成员（创建者）
-        # 注意：user_id 是最后编辑者，creator_id 才是创建者
-        creator_id = detail.get("creator_id") or detail.get("user_id")
+        # 1. 从 user_id 或嵌套的 creator/user 对象获取创建者 ID
+        creator_id = detail.get("user_id")
+
+        # 2. 也尝试从嵌套对象获取
+        if not creator_id:
+            creator_obj = detail.get("creator") or detail.get("user") or {}
+            creator_id = creator_obj.get("id")
+
+        # 3. 从团队成员中查找真实姓名
         if creator_id and str(creator_id) in self.members:
             return self.members[str(creator_id)].get("name", "")
 
-        # 2. 尝试从嵌套对象获取（creator 或 user）
-        for key in ("creator", "user"):
-            obj = detail.get(key)
-            if isinstance(obj, dict):
-                user_id = obj.get("id")
-                if user_id and str(user_id) in self.members:
-                    return self.members[str(user_id)].get("name", "")
-
-        # 3. 回退：使用语雀返回的名字
+        # 4. 回退：使用语雀返回的名字
         return YuqueClient.author_name_from_detail(detail)
 
     def _resolve_basename(self, repo_name: str, parent_path: str, base: str) -> str:
@@ -319,8 +320,8 @@ class DocSyncer:
         if detail.get("description"):
             fm["description"] = detail["description"]
 
-        # 存储 creator_id 用于精确匹配（创建者，而非最后编辑者）
-        creator_id = detail.get("creator_id") or detail.get("user_id")
+        # 存储 user_id 作为创建者 ID（creator_id 字段通常为 None）
+        creator_id = detail.get("user_id")
         if creator_id:
             fm["creator_id"] = creator_id
 
