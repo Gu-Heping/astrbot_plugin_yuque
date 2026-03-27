@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.14.3] - 2026-03-27
+
+### 修复
+- **RAG Embedding "Event loop is closed" 错误**：重构 `embed_documents` 方法
+  - 始终使用同步 HTTP 客户端（`httpx.Client`）
+  - 避免在 `asyncio.to_thread` 线程中调用 `asyncio.run()` 导致的事件循环冲突
+  - 修复了批量索引时交替失败的问题
+
 ## [v0.14.2] - 2026-03-27
 
 ### 新增

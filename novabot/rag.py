@@ -92,44 +92,45 @@ class DashScopeEmbeddings(Embeddings):
         return result[0]
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        """同步批量嵌入（兼容 LangChain 接口）"""
+        """同步批量嵌入（兼容 LangChain 接口）
+
+        关键：始终使用同步 HTTP 客户端，避免事件循环问题
+        """
+        import httpx
+
+        valid_texts = [t if t and t.strip() else " " for t in texts]
+        logger.debug(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
+
+        url = f"{self.base_url}/embeddings"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        data = {"model": self.model, "input": valid_texts}
+
+        # 始终使用同步 HTTP 客户端，避免事件循环问题
         try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
+            with httpx.Client(timeout=120.0) as client:
+                response = client.post(url, headers=headers, json=data)
+                response.raise_for_status()
+                result = response.json()
 
-        if loop and loop.is_running():
-            # 在事件循环中，使用 asyncio.to_thread
-            import httpx
-            valid_texts = [t if t and t.strip() else " " for t in texts]
-            logger.debug(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
+            # 记录 token 使用
+            usage = result.get("usage", {})
+            total_tokens = usage.get("total_tokens", 0)
+            if total_tokens > 0 and self.token_usage_callback:
+                try:
+                    self.token_usage_callback(total_tokens)
+                except Exception as e:
+                    logger.debug(f"[RAG] Token 回调失败: {e}")
 
-            url = f"{self.base_url}/embeddings"
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
-            data = {"model": self.model, "input": valid_texts}
+            embeddings = [item["embedding"] for item in result["data"]]
+            logger.debug(f"[RAG] 获得 {len(embeddings)} 个嵌入向量, tokens: {total_tokens}")
+            return embeddings
 
-            def _sync_request():
-                with httpx.Client(timeout=120.0) as client:
-                    response = client.post(url, headers=headers, json=data)
-                    response.raise_for_status()
-                    return response.json()
-
-            result = asyncio.to_thread(_sync_request)
-            # 注意：这里返回的是 coroutine，调用者需要 await
-            # 但 LangChain 同步接口不支持这种情况
-            # 所以我们在这里直接运行
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(_sync_request)
-                result = future.result(timeout=120)
-
-            return [item["embedding"] for item in result["data"]]
-        else:
-            # 没有事件循环，直接运行异步方法
-            return asyncio.run(self.aembed_documents(texts))
+        except Exception as e:
+            logger.error(f"[RAG] Embedding 请求失败: {e}")
+            raise
 
     def embed_query(self, text: str) -> List[float]:
         """同步单个查询嵌入"""
