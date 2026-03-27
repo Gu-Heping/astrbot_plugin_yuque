@@ -156,11 +156,9 @@ class ListRepoDocsTool(BaseTool):
 
         # 准备作者信息（从 SQLite 索引）
         author_map = {}
-        from ..doc_index import DocIndex
-        db_path = docs_dir.parent / "doc_index.db"
-        if db_path.exists():
+        doc_index = self.get_doc_index()
+        if doc_index:
             try:
-                doc_index = DocIndex(str(db_path))
                 book_name = matched_repo.get("name", "") if matched_repo else repo_name
                 docs = doc_index.search(book=book_name, limit=200)
                 for doc in docs:
@@ -207,7 +205,6 @@ class ListRepoDocsTool(BaseTool):
 
     def _namespace_to_dirname(self, namespace: str, repo_name: str) -> str:
         """将 namespace 转换为目录名"""
-        from ..yuque_client import YuqueClient
         if repo_name:
-            return YuqueClient.slug_safe(repo_name)
+            return self.slug_safe(repo_name)
         return namespace.replace("/", "_")

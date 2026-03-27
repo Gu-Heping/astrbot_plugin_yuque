@@ -45,14 +45,11 @@ class SearchDocsTool(BaseTool):
     plugin: Any = None
 
     async def run(self, event, author: str = "", book: str = "", title: str = "", order_by: str = "updated_at", limit: int = 10):
-        from ..doc_index import DocIndex
-
-        db_path = self.get_db_path()
-        if not db_path.exists():
+        doc_index = self.get_doc_index()
+        if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
 
         try:
-            doc_index = DocIndex(str(db_path))
             results = doc_index.search(
                 author=author or None,
                 book=book or None,
@@ -105,14 +102,11 @@ class ListAuthorsTool(BaseTool):
     plugin: Any = None
 
     async def run(self, event):
-        from ..doc_index import DocIndex
-
-        db_path = self.get_db_path()
-        if not db_path.exists():
+        doc_index = self.get_doc_index()
+        if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
 
         try:
-            doc_index = DocIndex(str(db_path))
             authors = doc_index.list_authors()
 
             if not authors:
@@ -149,14 +143,11 @@ class DocStatsTool(BaseTool):
     plugin: Any = None
 
     async def run(self, event, author: str = ""):
-        from ..doc_index import DocIndex
-
-        db_path = self.get_db_path()
-        if not db_path.exists():
+        doc_index = self.get_doc_index()
+        if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
 
         try:
-            doc_index = DocIndex(str(db_path))
             stats = doc_index.get_stats(author=author or None)
 
             if author:

@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.12.5] - 2026-03-27
+
+### 架构改进
+- **Tools 层解耦**：工具类不再直接导入 DocIndex/YuqueClient，通过 BaseTool 提供的方法访问
+  - `get_doc_index()`: 获取文档索引实例
+  - `slug_safe()`: 安全文件名转换
+- 统一工具层的数据访问方式，降低耦合
+
 ## [v0.12.4] - 2026-03-27
 
 ### 架构改进
