@@ -1,12 +1,13 @@
 """
 NovaBot 文档同步模块
-基于 yuque2git 实现，支持 TOC 层级处理、孤儿文件清理
+基于 yuque2git 实现，支持 TOC 层级处理、孤儿文件清理、路径漂移修正
 """
 
 import json
 import re
+import subprocess
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import yaml
 
@@ -64,6 +65,152 @@ def toc_list_children(parent_uuid: Optional[str], toc_by_uuid: Dict[str, Dict]) 
     return out
 
 
+def _yuque_id_from_md(file_path: Path) -> Optional[int]:
+    """从已有 .md 的 frontmatter 读取 id/yuque_id，无法解析时返回 None"""
+    if not file_path.exists() or not file_path.is_file():
+        return None
+    try:
+        text = file_path.read_text(encoding="utf-8")
+        if not text.strip().startswith("---"):
+            return None
+        parts = text.split("---", 2)
+        if len(parts) < 2:
+            return None
+        import yaml
+        fm = yaml.safe_load(parts[1])
+        if not fm:
+            return None
+        raw = fm.get("id") or fm.get("yuque_id")
+        if raw is None:
+            return None
+        return int(raw) if isinstance(raw, int) else int(raw) if isinstance(raw, str) and raw.isdigit() else None
+    except Exception:
+        return None
+
+
+def sync_repo_path_drift(
+    output_dir: Path,
+    repo_dir_name: str,
+    toc_list: List[Dict],
+    index: Dict[str, str],
+) -> List[Tuple[str, str]]:
+    """
+    遍历 TOC，计算所有文档新路径，执行路径漂移修正。
+    使用 git mv 确保文件移动被 Git 正确追踪为 rename。
+
+    Args:
+        output_dir: 文档输出根目录
+        repo_dir_name: 知识库目录名
+        toc_list: TOC 列表
+        index: 当前的 yuque_id -> path 索引
+
+    Returns:
+        移动列表 [(old_path, new_path), ...]
+    """
+    if not toc_list:
+        return []
+
+    toc_by_uuid: Dict[str, Dict] = {n["uuid"]: n for n in toc_list if n.get("uuid")}
+    computed_paths: Dict[int, str] = {}  # yuque_id -> new_rel_path
+    used_bases: Dict[Tuple[str, str], Set[str]] = {}  # (repo_dir, parent_path) -> set of base names
+
+    def resolve_basename(repo_dir: str, parent_path: str, base: str) -> str:
+        """路径漂移时的重名处理：优先 base.md，冲突时用 base_2.md 等"""
+        key = (repo_dir, parent_path)
+        used = used_bases.setdefault(key, set())
+        stem = base
+        if stem in used:
+            i = 2
+            while f"{stem}_{i}" in used:
+                i += 1
+            stem = f"{stem}_{i}"
+        used.add(stem)
+        return stem
+
+    def traverse_toc(items: List[Dict], parent_path: str):
+        """递归遍历 TOC，计算所有文档的理论路径"""
+        for item in items:
+            doc_type = item.get("type", "")
+            yuque_id = item.get("id")
+            if isinstance(yuque_id, str) and yuque_id.isdigit():
+                yuque_id = int(yuque_id)
+
+            if doc_type in ("DOC", "SHEET"):
+                slug = item.get("url") or item.get("slug") or item.get("uuid", "")
+                title = item.get("title", "")
+                base = YuqueClient.slug_safe(title or slug) or "untitled"
+                doc_filename = resolve_basename(repo_dir_name, parent_path, base) + ".md"
+
+                if parent_path:
+                    rel_path = f"{repo_dir_name}/{parent_path}/{doc_filename}"
+                else:
+                    rel_path = f"{repo_dir_name}/{doc_filename}"
+
+                if yuque_id is not None:
+                    computed_paths[yuque_id] = rel_path
+
+                # DOC/SHEET 也可能有子节点
+                children = toc_list_children(item.get("uuid"), toc_by_uuid)
+                if children:
+                    seg = YuqueClient.slug_safe(title or item.get("uuid", ""))
+                    child_parent = f"{parent_path}/{seg}" if parent_path else seg
+                    traverse_toc(children, child_parent)
+
+            elif doc_type == "TITLE":
+                seg = YuqueClient.slug_safe(item.get("title") or item.get("uuid", ""))
+                next_parent = f"{parent_path}/{seg}" if parent_path else seg
+                children = toc_list_children(item.get("uuid"), toc_by_uuid)
+                traverse_toc(children, next_parent)
+
+    roots = toc_list_children(None, toc_by_uuid)
+    traverse_toc(roots, "")
+
+    # 对比并收集移动
+    moves: List[Tuple[str, str]] = []
+    for yuque_id, new_path in computed_paths.items():
+        old_path = index.get(str(yuque_id))
+        if old_path and old_path != new_path:
+            old_file = output_dir / old_path
+            new_file = output_dir / new_path
+            if old_file.exists():
+                new_file.parent.mkdir(parents=True, exist_ok=True)
+                moves.append((old_path, new_path))
+                index[str(yuque_id)] = new_path
+                logger.info(f"[PathDrift] {old_path} -> {new_path} (id={yuque_id})")
+
+    # 执行 git mv（如果输出目录是 git 仓库）
+    if moves:
+        git_dir = output_dir / ".git"
+        if git_dir.exists():
+            for old_path, new_path in moves:
+                try:
+                    subprocess.run(
+                        ["git", "mv", "--", old_path, new_path],
+                        cwd=output_dir,
+                        check=True,
+                        capture_output=True,
+                    )
+                except subprocess.CalledProcessError as e:
+                    logger.warning(f"[PathDrift] git mv failed: {old_path} -> {new_path}: {e.stderr.decode() if e.stderr else str(e)}")
+                    # 回退到普通移动
+                    old_file = output_dir / old_path
+                    new_file = output_dir / new_path
+                    if old_file.exists():
+                        old_file.rename(new_file)
+        else:
+            # 非 git 仓库，直接移动文件
+            for old_path, new_path in moves:
+                old_file = output_dir / old_path
+                new_file = output_dir / new_path
+                if old_file.exists():
+                    old_file.rename(new_file)
+
+        # 写入索引
+        _write_global_index(output_dir, index)
+
+    return moves
+
+
 class DocSyncer:
     """文档同步器"""
 
@@ -105,6 +252,13 @@ class DocSyncer:
         # 保存 TOC
         toc_file = repo_dir / ".toc.json"
         toc_file.write_text(json.dumps(toc_list, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        # 路径漂移修正：先遍历整个 TOC，检测并修正路径移动
+        drift_moves = sync_repo_path_drift(
+            self.output_dir, dir_name, toc_list, self.global_index
+        )
+        if drift_moves:
+            logger.info(f"[Sync] 路径漂移修正: {len(drift_moves)} 个文档移动")
 
         # 处理 TOC 节点
         roots = toc_list_children(None, toc_by_uuid)
@@ -254,12 +408,16 @@ class DocSyncer:
                 stats["errors"] += 1
 
             # DOC 类型也可能有子节点，递归处理
+            # 子节点应该继承父 DOC 的标题作为路径前缀（与 yuque2git 一致）
             child_uuid = toc_item.get("child_uuid")
             if child_uuid:
+                # 子节点的父路径 = 当前 parent_path + 父 DOC 的标题
+                seg = YuqueClient.slug_safe(title) or YuqueClient.slug_safe(slug)
+                child_parent = f"{parent_path}/{seg}" if parent_path else seg
                 children = toc_list_children(uuid, toc_by_uuid)
                 for child in children:
                     await self._process_toc_item(
-                        namespace, repo_name, repo_dir, child, parent_path, toc_by_uuid, repo_index, stats
+                        namespace, repo_name, repo_dir, child, child_parent, toc_by_uuid, repo_index, stats
                     )
 
         elif doc_type == "TITLE":
