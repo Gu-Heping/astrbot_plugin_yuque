@@ -328,20 +328,21 @@ class NovaBotPlugin(Star):
         用户可以直接对话，无需记忆命令。
         Agent 会自动识别意图并调用合适的工具。
         """
-        # 跳过命令消息（以 / 开头）
+        # 跳过命令消息（以 / 开头），让命令处理器处理
         msg = event.message_str.strip()
         if msg.startswith("/"):
-            return  # 让命令处理器处理
+            return  # 不调用 stop_event()，让命令继续传播
 
+        # 处理非命令消息
         try:
             response = await self.agent.handle_message(event)
             yield event.plain_result(response)
         except Exception as e:
             logger.error(f"自然语言处理失败: {e}", exc_info=True)
             yield event.plain_result("处理消息时出错，请稍后重试。")
-        finally:
-            # 阻止事件继续传播，避免其他插件或默认 LLM 再次响应
-            event.stop_event()
+
+        # 阻止事件继续传播，避免 AstrBot 默认 LLM 再次响应
+        event.stop_event()
 
     # ========== 指令 ==========
 
@@ -1277,10 +1278,17 @@ class NovaBotPlugin(Star):
         yield event.plain_result(
             "🤖 NovaBot - NOVA 社团智能助手\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
-            "📖 知识库\n"
+            "💬 自然语言交互\n"
+            "  直接说话即可，例如：\n"
+            "  \"帮我找爬虫教程\"\n"
+            "  \"我想学 Python\"\n"
+            "  \"社团有哪些作者\"\n"
+            "\n"
+            "📖 知识库（管理员）\n"
             "  /sync - 同步知识库\n"
             "  /sync members - 同步成员\n"
             "  /sync status - 同步状态\n"
+            "  /rag search <关键词> - 语义搜索\n"
             "\n"
             "👤 账号\n"
             "  /bind <用户名> - 绑定账号\n"
@@ -1289,35 +1297,27 @@ class NovaBotPlugin(Star):
             "  /profile refresh - 刷新画像\n"
             "  /profile assess <领域> - 领域评估\n"
             "\n"
-            "👥 伙伴\n"
+            "👥 伙伴与学习\n"
             "  /partner - 学习伙伴推荐\n"
             "  /partner <主题> - 按主题推荐\n"
             "  /path <领域> - 学习路径推荐\n"
+            "  知识卡片 - 直接说\"我想学xxx\"\n"
             "\n"
             "🔔 订阅\n"
             "  /subscribe - 查看订阅\n"
             "  /subscribe repo <知识库> - 订阅知识库\n"
             "  /subscribe author <作者> - 订阅作者\n"
-            "  /subscribe all - 订阅全部\n"
             "  /unsubscribe <ID> - 取消订阅\n"
             "\n"
-            "🔍 RAG 检索\n"
-            "  /rag status - 查看状态\n"
-            "  /rag search <关键词> - 搜索\n"
-            "  /rag rebuild - 重建索引\n"
-            "\n"
-            "🌐 Webhook\n"
-            "  /webhook - 查看状态\n"
-            "\n"
-            "📊 周报\n"
+            "📊 分析\n"
             "  /weekly - 本周知识周报\n"
-            "\n"
-            "📈 分析\n"
             "  /gap - 知识缺口分析\n"
             "  /tokens - Token 消耗统计\n"
             "\n"
             "📪 提问箱\n"
             "  /ask <问题> - 匿名提问\n"
+            "  /askadmin list - 待回答问题（管理员）\n"
+            "  /askadmin answer <ID> <回答> - 回答（管理员）\n"
             "\n"
             "  /novabot - 帮助"
         )
