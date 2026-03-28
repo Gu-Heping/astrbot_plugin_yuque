@@ -4,6 +4,15 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.9] - 2026-03-28
+
+### 修复
+- **SQLite 索引缺少 creator_id 字段**：完整支持创建者 ID 存储
+  - 表结构添加 creator_id 字段
+  - 兼容已有数据库（ALTER TABLE 自动添加）
+  - Webhook 增量更新正确传递 creator_id
+  - creator_id 为 None 时记录警告日志
+
 ## [v0.15.8] - 2026-03-28
 
 ### 修复

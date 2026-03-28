@@ -637,6 +637,11 @@ class WebhookHandler:
                 # 优先使用团队成员真实姓名（创建者）
                 author = self._match_creator_name(detail) or self._resolve_author(detail)
 
+                # 获取创建者 ID
+                creator_id = detail.get("user_id") or detail.get("creator_id")
+                if creator_id is None:
+                    logger.warning(f"[Webhook] 文档缺少 creator_id: {detail.get('title', '')} (user_id={detail.get('user_id')}, creator_id={detail.get('creator_id')})")
+
                 doc_index.add_doc({
                     "yuque_id": detail.get("id"),
                     "title": detail.get("title", ""),
@@ -644,6 +649,7 @@ class WebhookHandler:
                     "author": author,
                     "book_name": book.get("name", "") if book else "",
                     "book_namespace": book.get("namespace", "") if book else "",
+                    "creator_id": creator_id,
                     "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
                     "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
                     "word_count": _count_chinese_words(body),  # 中文字数统计

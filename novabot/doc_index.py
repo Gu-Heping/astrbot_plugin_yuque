@@ -45,6 +45,7 @@ class DocIndex:
                     author TEXT,
                     book_name TEXT,
                     book_namespace TEXT,
+                    creator_id INTEGER,
                     created_at TEXT,
                     updated_at TEXT,
                     word_count INTEGER DEFAULT 0,
@@ -58,6 +59,14 @@ class DocIndex:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_book ON docs(book_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_updated ON docs(updated_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_yuque_id ON docs(yuque_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_creator_id ON docs(creator_id)")
+
+            # 兼容性：如果表已存在但没有 creator_id 字段，添加它
+            try:
+                conn.execute("ALTER TABLE docs ADD COLUMN creator_id INTEGER")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_creator_id ON docs(creator_id)")
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
 
             conn.commit()
             logger.info(f"[DocIndex] 数据库初始化完成: {self.db_path}")
@@ -81,9 +90,9 @@ class DocIndex:
             conn = self._get_conn()
             conn.execute("""
                 INSERT OR REPLACE INTO docs
-                (yuque_id, title, slug, author, book_name, book_namespace,
+                (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
                  created_at, updated_at, word_count, file_path, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 doc.get("yuque_id"),
                 doc.get("title", ""),
@@ -91,6 +100,7 @@ class DocIndex:
                 doc.get("author", ""),
                 doc.get("book_name", ""),
                 doc.get("book_namespace", ""),
+                doc.get("creator_id"),
                 doc.get("created_at", ""),
                 doc.get("updated_at", ""),
                 doc.get("word_count", 0),
@@ -142,9 +152,9 @@ class DocIndex:
             try:
                 conn.executemany("""
                     INSERT OR REPLACE INTO docs
-                    (yuque_id, title, slug, author, book_name, book_namespace,
+                    (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
                      created_at, updated_at, word_count, file_path, indexed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     (
                         d.get("yuque_id"),
@@ -153,6 +163,7 @@ class DocIndex:
                         d.get("author", ""),
                         d.get("book_name", ""),
                         d.get("book_namespace", ""),
+                        d.get("creator_id"),
                         d.get("created_at", ""),
                         d.get("updated_at", ""),
                         d.get("word_count", 0),
@@ -171,9 +182,9 @@ class DocIndex:
                     try:
                         conn.execute("""
                             INSERT OR REPLACE INTO docs
-                            (yuque_id, title, slug, author, book_name, book_namespace,
+                            (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
                              created_at, updated_at, word_count, file_path, indexed_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             d.get("yuque_id"),
                             d.get("title", ""),
@@ -181,6 +192,7 @@ class DocIndex:
                             d.get("author", ""),
                             d.get("book_name", ""),
                             d.get("book_namespace", ""),
+                            d.get("creator_id"),
                             d.get("created_at", ""),
                             d.get("updated_at", ""),
                             d.get("word_count", 0),

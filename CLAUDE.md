@@ -681,4 +681,85 @@ astrbot_version: ">=4.16,<5"  # AstrBot 版本要求
 
 ---
 
+## 8. 开发经验教训
+
+### 8.1 多存储层一致性
+
+NovaBot 使用三层存储架构，必须保持数据同步：
+
+```
+Markdown 文件 (frontmatter) → SQLite 索引 → ChromaDB 向量
+```
+
+**关键原则**：
+
+1. **新增字段时同步更新**：
+   - 表结构（SQLite）
+   - 写入逻辑（sync.py, webhook.py）
+   - 索引逻辑（doc_index.py, rag.py）
+   - 查询逻辑（learning_path.py 等）
+
+2. **全量同步 vs 增量更新**：
+   - 全量同步：`sync.py` 写入所有数据
+   - 增量更新：`webhook.py` 必须与全量同步逻辑一致
+   - **检查点**：修改 sync.py 后，检查 webhook.py 是否需要同步修改
+
+3. **数据库迁移兼容**：
+   ```python
+   # 添加新字段时，考虑已有数据库
+   try:
+       conn.execute("ALTER TABLE docs ADD COLUMN new_field TEXT")
+   except sqlite3.OperationalError:
+       pass  # 字段已存在
+   ```
+
+### 8.2 None 值处理
+
+**问题**：API 可能返回 None，ChromaDB 不接受 None 作为 metadata 值。
+
+**解决方案**：
+
+```python
+# ✅ 正确：条件添加
+creator_id = doc.get("creator_id")
+if creator_id is not None:
+    documents[-1].metadata["creator_id"] = creator_id
+
+# ✅ 正确：日志追踪
+if creator_id is None:
+    logger.warning(f"文档缺少 creator_id: {title}")
+
+# ❌ 错误：直接添加可能导致 ChromaDB 报错
+metadata["creator_id"] = doc.get("creator_id")  # 可能为 None
+```
+
+### 8.3 语雀 API 字段说明
+
+| 字段 | 说明 | 备注 |
+|------|------|------|
+| `user_id` | 创建者 ID（整数） | **推荐使用** |
+| `creator_id` | 通常为 None | **不可用** |
+| `last_editor_id` | 最后编辑者 ID | 用于推送消息 |
+| `creator`/`user` | 嵌套对象 | 包含 name, login |
+
+**正确获取创建者 ID**：
+
+```python
+creator_id = detail.get("user_id") or (detail.get("creator") or {}).get("id")
+```
+
+### 8.4 代码审计检查清单
+
+修改语雀相关功能后，检查以下模块：
+
+| 模块 | 文件 | 检查点 |
+|------|------|--------|
+| 全量同步 | sync.py | frontmatter 写入、doc_metadata 收集 |
+| 增量更新 | webhook.py | _write_markdown_file, _update_doc_index, _update_rag |
+| SQLite | doc_index.py | 表结构、add_doc, add_docs |
+| RAG | rag.py | index_docs, index_from_sync, upsert_doc |
+| 查询 | storage.py, learning_path.py | 字段读取、过滤逻辑 |
+
+---
+
 *本文档基于 AstrBot 官方文档和项目开发经验整理，持续更新中。*
