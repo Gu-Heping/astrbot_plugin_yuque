@@ -760,6 +760,62 @@ creator_id = detail.get("user_id") or (detail.get("creator") or {}).get("id")
 | RAG | rag.py | index_docs, index_from_sync, upsert_doc |
 | 查询 | storage.py, learning_path.py | 字段读取、过滤逻辑 |
 
+### 8.5 SQLite 数据库迁移
+
+**问题**：添加新列时，索引创建可能先于 ALTER TABLE 执行，导致 "no such column" 错误。
+
+**正确做法**：使用 PRAGMA 检查列是否存在。
+
+```python
+def _init_db(self):
+    conn.execute("CREATE TABLE IF NOT EXISTS docs (...)")
+
+    # ✅ 正确：先检查列是否存在
+    columns = conn.execute("PRAGMA table_info(docs)").fetchall()
+    column_names = [col[1] for col in columns]
+    if "new_column" not in column_names:
+        conn.execute("ALTER TABLE docs ADD COLUMN new_column INTEGER")
+
+    # 然后再创建索引
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_new_column ON docs(new_column)")
+
+    # ❌ 错误：直接创建索引可能失败
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_new_column ON docs(new_column)")
+    try:
+        conn.execute("ALTER TABLE docs ADD COLUMN new_column INTEGER")
+    except:
+        pass  # 太晚了，索引已失败
+```
+
+### 8.6 流式输出限制
+
+**问题**：AstrBot 流式输出模式下，`LLMResponse.usage` 为 None，无法统计 chat token。
+
+**调查过程**：
+```python
+@filter.on_llm_response()
+async def on_llm_response(self, event, resp):
+    # 日志显示：
+    # resp.usage: None
+    # raw_completion.usage: None
+    # is_chunk: False
+```
+
+**结论**：这是 AstrBot 框架的限制，不是插件 bug。
+
+**解决方案选项**：
+1. **接受限制**：流式模式下 chat token 无法统计
+2. **禁用流式输出**：在 AstrBot 配置中关闭流式，可获取 token 但影响用户体验
+3. **等待框架更新**：AstrBot 可能未来支持流式输出的 token 统计
+
+**其他功能的 token 统计**（非流式，正常工作）：
+- embedding：RAG 向量化
+- learning_path：学习路径生成
+- profile：用户画像生成
+- push：智能推送判断
+| RAG | rag.py | index_docs, index_from_sync, upsert_doc |
+| 查询 | storage.py, learning_path.py | 字段读取、过滤逻辑 |
+
 ---
 
 *本文档基于 AstrBot 官方文档和项目开发经验整理，持续更新中。*
