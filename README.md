@@ -53,6 +53,12 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/subscribe all` | 订阅全部更新 |
 | `/unsubscribe <ID>` | 取消订阅 |
 | `/webhook` | Webhook 服务状态 |
+| `/persona` | 查看人格设置 |
+| `/persona name <称呼>` | 设置称呼偏好 |
+| `/persona tone <语气>` | 设置语气（温和/活泼/严肃/幽默） |
+| `/persona style <风格>` | 设置回复风格（简洁/详细） |
+| `/persona formality <程度>` | 设置正式程度（轻松/正式） |
+| `/persona reset` | 重置为默认设置 |
 | `/novabot` | 帮助信息 |
 
 ## Webhook 配置
@@ -147,6 +153,12 @@ NovaBot 为 AI 提供以下工具（AI 可自动调用）：
 | `list_knowledge_bases` | 列出知识库 | 了解有哪些知识库 |
 | `list_repo_docs` | 列出知识库结构 | 了解知识库目录 |
 
+### 人格管理
+
+| 工具 | 功能 | 适用场景 |
+|------|------|----------|
+| `set_preference` | 设置用户偏好 | 用户说"叫我小谷"、"说话活泼点"时自动调用 |
+
 ### 推荐搜索流程
 
 ```
@@ -213,6 +225,8 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.19.0 | 人格管理系统（用户定制称呼、语气、回复风格） |
+| v0.18.0 | 消息路由系统（唤醒词、@触发、私聊响应） |
 | v0.13.0 | 伙伴推荐、知识卡片、学习路径、智能推送订阅 |
 | v0.12.x | 安全修复、依赖兼容、架构改进 |
 | v0.11.0 | Webhook 实时同步、Git 版本控制 |
