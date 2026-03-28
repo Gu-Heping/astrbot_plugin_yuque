@@ -83,28 +83,53 @@ class LearningPathRecommender:
             if level in ("intermediate", "advanced")
         ]
 
-    def search_resources(self, domain: str, max_results: int = 10) -> list:
+    def search_resources(
+        self,
+        domain: str,
+        max_results: int = 10,
+        exclude_author_id: Optional[int] = None,
+        exclude_titles: Optional[list] = None,
+    ) -> list:
         """搜索相关资源
 
         Args:
             domain: 目标领域
             max_results: 最大结果数
+            exclude_author_id: 排除的作者 ID（过滤用户自己的文档）
+            exclude_titles: 排除的文档标题列表
 
         Returns:
             资源列表
         """
         resources = []
+        exclude_titles = exclude_titles or []
 
         # 从 RAG 搜索
         if self.rag:
             try:
-                results = self.rag.search(domain, k=max_results)
+                results = self.rag.search(domain, k=max_results * 2)  # 多搜一些，再过滤
                 for r in results:
+                    title = r.get("title", "")
+                    author = r.get("author", "")
+                    author_id = r.get("creator_id")
+
+                    # 过滤用户自己的文档
+                    if exclude_author_id and author_id == exclude_author_id:
+                        continue
+
+                    # 过滤用户已写过的标题
+                    if title in exclude_titles:
+                        continue
+
                     resources.append({
-                        "title": r.get("title", ""),
-                        "author": r.get("author", ""),
+                        "title": title,
+                        "author": author,
                         "book_name": r.get("book_name", ""),
                     })
+
+                    if len(resources) >= max_results:
+                        break
+
             except Exception as e:
                 logger.warning(f"RAG 搜索失败: {e}")
 
@@ -114,7 +139,9 @@ class LearningPathRecommender:
         self,
         profile: dict,
         target_domain: str,
-        provider
+        provider,
+        exclude_author_id: Optional[int] = None,
+        user_docs: Optional[list] = None,
     ) -> dict:
         """生成学习路径
 
@@ -122,6 +149,8 @@ class LearningPathRecommender:
             profile: 用户画像
             target_domain: 目标领域
             provider: LLM Provider
+            exclude_author_id: 排除的作者 ID（过滤用户自己的文档）
+            user_docs: 用户已写的文档标题列表
 
         Returns:
             学习路径字典
@@ -130,9 +159,19 @@ class LearningPathRecommender:
         current_level = self.get_user_level(profile, target_domain)
         mastered_skills = self.get_mastered_skills(profile)
 
-        # 搜索相关资源
-        resources = self.search_resources(target_domain)
+        # 搜索相关资源（排除用户自己的文档）
+        user_doc_titles = [d.get("title", "") for d in (user_docs or [])]
+        resources = self.search_resources(
+            target_domain,
+            exclude_author_id=exclude_author_id,
+            exclude_titles=user_doc_titles,
+        )
         resources_text = format_resources_for_path(resources)
+
+        # 用户已写文档提示
+        user_docs_hint = ""
+        if user_doc_titles:
+            user_docs_hint = f"\n\n**注意：以下文档用户已写过，不应作为推荐资源：**\n" + "\n".join(f"- {t}" for t in user_doc_titles[:10])
 
         # 选择提示词模板
         if resources:
@@ -140,10 +179,11 @@ class LearningPathRecommender:
                 current_level=current_level,
                 mastered_skills=", ".join(mastered_skills) if mastered_skills else "暂无",
                 target_domain=target_domain,
-                resources=resources_text
+                resources=resources_text,
+                user_docs_hint=user_docs_hint,
             )
         else:
-            prompt = PATH_FALLBACK_PROMPT.format(target_domain=target_domain)
+            prompt = PATH_FALLBACK_PROMPT.format(target_domain=target_domain, user_docs_hint=user_docs_hint)
 
         try:
             result = await call_llm(

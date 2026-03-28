@@ -13,6 +13,7 @@ PATH_PROMPT = """你是一个学习规划顾问，善于根据学习者现状设
 ## 可用资源
 
 {resources}
+{user_docs_hint}
 
 ## 规划原则
 
@@ -48,11 +49,13 @@ PATH_PROMPT = """你是一个学习规划顾问，善于根据学习者现状设
 - stages 建议分为 2-4 个阶段
 - challenges 要具体，比如"XX概念较抽象，需要实践理解"
 - 如果可用资源不足，在 tips 中提示"建议补充XX方面的文档"
+- **绝对不要推荐用户已写过的文档**
 """
 
 PATH_FALLBACK_PROMPT = """你是一个学习规划顾问。
 
 用户想学习：{target_domain}
+{user_docs_hint}
 
 抱歉，社团内暂时没有找到相关的学习资源。
 

@@ -818,6 +818,9 @@ class NovaBotPlugin(Star):
             )
             return
 
+        # 获取用户已写的文档列表（用于排除）
+        user_docs = self.storage.get_docs_by_author(yuque_id=yuque_id)
+
         # 获取 LLM Provider
         try:
             provider = self.context.get_using_provider(umo=event.unified_msg_origin)
@@ -827,7 +830,11 @@ class NovaBotPlugin(Star):
 
             yield event.plain_result(f"🔍 正在为「{domain}」规划学习路径...")
 
-            path = await self.path_recommender.recommend(profile, domain, provider)
+            path = await self.path_recommender.recommend(
+                profile, domain, provider,
+                exclude_author_id=yuque_id,
+                user_docs=user_docs,
+            )
             result = format_learning_path(path)
             yield event.plain_result(result)
 
