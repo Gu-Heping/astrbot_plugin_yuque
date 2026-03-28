@@ -176,7 +176,7 @@ class LearningGapAnalyzer:
                 # 优先用 creator_id 精确匹配
                 if creator_id:
                     rows = conn.execute("""
-                        SELECT title, book_name, word_count, description
+                        SELECT title, book_name, word_count
                         FROM docs
                         WHERE creator_id = ?
                         ORDER BY word_count DESC
@@ -185,7 +185,7 @@ class LearningGapAnalyzer:
                 else:
                     # 回退到精确名称匹配
                     rows = conn.execute("""
-                        SELECT title, book_name, word_count, description
+                        SELECT title, book_name, word_count
                         FROM docs
                         WHERE author = ?
                         ORDER BY word_count DESC
@@ -197,7 +197,6 @@ class LearningGapAnalyzer:
                         "title": row["title"] or "",
                         "book_name": row["book_name"] or "",
                         "word_count": row["word_count"] or 0,
-                        "description": row["description"] or "",
                     })
 
             except Exception as e:
@@ -221,10 +220,7 @@ class LearningGapAnalyzer:
         for i, doc in enumerate(docs[:10], 1):
             title = doc["title"]
             words = doc["word_count"]
-            desc = doc.get("description", "")[:100]
             lines.append(f"{i}. 《{title}》（{words}字）")
-            if desc:
-                lines.append(f"   简介：{desc}...")
 
         return "\n".join(lines)
 

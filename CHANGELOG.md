@@ -4,6 +4,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.18.5] - 2026-03-28
+
+### 修复
+- **`/gap` SQLite 查询错误**：移除不存在的 `description` 列
+
 ## [v0.18.4] - 2026-03-28
 
 ### 修复
