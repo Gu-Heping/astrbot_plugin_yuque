@@ -18,7 +18,7 @@ from .subscribe import SubscriptionManager, format_subscription_list
 from .push_notifier import PushNotifier
 from .weekly import WeeklyReporter, format_weekly_report
 from .search_log import SearchLogger
-from .knowledge_gap import KnowledgeGapAnalyzer, format_gap_report
+from .knowledge_gap import LearningGapAnalyzer, format_gap_report
 from .token_monitor import TokenMonitor
 from .ask_box import AskBoxManager
 from .agent import NovaBotAgent
@@ -48,7 +48,7 @@ __all__ = [
     "WeeklyReporter",
     "format_weekly_report",
     "SearchLogger",
-    "KnowledgeGapAnalyzer",
+    "LearningGapAnalyzer",
     "format_gap_report",
     "TokenMonitor",
     "AskBoxManager",
