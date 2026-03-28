@@ -289,24 +289,27 @@ class NovaBotPlugin(Star):
             input_tokens = 0
             output_tokens = 0
 
-            # 调试：打印 usage 值
-            if hasattr(resp, "usage") and resp.usage:
-                logger.info(f"[LLM] resp.usage: {resp.usage}")
+            # 调试：打印所有 usage 来源
+            logger.info(f"[LLM] resp.usage 存在: {hasattr(resp, 'usage')}, 值: {getattr(resp, 'usage', 'N/A')}")
             if hasattr(resp, "raw_completion") and resp.raw_completion:
-                raw_usage = getattr(resp.raw_completion, "usage", None)
-                logger.info(f"[LLM] raw_completion.usage: {raw_usage}")
+                logger.info(f"[LLM] raw_completion.usage: {getattr(resp.raw_completion, 'usage', 'N/A')}")
 
-            if hasattr(resp, "raw_completion") and resp.raw_completion:
+            # 尝试从 resp.usage 获取
+            if hasattr(resp, "usage"):
+                usage = resp.usage
+                logger.info(f"[LLM] resp.usage 类型: {type(usage)}")
+                if usage:
+                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    logger.info(f"[LLM] 从 resp.usage 获取: 入 {input_tokens}, 出 {output_tokens}")
+
+            # 尝试从 raw_completion.usage 获取
+            if input_tokens == 0 and hasattr(resp, "raw_completion") and resp.raw_completion:
                 usage = getattr(resp.raw_completion, "usage", None)
                 if usage:
                     input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
-            else:
-                # 尝试从 resp 直接获取（某些 provider 可能直接在 resp 上）
-                if hasattr(resp, "usage") and resp.usage:
-                    usage = resp.usage
-                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    logger.info(f"[LLM] 从 raw_completion.usage 获取: 入 {input_tokens}, 出 {output_tokens}")
 
             if input_tokens > 0 or output_tokens > 0:
                 self.token_monitor.log_usage(
@@ -316,7 +319,7 @@ class NovaBotPlugin(Star):
                 )
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
             else:
-                logger.warning(f"[LLM] 无法获取 token 使用量")
+                logger.warning(f"[LLM] 无法获取 token 使用量（可能是流式输出限制）")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
