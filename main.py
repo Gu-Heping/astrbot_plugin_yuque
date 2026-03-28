@@ -123,10 +123,14 @@ class NovaBotPlugin(Star):
 
         # 初始化 Webhook 服务（延迟到 initialize）
         if config.get("webhook_enabled", False):
+            logger.info("[Webhook] webhook_enabled=True，初始化 Webhook 服务")
             self._setup_webhook_app()
+        else:
+            logger.info(f"[Webhook] webhook_enabled={config.get('webhook_enabled', False)}，跳过初始化")
 
     def _setup_webhook_app(self):
         """设置 Webhook HTTP 服务"""
+        logger.info("[Webhook] 开始设置 Webhook 应用...")
         self._webhook_app = web.Application()
         self._webhook_app.router.add_post("/yuque/webhook", self._handle_webhook_request)
         self._webhook_app.router.add_get("/health", self._health_check)
@@ -151,11 +155,15 @@ class NovaBotPlugin(Star):
             subscription_manager=self.subscription_manager,
             storage=self.storage,
         )
+        logger.info("[Webhook] Webhook 应用设置完成")
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot 初始化完成后启动 Webhook 服务"""
-        if self._webhook_app and self.config.get("webhook_enabled", False):
+        webhook_enabled = self.config.get("webhook_enabled", False)
+        logger.info(f"[Webhook] webhook_enabled={webhook_enabled}, _webhook_app={'存在' if self._webhook_app else 'None'}")
+
+        if self._webhook_app and webhook_enabled:
             port = self.config.get("webhook_port", 8766)
             try:
                 self._webhook_runner = web.AppRunner(self._webhook_app)
@@ -166,6 +174,8 @@ class NovaBotPlugin(Star):
                 logger.info(f"[Webhook] 健康检查: http://0.0.0.0:{port}/health")
             except Exception as e:
                 logger.error(f"[Webhook] 服务启动失败: {e}", exc_info=True)
+        else:
+            logger.warning(f"[Webhook] 服务未启动: webhook_enabled={webhook_enabled}")
 
     async def terminate(self):
         """插件卸载时的清理"""
