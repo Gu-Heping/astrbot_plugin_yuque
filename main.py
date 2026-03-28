@@ -309,7 +309,12 @@ class NovaBotPlugin(Star):
                 )
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
             else:
-                logger.warning(f"[LLM] 无法获取 token 使用量")
+                # 调试：打印 resp 的所有属性
+                attrs = [a for a in dir(resp) if not a.startswith('_')]
+                logger.warning(f"[LLM] 无法获取 token 使用量, resp 属性: {attrs}")
+                if hasattr(resp, "raw_completion") and resp.raw_completion:
+                    raw_attrs = [a for a in dir(resp.raw_completion) if not a.startswith('_')]
+                    logger.warning(f"[LLM] raw_completion 属性: {raw_attrs}")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
