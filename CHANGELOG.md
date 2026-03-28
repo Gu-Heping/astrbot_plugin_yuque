@@ -4,6 +4,16 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.2] - 2026-03-28
+
+### 修复
+- **RAG 索引缺少 creator_id**：修复学习路径排除自己文档功能失效
+  - sync.py: doc_metadata 添加 creator_id 字段
+  - rag.py: 索引和搜索都传递 creator_id
+  - 验证：语雀 API 的 `user_id` 字段是创建者 ID（而非最后编辑者）
+- **作者显示为最后编辑者**：移除 `last_editor`，只从 `creator`/`user` 获取创建者名
+  - 与 yuque2git commit 2995580 一致
+
 ## [v0.15.1] - 2026-03-28
 
 ### 修复
