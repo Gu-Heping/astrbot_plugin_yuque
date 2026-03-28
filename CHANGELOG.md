@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.4] - 2026-03-28
+
+### 新增
+- **正常聊天 token 统计**：`/tokens` 现在也会显示正常对话的 token 消耗
+  - 新增 `on_llm_response` 钩子记录聊天 token
+  - 功能类别显示为 `chat`
+
 ## [v0.15.3] - 2026-03-28
 
 ### 修复
