@@ -1223,6 +1223,41 @@ class NovaBotPlugin(Star):
             logger.error(f"知识缺口分析失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 分析失败: {e}")
 
+    @filter.command("card")
+    async def card_cmd(self, event: AstrMessageEvent, topic: str = ""):
+        """生成知识卡片
+
+        用法: /card <主题>
+        例如: /card 爬虫
+        """
+        if not topic:
+            yield event.plain_result("用法: /card <主题>\n例如: /card 爬虫")
+            return
+
+        try:
+            # 获取 LLM Provider
+            provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+            if not provider:
+                yield event.plain_result("❌ LLM 未配置，无法生成知识卡片")
+                return
+
+            if not self.rag:
+                yield event.plain_result("❌ RAG 引擎未初始化，请先执行 /sync")
+                return
+
+            yield event.plain_result(f"📚 正在生成「{topic}」知识卡片...")
+
+            from .novabot.knowledge_card import KnowledgeCardGenerator, format_knowledge_card
+
+            generator = KnowledgeCardGenerator(self.rag, self.token_monitor)
+            card = await generator.generate(topic, provider)
+
+            yield event.plain_result(format_knowledge_card(card))
+
+        except Exception as e:
+            logger.error(f"知识卡片生成失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 生成失败: {e}")
+
     @filter.command("tokens")
     async def tokens_cmd(self, event: AstrMessageEvent):
         """查看 Token 消耗统计"""
