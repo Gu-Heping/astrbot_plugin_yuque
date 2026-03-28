@@ -65,11 +65,11 @@ class NovaBotPlugin(Star):
         self.partner_matcher = PartnerMatcher(self.storage)
         self.subscription_manager = SubscriptionManager(self.storage)
         self.search_logger = SearchLogger(self.storage.data_dir)
-        self.gap_analyzer = LearningGapAnalyzer(self.storage, self.rag, self.token_monitor)
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
+        self.gap_analyzer: Optional[LearningGapAnalyzer] = None
 
         # Webhook 服务
         self.webhook_handler: Optional[WebhookHandler] = None
@@ -116,6 +116,9 @@ class NovaBotPlugin(Star):
 
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag, self.token_monitor)
+
+        # 初始化学习缺口分析器（依赖 RAG）
+        self.gap_analyzer = LearningGapAnalyzer(self.storage, self.rag, self.token_monitor)
 
         logger.info("NovaBot 插件初始化完成 (v0.14.9)")
 
