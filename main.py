@@ -31,7 +31,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.16.0")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.16.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -1169,11 +1169,32 @@ class NovaBotPlugin(Star):
                     return
 
                 answer = arg2
-                success, msg = self.ask_box.answer_question(
+                success, msg, question_info = self.ask_box.answer_question(
                     qid, answer, event.get_sender_id()
                 )
                 if success:
-                    yield event.plain_result(f"✅ {msg}")
+                    # 发送通知给提问者
+                    if question_info and question_info.get("umo"):
+                        try:
+                            from astrbot.api.event import MessageChain
+                            umo = question_info["umo"]
+                            content = question_info.get("content", "")
+                            # 截取问题内容（最多 50 字符）
+                            display_content = content[:50] + "..." if len(content) > 50 else content
+
+                            notify_msg = (
+                                f"📬 你的问题已被回答\n"
+                                f"━━━━━━━━━━━━━━━━━━━━\n"
+                                f"❓ 问题: {display_content}\n"
+                                f"💬 回答: {answer}"
+                            )
+                            chain = MessageChain().message(notify_msg)
+                            await self.context.send_message(umo, chain)
+                            logger.info(f"[AskBox] 已通知提问者: {umo}")
+                        except Exception as e:
+                            logger.error(f"[AskBox] 通知提问者失败: {e}")
+
+                    yield event.plain_result(f"✅ {msg}\n\n📬 已通知提问者")
                 else:
                     yield event.plain_result(f"❌ {msg}")
 

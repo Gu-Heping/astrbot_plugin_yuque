@@ -136,7 +136,7 @@ class AskBoxManager:
         question_id: int,
         answer: str,
         answerer_id: str
-    ) -> tuple[bool, str]:
+    ) -> tuple[bool, str, Optional[dict]]:
         """回答问题
 
         Args:
@@ -145,14 +145,14 @@ class AskBoxManager:
             answerer_id: 回答者 ID
 
         Returns:
-            (success, message)
+            (success, message, question_info) - question_info 包含 umo 和 content，用于发送通知
         """
         self._ensure_loaded()
 
         for question in self._data["questions"]:
             if question.get("id") == question_id:
                 if question.get("status") == "answered":
-                    return False, f"问题 #{question_id} 已被回答"
+                    return False, f"问题 #{question_id} 已被回答", None
 
                 question["status"] = "answered"
                 question["answer"] = answer.strip()
@@ -161,9 +161,14 @@ class AskBoxManager:
                 self._save()
 
                 logger.info(f"[AskBox] 问题 #{question_id} 已回答")
-                return True, f"问题 #{question_id} 已回答"
+                # 返回通知所需的信息
+                info = {
+                    "umo": question.get("umo"),
+                    "content": question.get("content"),
+                }
+                return True, f"问题 #{question_id} 已回答", info
 
-        return False, f"未找到问题 #{question_id}"
+        return False, f"未找到问题 #{question_id}", None
 
     def get_question_by_id(self, question_id: int) -> Optional[dict]:
         """根据 ID 获取问题
