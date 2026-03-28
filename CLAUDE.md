@@ -36,18 +36,32 @@ astrbot_plugin_yuque/
 
 ### 1.3 数据目录
 
-所有持久化数据存放在 `data/nova/` 目录：
+所有持久化数据存放在 `data/plugin_data/astrbot_plugin_yuque/` 目录：
 
 ```
-data/nova/
+data/plugin_data/astrbot_plugin_yuque/
 ├── bindings.json           # 平台-语雀绑定关系
 ├── user_profiles/          # 用户画像
 │   └── {yuque_id}.json
 ├── yuque-members.json      # 团队成员缓存
 ├── yuque_docs/             # 同步的 Markdown 文档
-├── yuque_repos/            # 知识库列表缓存
+├── yuque_repos.json        # 知识库列表缓存
 ├── sync_state.json         # 同步状态
-└── chroma_db/              # RAG 向量库
+├── chroma_db/              # RAG 向量库
+├── doc_index.db            # SQLite 元数据索引
+├── token_logs.json         # Token 消耗日志
+├── search_logs.json        # 搜索日志
+├── subscriptions.json      # 订阅管理
+└── ask_box.json            # 提问箱（v0.16.0+）
+```
+
+**路径获取方式**：使用 AstrBot 官方 API
+
+```python
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
+from pathlib import Path
+
+data_dir = Path(get_astrbot_data_path()) / "plugin_data" / self.name
 ```
 
 ---

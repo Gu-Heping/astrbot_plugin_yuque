@@ -20,6 +20,7 @@ from .weekly import WeeklyReporter, format_weekly_report
 from .search_log import SearchLogger
 from .knowledge_gap import KnowledgeGapAnalyzer, format_gap_report
 from .token_monitor import TokenMonitor
+from .ask_box import AskBoxManager
 from . import tools
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "KnowledgeGapAnalyzer",
     "format_gap_report",
     "TokenMonitor",
+    "AskBoxManager",
     "tools",
 ]

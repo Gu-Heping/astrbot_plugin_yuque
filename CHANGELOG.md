@@ -4,6 +4,17 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.16.0] - 2026-03-28
+
+### 新增
+- **匿名提问箱 `/ask`**：降低提问门槛，支持匿名提问
+  - `/ask <问题>` - 匿名提问（所有用户）
+  - `/askadmin list` - 查看待回答问题（管理员）
+  - `/askadmin answered` - 查看已回答问题（管理员）
+  - `/askadmin answer <ID> <回答>` - 回答问题（管理员）
+  - `/askadmin delete <ID>` - 删除问题（管理员）
+  - `/askadmin stats` - 查看统计（管理员）
+
 ## [v0.15.11] - 2026-03-28
 
 ### 说明

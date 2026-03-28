@@ -23,6 +23,7 @@ from .novabot.weekly import WeeklyReporter
 from .novabot.search_log import SearchLogger
 from .novabot.knowledge_gap import KnowledgeGapAnalyzer
 from .novabot.token_monitor import TokenMonitor
+from .novabot.ask_box import AskBoxManager
 from .novabot.tools import ALL_TOOLS
 
 
@@ -30,7 +31,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.14.9")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.16.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -58,6 +59,7 @@ class NovaBotPlugin(Star):
         self.subscription_manager = SubscriptionManager(self.storage)
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.gap_analyzer = KnowledgeGapAnalyzer(self.storage.data_dir, self.storage.docs_dir)
+        self.ask_box = AskBoxManager(self.storage.data_dir)
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
 
@@ -1092,6 +1094,134 @@ class NovaBotPlugin(Star):
             logger.error(f"获取 Token 统计失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 获取失败: {e}")
 
+    @filter.command("ask")
+    async def ask_cmd(self, event: AstrMessageEvent, question: str = ""):
+        """匿名提问
+
+        用法:
+        - /ask <问题> - 匿名提问
+        """
+        if not question.strip():
+            yield event.plain_result(
+                "📪 匿名提问箱\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "用法: /ask <问题>\n"
+                "\n"
+                "你的问题将被匿名提交，管理员会尽快回答。"
+            )
+            return
+
+        try:
+            umo = event.unified_msg_origin
+            qid, msg = self.ask_box.submit_question(question.strip(), umo)
+            yield event.plain_result(f"✅ 提交成功\n问题 ID: {qid}\n\n管理员将尽快回答，感谢你的提问！")
+        except Exception as e:
+            logger.error(f"提交问题失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 提交失败: {e}")
+
+    @filter.command("askadmin")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def askadmin_cmd(self, event: AstrMessageEvent, action: str = "", arg1: str = "", arg2: str = ""):
+        """提问箱管理（管理员）
+
+        用法:
+        - /askadmin list - 查看待回答问题
+        - /askadmin answered - 查看已回答问题
+        - /askadmin answer <ID> <回答> - 回答问题
+        - /askadmin delete <ID> - 删除问题
+        - /askadmin stats - 统计信息
+        """
+        try:
+            if action.lower() == "list":
+                questions = self.ask_box.get_pending_questions()
+                if not questions:
+                    yield event.plain_result("📭 暂无待回答问题")
+                    return
+                result = self.ask_box.format_questions_list(questions)
+                stats = self.ask_box.get_stats()
+                yield event.plain_result(
+                    f"📬 待回答问题 ({stats['pending']} 条)\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{result}"
+                    f"\n使用 /askadmin answer <ID> <回答> 回答问题"
+                )
+
+            elif action.lower() == "answered":
+                questions = self.ask_box.get_answered_questions()
+                if not questions:
+                    yield event.plain_result("📭 暂无已回答问题")
+                    return
+                result = self.ask_box.format_questions_list(questions, show_answered=True)
+                yield event.plain_result(
+                    f"✅ 已回答问题\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{result}"
+                )
+
+            elif action.lower() == "answer":
+                if not arg1 or not arg2:
+                    yield event.plain_result("用法: /askadmin answer <ID> <回答>")
+                    return
+                try:
+                    qid = int(arg1)
+                except ValueError:
+                    yield event.plain_result("❌ 问题 ID 必须是数字")
+                    return
+
+                answer = arg2
+                success, msg = self.ask_box.answer_question(
+                    qid, answer, event.get_sender_id()
+                )
+                if success:
+                    yield event.plain_result(f"✅ {msg}")
+                else:
+                    yield event.plain_result(f"❌ {msg}")
+
+            elif action.lower() == "delete":
+                if not arg1:
+                    yield event.plain_result("用法: /askadmin delete <ID>")
+                    return
+                try:
+                    qid = int(arg1)
+                except ValueError:
+                    yield event.plain_result("❌ 问题 ID 必须是数字")
+                    return
+
+                success, msg = self.ask_box.delete_question(qid)
+                if success:
+                    yield event.plain_result(f"✅ {msg}")
+                else:
+                    yield event.plain_result(f"❌ {msg}")
+
+            elif action.lower() == "stats":
+                stats = self.ask_box.get_stats()
+                yield event.plain_result(
+                    f"📊 提问箱统计\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"总问题数: {stats['total']}\n"
+                    f"待回答: {stats['pending']}\n"
+                    f"已回答: {stats['answered']}"
+                )
+
+            else:
+                stats = self.ask_box.get_stats()
+                yield event.plain_result(
+                    f"📪 提问箱管理（管理员）\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📊 统计: {stats['pending']} 待回答, {stats['answered']} 已回答\n"
+                    f"\n"
+                    f"指令:\n"
+                    f"  /askadmin list - 查看待回答\n"
+                    f"  /askadmin answered - 查看已回答\n"
+                    f"  /askadmin answer <ID> <回答> - 回答\n"
+                    f"  /askadmin delete <ID> - 删除\n"
+                    f"  /askadmin stats - 统计"
+                )
+
+        except Exception as e:
+            logger.error(f"提问箱管理失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 操作失败: {e}")
+
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
@@ -1136,6 +1266,9 @@ class NovaBotPlugin(Star):
             "📈 分析\n"
             "  /gap - 知识缺口分析\n"
             "  /tokens - Token 消耗统计\n"
+            "\n"
+            "📪 提问箱\n"
+            "  /ask <问题> - 匿名提问\n"
             "\n"
             "  /novabot - 帮助"
         )
