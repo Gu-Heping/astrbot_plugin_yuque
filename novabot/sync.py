@@ -253,6 +253,15 @@ class DocSyncer:
                 logger.error(f"[Sync] 文档同步失败 {title}: {e}")
                 stats["errors"] += 1
 
+            # DOC 类型也可能有子节点，递归处理
+            child_uuid = toc_item.get("child_uuid")
+            if child_uuid:
+                children = toc_list_children(uuid, toc_by_uuid)
+                for child in children:
+                    await self._process_toc_item(
+                        namespace, repo_name, repo_dir, child, parent_path, toc_by_uuid, repo_index, stats
+                    )
+
         elif doc_type == "TITLE":
             # 分组：创建目录，递归处理子节点
             seg = YuqueClient.slug_safe(title)

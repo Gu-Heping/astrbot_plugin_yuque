@@ -6,6 +6,9 @@ __pycache__/
 # Development plans (not for public)
 plans/
 
+# Temp files
+astrbot_plugin_yuque/
+
 # C extensions
 *.so
 
