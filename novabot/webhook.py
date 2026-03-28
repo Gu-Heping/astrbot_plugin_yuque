@@ -682,6 +682,8 @@ class WebhookHandler:
             body = '\n'.join(lines[content_start:]).strip()
 
             book = detail.get("book", {})
+            # 获取创建者 ID
+            creator_id = detail.get("user_id") or detail.get("creator_id")
 
             self.rag.upsert_doc({
                 "id": detail.get("id"),
@@ -691,6 +693,7 @@ class WebhookHandler:
                 "author": self._match_creator_name(detail) or self._resolve_author(detail),
                 "book_name": book.get("name", "") if book else "",
                 "repo_namespace": str(file_path.parent.relative_to(self.docs_dir)),
+                "creator_id": creator_id,  # 创建者 ID
             })
 
             logger.info(f"[Webhook] 更新向量: {detail.get('title', '')}")

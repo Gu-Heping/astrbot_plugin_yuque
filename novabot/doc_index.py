@@ -137,29 +137,61 @@ class DocIndex:
         try:
             conn = self._get_conn()
             now = datetime.now().isoformat()
-            conn.executemany("""
-                INSERT OR REPLACE INTO docs
-                (yuque_id, title, slug, author, book_name, book_namespace,
-                 created_at, updated_at, word_count, file_path, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [
-                (
-                    d.get("yuque_id"),
-                    d.get("title", ""),
-                    d.get("slug", ""),
-                    d.get("author", ""),
-                    d.get("book_name", ""),
-                    d.get("book_namespace", ""),
-                    d.get("created_at", ""),
-                    d.get("updated_at", ""),
-                    d.get("word_count", 0),
-                    d.get("file_path", ""),
-                    now,
-                )
-                for d in docs
-            ])
-            conn.commit()
-            logger.info(f"[DocIndex] 索引了 {len(docs)} 篇文档")
+
+            # 尝试批量插入
+            try:
+                conn.executemany("""
+                    INSERT OR REPLACE INTO docs
+                    (yuque_id, title, slug, author, book_name, book_namespace,
+                     created_at, updated_at, word_count, file_path, indexed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    (
+                        d.get("yuque_id"),
+                        d.get("title", ""),
+                        d.get("slug", ""),
+                        d.get("author", ""),
+                        d.get("book_name", ""),
+                        d.get("book_namespace", ""),
+                        d.get("created_at", ""),
+                        d.get("updated_at", ""),
+                        d.get("word_count", 0),
+                        d.get("file_path", ""),
+                        now,
+                    )
+                    for d in docs
+                ])
+                conn.commit()
+                logger.info(f"[DocIndex] 索引了 {len(docs)} 篇文档")
+            except sqlite3.Error as e:
+                # 批量失败，逐个重试
+                logger.warning(f"[DocIndex] 批量索引失败，逐个重试: {e}")
+                success_count = 0
+                for d in docs:
+                    try:
+                        conn.execute("""
+                            INSERT OR REPLACE INTO docs
+                            (yuque_id, title, slug, author, book_name, book_namespace,
+                             created_at, updated_at, word_count, file_path, indexed_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            d.get("yuque_id"),
+                            d.get("title", ""),
+                            d.get("slug", ""),
+                            d.get("author", ""),
+                            d.get("book_name", ""),
+                            d.get("book_namespace", ""),
+                            d.get("created_at", ""),
+                            d.get("updated_at", ""),
+                            d.get("word_count", 0),
+                            d.get("file_path", ""),
+                            now,
+                        ))
+                        conn.commit()
+                        success_count += 1
+                    except sqlite3.Error as e2:
+                        logger.warning(f"[DocIndex] 索引文档失败: {d.get('title', 'unknown')} - {e2}")
+                logger.info(f"[DocIndex] 逐个索引完成: {success_count}/{len(docs)}")
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 批量添加文档失败: {e}")
 

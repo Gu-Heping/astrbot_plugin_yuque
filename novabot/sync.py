@@ -66,17 +66,41 @@ def toc_list_children(parent_uuid: Optional[str], toc_by_uuid: Dict[str, Dict]) 
 
 
 def _count_chinese_words(text: str) -> int:
-    """统计中文字数（过滤空白字符后的字符数）
+    """统计中文字数（过滤空白字符和 Markdown 语法字符）
 
-    对于中文文档，去掉空格、换行等空白字符后的字符数
+    对于中文文档，去掉空白字符和 Markdown 语法符号后的字符数
     更接近真实的"字数"
     """
     if not text:
         return 0
-    # 过滤空白字符
     import re
-    # 移除所有空白字符（空格、换行、制表符等）
-    cleaned = re.sub(r'\s+', '', text)
+
+    # 1. 移除代码块（```...```）
+    cleaned = re.sub(r'```[\s\S]*?```', '', text)
+    # 2. 移除行内代码（`...`）
+    cleaned = re.sub(r'`[^`]+`', '', cleaned)
+    # 3. 移除图片链接（![alt](url)）
+    cleaned = re.sub(r'!\[.*?\]\(.*?\)', '', cleaned)
+    # 4. 移除链接（[text](url)），保留文本
+    cleaned = re.sub(r'\[([^\]]+)\]\(.*?\)', r'\1', cleaned)
+    # 5. 移除粗体/斜体标记（**text**、*text*、__text__、_text_）
+    cleaned = re.sub(r'\*\*|\*|__|_(?=\w)', '', cleaned)
+    # 6. 移除标题标记（#、##、### 等）
+    cleaned = re.sub(r'^#{1,6}\s*', '', cleaned, flags=re.MULTILINE)
+    # 7. 移除引用标记（>）
+    cleaned = re.sub(r'^>\s*', '', cleaned, flags=re.MULTILINE)
+    # 8. 移除列表标记（-、*、+、1. 等）
+    cleaned = re.sub(r'^[\-\*\+]\s*', '', cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r'^\d+\.\s*', '', cleaned, flags=re.MULTILINE)
+    # 9. 移除删除线（~~text~~）
+    cleaned = re.sub(r'~~', '', cleaned)
+    # 10. 移除表格分隔符（|）
+    cleaned = re.sub(r'\|', '', cleaned)
+    # 11. 移除分隔线（---、***）
+    cleaned = re.sub(r'^[-\*]{3,}\s*$', '', cleaned, flags=re.MULTILINE)
+    # 12. 移除所有空白字符
+    cleaned = re.sub(r'\s+', '', cleaned)
+
     return len(cleaned)
 
 
