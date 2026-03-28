@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.17.4] - 2026-03-28
+
+### 修复
+- **命令消息重复响应**：移除 `@filter.on_llm_request()` 全局钩子
+  - 该钩子导致 AstrBot 默认 LLM 也响应所有消息
+  - NovaBot Agent 已由 `on_message()` 处理非命令消息，无需全局钩子
+  - 解决 `/novabot` 等命令收到两条回复的问题
+
 ## [v0.17.3] - 2026-03-28
 
 ### 修复

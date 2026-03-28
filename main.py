@@ -269,21 +269,9 @@ class NovaBotPlugin(Star):
 
     # ========== LLM 钩子 ==========
 
-    @filter.on_llm_request()
-    async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
-        req.system_prompt += """
-
-你是 NovaBot，NOVA 社团的智能助手。
-
-【回答风格】
-- 有温度，像学习伙伴
-- 回答后追问「还想了解什么？」
-- 标注来源：「根据《文档名》by 作者...」
-
-【指令引导】
-- 用户问「我的画像」→ 引导 /profile
-- 用户要同步知识库 → 引导 /sync
-"""
+    # 注意：不再使用 @filter.on_llm_request() 全局钩子
+    # 因为 NovaBot Agent 已经由 on_message() 处理非命令消息
+    # 全局钩子会导致 AstrBot 默认 LLM 也响应，造成重复回复
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: "LLMResponse"):
@@ -330,7 +318,9 @@ class NovaBotPlugin(Star):
         """
         # 跳过命令消息（以 / 开头），让命令处理器处理
         msg = event.message_str.strip()
+        logger.debug(f"[on_message] 收到消息: '{msg}', startswith('/'): {msg.startswith('/')}")
         if msg.startswith("/"):
+            logger.debug(f"[on_message] 跳过命令消息: {msg}")
             return  # 不调用 stop_event()，让命令继续传播
 
         # 处理非命令消息
