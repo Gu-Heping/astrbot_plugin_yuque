@@ -106,15 +106,23 @@ class LearningGapAnalyzer:
 
         # 6. 搜索社团相关资源（排除用户自己的文档）
         creator_id = self._get_creator_id(yuque_id)
+        binding = self.storage.get_binding_by_yuque_id(yuque_id)
+        author_name = binding.get("yuque_name", "") if binding else ""
+
+        logger.info(f"[GapAnalyzer] 用户: {author_name}, 目标领域: {target_domain}, 用户文档数: {len(user_docs)}")
+
         community_resources = self._search_resources(
             target_domain,
             exclude_author_id=creator_id,
+            exclude_author_name=author_name,
             exclude_titles=[d["title"] for d in user_docs],
         )
+        logger.info(f"[GapAnalyzer] 社团资源（排除用户文档后）: {len(community_resources)} 篇")
         community_resources_text = format_resources_for_path(community_resources)
 
         # 7. 调用 LLM 分析缺口
         prompt = GAP_PROMPT.format(
+            user_name=author_name or "未知用户",
             target_domain=target_domain,
             current_level=current_level,
             interests=", ".join(interests) if interests else "暂无",
@@ -243,6 +251,7 @@ class LearningGapAnalyzer:
         domain: str,
         max_results: int = 15,
         exclude_author_id: Optional[int] = None,
+        exclude_author_name: Optional[str] = None,
         exclude_titles: Optional[list] = None,
     ) -> list:
         """搜索社团相关资源
@@ -251,6 +260,7 @@ class LearningGapAnalyzer:
             domain: 目标领域
             max_results: 最大结果数
             exclude_author_id: 排除的作者 ID
+            exclude_author_name: 排除的作者名
             exclude_titles: 排除的标题列表
 
         Returns:
@@ -264,9 +274,13 @@ class LearningGapAnalyzer:
                 results = self.rag.search(domain, k=max_results * 2)
                 for r in results:
                     title = r.get("title", "")
+                    author = r.get("author", "")
                     author_id = r.get("creator_id")
 
+                    # 通过 ID 或名称排除用户自己的文档
                     if exclude_author_id and author_id == exclude_author_id:
+                        continue
+                    if exclude_author_name and exclude_author_name in author:
                         continue
                     if title in exclude_titles:
                         continue
