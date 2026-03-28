@@ -1205,11 +1205,24 @@ class NovaBotPlugin(Star):
     @filter.command("weekly")
     async def weekly_cmd(self, event: AstrMessageEvent):
         """生成本周知识周报"""
-        docs_dir = self.storage.docs_dir
-        reporter = WeeklyReporter(docs_dir)
-
         try:
-            report = reporter.generate_weekly_report()
+            docs_dir = self.storage.docs_dir
+            reporter = WeeklyReporter(docs_dir)
+
+            # 尝试获取 LLM Provider
+            umo = event.unified_msg_origin
+            prov_id = await self.context.get_current_chat_provider_id(umo)
+
+            if prov_id:
+                prov = self.context.get_provider_by_id(prov_id)
+                report = await reporter.generate_weekly_report_with_llm(
+                    provider=prov,
+                    token_monitor=self.token_monitor,
+                )
+            else:
+                # 无 LLM 时回退到纯统计
+                report = reporter.generate_weekly_report()
+
             yield event.plain_result(report)
         except Exception as e:
             logger.error(f"生成周报失败: {e}", exc_info=True)

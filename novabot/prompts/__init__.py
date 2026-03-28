@@ -8,6 +8,7 @@ from .knowledge_card import CARD_PROMPT
 from .learning_path import PATH_PROMPT, PATH_FALLBACK_PROMPT
 from .push import FIRST_PUSH_PROMPT, UPDATE_PUSH_PROMPT
 from .learning_gap import GAP_PROMPT, GAP_NO_BINDING_PROMPT, GAP_NO_PROFILE_PROMPT, GAP_NO_TARGET_PROMPT
+from .weekly import WEEKLY_INSIGHT_PROMPT
 
 PROMPTS = {
     "profile": PROFILE_PROMPT,
@@ -18,6 +19,7 @@ PROMPTS = {
     "push_first": FIRST_PUSH_PROMPT,
     "push_update": UPDATE_PUSH_PROMPT,
     "learning_gap": GAP_PROMPT,
+    "weekly_insight": WEEKLY_INSIGHT_PROMPT,
 }
 
 __all__ = [
@@ -33,4 +35,5 @@ __all__ = [
     "GAP_NO_BINDING_PROMPT",
     "GAP_NO_PROFILE_PROMPT",
     "GAP_NO_TARGET_PROMPT",
+    "WEEKLY_INSIGHT_PROMPT",
 ]
