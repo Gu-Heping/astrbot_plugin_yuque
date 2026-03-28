@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.18.2] - 2026-03-28
+
+### 修复
+- **Webhook 服务热更新后不启动**：使用延迟启动机制
+  - 热更新时 `on_astrbot_loaded` 不会触发
+  - 现在在 `__init__` 中尝试启动服务
+  - 同时保留 `on_astrbot_loaded` 作为备用触发
+
 ## [v0.18.1] - 2026-03-28
 
 ### 改进

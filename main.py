@@ -77,6 +77,7 @@ class NovaBotPlugin(Star):
         self._webhook_app: Optional[web.Application] = None
         self._webhook_runner: Optional[web.AppRunner] = None
         self._webhook_site: Optional[web.TCPSite] = None
+        self._webhook_started: bool = False  # 标记服务是否已启动
         self._sync_lock = asyncio.Lock()  # 保护同步操作，防止并发
 
         # RAG
@@ -121,12 +122,46 @@ class NovaBotPlugin(Star):
         # 注册 FunctionTool
         self._register_tools()
 
-        # 初始化 Webhook 服务（延迟到 initialize）
+        # 初始化 Webhook 服务
+        # 注意：热更新时 on_astrbot_loaded 不会触发，所以需要延迟启动
+        self._webhook_started = False
         if config.get("webhook_enabled", False):
             logger.info("[Webhook] webhook_enabled=True，初始化 Webhook 服务")
             self._setup_webhook_app()
+            # 尝试立即启动（如果事件循环已运行）
+            self._try_start_webhook()
         else:
             logger.info(f"[Webhook] webhook_enabled={config.get('webhook_enabled', False)}，跳过初始化")
+
+    def _try_start_webhook(self):
+        """尝试启动 Webhook 服务（延迟启动）"""
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._start_webhook_service())
+            logger.info("[Webhook] 已安排启动任务")
+        except RuntimeError:
+            # 事件循环未运行，等待 on_astrbot_loaded 触发
+            logger.info("[Webhook] 事件循环未运行，等待 on_astrbot_loaded 触发")
+
+    async def _start_webhook_service(self):
+        """启动 Webhook 服务"""
+        if self._webhook_started:
+            return
+
+        if not self._webhook_app:
+            return
+
+        port = self.config.get("webhook_port", 8766)
+        try:
+            self._webhook_runner = web.AppRunner(self._webhook_app)
+            await self._webhook_runner.setup()
+            self._webhook_site = web.TCPSite(self._webhook_runner, "0.0.0.0", port)
+            await self._webhook_site.start()
+            self._webhook_started = True
+            logger.info(f"[Webhook] 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
+            logger.info(f"[Webhook] 健康检查: http://0.0.0.0:{port}/health")
+        except Exception as e:
+            logger.error(f"[Webhook] 服务启动失败: {e}", exc_info=True)
 
     def _setup_webhook_app(self):
         """设置 Webhook HTTP 服务"""
@@ -159,23 +194,8 @@ class NovaBotPlugin(Star):
 
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
-        """AstrBot 初始化完成后启动 Webhook 服务"""
-        webhook_enabled = self.config.get("webhook_enabled", False)
-        logger.info(f"[Webhook] webhook_enabled={webhook_enabled}, _webhook_app={'存在' if self._webhook_app else 'None'}")
-
-        if self._webhook_app and webhook_enabled:
-            port = self.config.get("webhook_port", 8766)
-            try:
-                self._webhook_runner = web.AppRunner(self._webhook_app)
-                await self._webhook_runner.setup()
-                self._webhook_site = web.TCPSite(self._webhook_runner, "0.0.0.0", port)
-                await self._webhook_site.start()
-                logger.info(f"[Webhook] 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
-                logger.info(f"[Webhook] 健康检查: http://0.0.0.0:{port}/health")
-            except Exception as e:
-                logger.error(f"[Webhook] 服务启动失败: {e}", exc_info=True)
-        else:
-            logger.warning(f"[Webhook] 服务未启动: webhook_enabled={webhook_enabled}")
+        """AstrBot 初始化完成后启动 Webhook 服务（备用触发）"""
+        await self._start_webhook_service()
 
     async def terminate(self):
         """插件卸载时的清理"""
