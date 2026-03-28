@@ -1302,7 +1302,7 @@ class NovaBotPlugin(Star):
 
         用法:
         - /persona - 查看当前设置
-        - /persona name 小谷 - 设置称呼
+        - /persona name 小明 - 设置称呼
         - /persona tone 活泼 - 设置语气（温和/活泼/严肃/幽默）
         - /persona style 简洁 - 设置回复风格（简洁/详细）
         - /persona formality 正式 - 设置正式程度（轻松/正式）
@@ -1335,7 +1335,7 @@ class NovaBotPlugin(Star):
                 f"• 正式程度：{formality}",
                 "",
                 "💡 修改方式：",
-                "• /persona name 小谷",
+                "• /persona name 小明",
                 "• /persona tone 活泼",
                 "• /persona style 简洁",
                 "• /persona reset - 重置为默认",
