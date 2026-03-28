@@ -6,6 +6,21 @@
 
 ---
 
+## 功能特性
+
+| 功能 | 说明 |
+|------|------|
+| **语雀同步** | 全量同步 + Webhook 实时同步，输出 Markdown + YAML frontmatter |
+| **RAG 检索** | LangChain + ChromaDB 语义搜索，支持关键词精确匹配 |
+| **自然语言交互** | 直接对话即可，AI 自动识别意图调用工具 |
+| **用户画像** | LLM 分析用户文档，生成技术画像和兴趣领域 |
+| **人格定制** | 每个用户可设置称呼、语气、回复风格 |
+| **学习辅助** | 知识卡片、学习路径、伙伴推荐、学习缺口分析 |
+| **智能推送** | LLM 判断变更价值，订阅知识库/作者更新 |
+| **匿名提问** | 降低提问门槛，管理员回答后自动通知 |
+
+---
+
 ## 安装
 
 ```bash
@@ -13,24 +28,56 @@ cd AstrBot/data/plugins
 git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 ```
 
+---
+
 ## 配置
+
+### 核心配置
 
 | 配置项 | 说明 |
 |--------|------|
-| `yuque_token` | 语雀团队 Token |
+| `yuque_token` | 语雀团队 Token（必需） |
 | `yuque_base_url` | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
-| `embedding_api_key` | Embedding API Key |
+| `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
-| `webhook_enabled` | 启用 Webhook 服务（实时同步语雀文档变更） |
-| `webhook_port` | Webhook 服务端口，默认 `8766` |
-| `git_enabled` | 启用 Git 版本控制（保留文档变更历史） |
-| `git_auto_push` | 自动推送到远程仓库（需先配置 git remote） |
-| `push_enabled` | 启用智能推送（文档变更时推送通知给订阅者） |
-| `push_min_diff_chars` | 最小变更字符数（低于此值跳过推送） |
+
+### Webhook 实时同步
+
+| 配置项 | 说明 |
+|--------|------|
+| `webhook_enabled` | 启用 Webhook 服务 |
+| `webhook_port` | 服务端口，默认 `8766` |
+| `webhook_ip_whitelist` | IP 白名单（语雀服务器：`47.96.64.251`） |
+
+### Git 版本控制
+
+| 配置项 | 说明 |
+|--------|------|
+| `git_enabled` | 启用 Git 版本控制（默认 true） |
+| `git_auto_push` | 自动推送到远程仓库 |
+
+### 消息路由
+
+| 配置项 | 说明 |
+|--------|------|
+| `wake_words` | 唤醒词（默认：novabot,nova,诺瓦） |
+| `enable_private_chat` | 私聊直接响应（默认 true） |
+| `enable_group_at` | 群聊 @ 触发（默认 true） |
+
+### 智能推送
+
+| 配置项 | 说明 |
+|--------|------|
+| `push_enabled` | 启用智能推送 |
+| `push_min_diff_chars` | 最小变更字符数 |
 | `push_max_content_len` | 推送内容最大长度 |
 
+---
+
 ## 指令
+
+### 用户指令
 
 | 指令 | 说明 |
 |------|------|
@@ -39,33 +86,64 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/profile` | 查看用户画像 |
 | `/profile refresh` | 刷新用户画像 |
 | `/profile assess <领域>` | 评估某领域掌握程度 |
+| `/persona` | 查看人格设置 |
+| `/persona name/tone/style/formality <值>` | 设置偏好 |
+| `/persona reset` | 重置为默认 |
+| `/partner [主题]` | 伙伴推荐 |
+| `/path <领域>` | 学习路径推荐 |
+| `/card <主题>` | 生成知识卡片 |
+| `/gap [领域]` | 学习缺口分析 |
+| `/subscribe` | 查看订阅 |
+| `/subscribe repo/author/all` | 订阅更新 |
+| `/unsubscribe <ID>` | 取消订阅 |
+| `/ask <问题>` | 匿名提问 |
+| `/novabot` | 帮助信息 |
+
+### 管理员指令
+
+| 指令 | 说明 |
+|------|------|
 | `/sync` | 同步知识库 |
 | `/sync status` | 查看同步状态 |
 | `/sync members` | 同步团队成员 |
 | `/sync clean` | 清理孤儿目录 |
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
-| `/partner [主题]` | 伙伴推荐 |
-| `/path <领域>` | 学习路径推荐 |
-| `/subscribe` | 查看订阅 |
-| `/subscribe repo <知识库名>` | 订阅知识库更新 |
-| `/subscribe author <作者名>` | 订阅作者更新 |
-| `/subscribe all` | 订阅全部更新 |
-| `/unsubscribe <ID>` | 取消订阅 |
 | `/webhook` | Webhook 服务状态 |
-| `/persona` | 查看人格设置 |
-| `/persona name <称呼>` | 设置称呼偏好 |
-| `/persona tone <语气>` | 设置语气（温和/活泼/严肃/幽默） |
-| `/persona style <风格>` | 设置回复风格（简洁/详细） |
-| `/persona formality <程度>` | 设置正式程度（轻松/正式） |
-| `/persona reset` | 重置为默认设置 |
-| `/novabot` | 帮助信息 |
+| `/askadmin list/answered/answer/delete/stats` | 提问箱管理 |
+| `/weekly` | 本周知识周报 |
+| `/tokens` | Token 消耗统计 |
+
+---
+
+## 自然语言交互
+
+NovaBot 支持直接对话，无需记忆指令：
+
+```
+用户: 帮我找爬虫教程
+NovaBot: 我帮你找到了几篇爬虫相关的文档...
+
+用户: 张三写过哪些文档
+NovaBot: 张三共写了 12 篇文档，主要涉及...
+
+用户: 叫我小谷
+NovaBot: 好的，小谷！有什么需要帮忙的？
+
+用户: 说话活泼一点
+NovaBot: 好嘞～以后会更活泼地和你聊天！
+```
+
+### 触发方式
+
+- **私聊**：直接发消息即可（可配置关闭）
+- **群聊**：需要 @NovaBot 或使用唤醒词（如 `nova 帮我找文档`）
+
+---
 
 ## Webhook 配置
 
-启用 Webhook 后，语雀文档变更将实时同步到本地，无需手动 `/sync`。
-
-### 配置步骤
+启用 Webhook 后，语雀文档变更实时同步到本地：
 
 1. 在 AstrBot 管理面板启用 `webhook_enabled`
 2. 设置 `webhook_port`（默认 8766）
@@ -88,22 +166,17 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
    Git commit（可选）
 ```
 
-### Git 版本控制
-
-启用 `git_enabled` 后，每次文档变更自动提交到本地 Git 仓库，保留完整历史。
-
-如需推送到远程仓库：
-1. 进入 `data/nova/yuque_docs/` 目录
-2. 执行 `git remote add origin <repo-url>`
-3. 在配置中启用 `git_auto_push`
+---
 
 ## 使用流程
 
 ```
-1. 管理员配置 yuque_token
+1. 管理员配置 yuque_token + embedding_api_key
 2. 管理员: /sync members
-3. 用户: /bind <用户名>
-4. 用户: /sync
+3. 管理员: /sync
+4. 用户: /bind <用户名>
+5. 用户: /profile refresh（生成画像）
+6. 用户: 直接对话或使用指令
 ```
 
 ---
@@ -111,84 +184,40 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 ## 数据存储
 
 ```
-data/nova/
+data/plugin_data/astrbot_plugin_yuque/
 ├── bindings.json           # 用户绑定关系
-├── user_profiles/          # 用户画像
+├── user_profiles/          # 用户画像（含偏好）
 ├── yuque-members.json      # 团队成员缓存
 ├── yuque_repos.json        # 知识库列表
 ├── subscriptions.json      # 订阅关系
-├── last_push.json          # 推送记录（文档ID→commit）
-├── yuque_docs/             # 同步的 Markdown 文档
-│   ├── .yuque-id-to-path.json  # 文档 ID→路径 索引
-│   └── <知识库名>/
-│       ├── .toc.json       # 目录结构
-│       └── *.md            # 文档文件
+├── ask_box.json            # 提问箱
+├── token_logs.json         # Token 消耗日志
+├── search_logs.json        # 搜索日志
+├── yuque_docs/             # Markdown 文档
+│   ├── .yuque-id-to-path.json
+│   └── <知识库名>/*.md
 ├── doc_index.db            # SQLite 元数据索引
 └── chroma_db/              # RAG 向量数据库
 ```
-
-**注意**：删除 `data/nova/` 目录可完全卸载数据。
 
 ---
 
 ## AI 工具
 
-NovaBot 为 AI 提供以下工具（AI 可自动调用）：
+NovaBot 为 AI 提供以下工具（自动调用）：
 
-### 搜索类
-
-| 工具 | 功能 | 适用场景 |
-|------|------|----------|
-| `grep_local_docs` | 关键词精确搜索 | 查找特定代码、配置、名称 |
-| `search_knowledge_base` | 语义搜索 | 概念性查询、模糊匹配 |
-| `read_doc` | 读取完整文档 | grep 后深入了解 |
-
-### 元数据类
-
-| 工具 | 功能 | 适用场景 |
-|------|------|----------|
-| `search_docs` | 按作者/知识库/标题搜索 | 查看某人的所有文档 |
-| `list_authors` | 列出所有作者 | 谁写的最多 |
-| `doc_stats` | 文档统计 | 总文档数、总字数 |
-| `list_knowledge_bases` | 列出知识库 | 了解有哪些知识库 |
-| `list_repo_docs` | 列出知识库结构 | 了解知识库目录 |
-
-### 人格管理
-
-| 工具 | 功能 | 适用场景 |
-|------|------|----------|
-| `set_preference` | 设置用户偏好 | 用户说"叫我小谷"、"说话活泼点"时自动调用 |
-
-### 推荐搜索流程
-
-```
-1. list_knowledge_bases → 看有哪些知识库
-2. search_docs(author="谷和平") → 按元数据筛选
-3. grep_local_docs(keyword="madoka", repo_filter="madoka") → 精确搜索
-4. read_doc(path) → 读取完整内容
-```
-
----
-
-## 数据存储说明
-
-### 双重存储
-
-NovaBot 维护两套数据：
-
-| 数据 | Markdown 文件 | SQLite 索引 |
-|------|--------------|-------------|
-| 内容 | ✅ 完整正文 | ❌ 不存储 |
-| 元数据 | ✅ YAML frontmatter | ✅ 结构化索引 |
-| 用途 | 人类阅读、版本控制 | 高效元数据查询 |
-
-**同步时自动同步**：写入 Markdown → 提取 frontmatter → 更新 SQLite
-
-### 时区
-
-- 所有时间存储为 `Asia/Shanghai` 时区
-- 格式：`YYYY-MM-DD HH:MM:SS`
-- 来源：语雀 API 返回的 UTC 时间自动转换
+| 工具 | 功能 |
+|------|------|
+| `search_knowledge_base` | RAG 语义搜索 |
+| `grep_local_docs` | 关键词精确匹配 |
+| `read_doc` | 读取完整文档 |
+| `search_docs` | 按作者/知识库/标题筛选 |
+| `list_authors` | 列出所有作者 |
+| `list_knowledge_bases` | 列出知识库 |
+| `list_repo_docs` | 知识库目录结构 |
+| `doc_stats` | 文档统计 |
+| `generate_knowledge_card` | 生成知识卡片 |
+| `set_preference` | 设置用户偏好 |
 
 ---
 
@@ -196,27 +225,26 @@ NovaBot 维护两套数据：
 
 ```
 astrbot_plugin_yuque/
-├── main.py              # 主入口（插件类 + 指令处理）
+├── main.py              # 主入口
 ├── novabot/
-│   ├── __init__.py
-│   ├── rag.py           # RAG 检索引擎
-│   ├── yuque_client.py  # 语雀 API 客户端
+│   ├── rag.py           # RAG 检索
+│   ├── agent.py         # Agent 对话处理
+│   ├── yuque_client.py  # 语雀 API
 │   ├── sync.py          # 文档同步
 │   ├── storage.py       # 数据存储
-│   ├── doc_index.py     # SQLite 元数据索引
-│   ├── profile.py       # 用户画像生成
+│   ├── doc_index.py     # SQLite 索引
+│   ├── profile.py       # 用户画像
 │   ├── partner.py       # 伙伴推荐
-│   ├── knowledge_card.py # 知识卡片生成
-│   ├── learning_path.py # 学习路径推荐
+│   ├── knowledge_card.py# 知识卡片
+│   ├── learning_path.py # 学习路径
+│   ├── knowledge_gap.py # 学习缺口
 │   ├── subscribe.py     # 订阅管理
 │   ├── push_notifier.py # 智能推送
-│   ├── webhook.py       # Webhook 处理器
-│   ├── git_ops.py       # Git 操作封装
+│   ├── webhook.py       # Webhook 处理
+│   ├── git_ops.py       # Git 操作
 │   └── tools/           # LLM 工具
-│       ├── search.py    # 搜索工具
-│       └── metadata.py  # 元数据工具
-├── metadata.yaml        # 插件元数据
-└── requirements.txt     # Python 依赖
+├── metadata.yaml
+└── requirements.txt
 ```
 
 ---
@@ -225,18 +253,15 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
-| v0.19.0 | 人格管理系统（用户定制称呼、语气、回复风格） |
-| v0.18.0 | 消息路由系统（唤醒词、@触发、私聊响应） |
-| v0.13.0 | 伙伴推荐、知识卡片、学习路径、智能推送订阅 |
-| v0.12.x | 安全修复、依赖兼容、架构改进 |
+| v0.19.0 | 人格管理系统（称呼、语气、风格定制） |
+| v0.18.0 | 消息路由（唤醒词、@触发）、学习缺口分析 |
+| v0.17.0 | 自然语言交互（Agent 对话） |
+| v0.16.0 | 匿名提问箱 |
+| v0.14.0 | 周报生成、Token 监控 |
+| v0.13.0 | 伙伴推荐、知识卡片、学习路径、智能推送 |
 | v0.11.0 | Webhook 实时同步、Git 版本控制 |
-| v0.10.0 | 元数据索引（SQLite）、按作者/知识库查询 |
-| v0.9.x | grep 优化、read_doc 工具、孤儿文件清理 |
+| v0.10.0 | 元数据索引（SQLite） |
 | v0.8.0 | LLM 工具调用、Agentic RAG |
-| v0.7.0 | LLM 用户画像、主动触发 |
-| v0.5.0 | 代码重构、后台同步 |
-| v0.4.0 | Markdown + frontmatter 同步 |
 | v0.2.0 | 内置同步 + RAG |
-| v0.1.0 | 初始版本 |
 
 详见 [CHANGELOG.md](./CHANGELOG.md)。
