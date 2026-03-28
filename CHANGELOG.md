@@ -4,6 +4,22 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.11] - 2026-03-28
+
+### 说明
+- **流式输出下 chat token 统计不可用**：AstrBot 流式输出模式下 `usage` 为 None
+  - 这是 AstrBot 的已知限制，非插件 bug
+  - 非流式输出模式下可正常统计
+
+### 修复
+- **SQLite 迁移顺序错误**：先检查列是否存在再创建索引
+  - 解决 "no such column: creator_id" 错误
+
+## [v0.15.10] - 2026-03-28
+
+### 说明
+- 调试版本，用于定位 chat token 统计问题
+
 ## [v0.15.9] - 2026-03-28
 
 ### 修复

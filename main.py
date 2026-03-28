@@ -283,20 +283,14 @@ class NovaBotPlugin(Star):
 
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, resp: "LLMResponse"):
-        """记录正常聊天的 token 使用"""
-        try:
-            # 检查是否是流式输出的最后一个 chunk
-            is_chunk = getattr(resp, "is_chunk", False)
-            logger.info(f"[LLM] is_chunk: {is_chunk}")
+        """记录正常聊天的 token 使用
 
-            # 从 raw_completion.usage 获取 token 使用量
+        注意：流式输出模式下 usage 为 None，无法记录 token。
+        这是 AstrBot 的已知限制。
+        """
+        try:
             input_tokens = 0
             output_tokens = 0
-
-            # 调试：打印所有 usage 来源
-            logger.info(f"[LLM] resp.usage: {getattr(resp, 'usage', 'N/A')}")
-            if hasattr(resp, "raw_completion") and resp.raw_completion:
-                logger.info(f"[LLM] raw_completion.usage: {getattr(resp.raw_completion, 'usage', 'N/A')}")
 
             # 尝试从 resp.usage 获取
             if hasattr(resp, "usage") and resp.usage:
@@ -318,8 +312,6 @@ class NovaBotPlugin(Star):
                     output_tokens=output_tokens,
                 )
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
-            else:
-                logger.debug(f"[LLM] 无法获取 token 使用量（流式输出限制）")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
