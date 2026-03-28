@@ -223,12 +223,18 @@ class Storage:
 
     # ========== 用户偏好（人格管理） ==========
 
+    # 偏好验证常量
+    VALID_TONES = ["温和", "活泼", "严肃", "幽默"]
+    VALID_STYLES = ["简洁", "详细"]
+    VALID_FORMALITIES = ["轻松", "正式"]
+    VALID_PREFERENCE_KEYS = ["name", "tone", "style", "formality"]
+
     # 默认偏好
     DEFAULT_PREFERENCES = {
         "name": "",           # 称呼偏好
-        "tone": "温和",       # 语气：温和/活泼/严肃/幽默
-        "style": "详细",      # 回复风格：简洁/详细
-        "formality": "轻松",  # 正式程度：轻松/正式
+        "tone": "温和",       # 语气
+        "style": "详细",      # 回复风格
+        "formality": "轻松",  # 正式程度
     }
 
     def load_preferences(self, yuque_id) -> dict:
@@ -273,15 +279,14 @@ class Storage:
             是否更新成功
         """
         # 验证偏好键
-        valid_keys = ["name", "tone", "style", "formality"]
-        if key not in valid_keys:
+        if key not in self.VALID_PREFERENCE_KEYS:
             return False
 
         # 验证偏好值
         valid_values = {
-            "tone": ["温和", "活泼", "严肃", "幽默"],
-            "style": ["简洁", "详细"],
-            "formality": ["轻松", "正式"],
+            "tone": self.VALID_TONES,
+            "style": self.VALID_STYLES,
+            "formality": self.VALID_FORMALITIES,
             "name": None,  # name 可以是任意字符串
         }
 

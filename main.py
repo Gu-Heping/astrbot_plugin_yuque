@@ -1306,6 +1306,7 @@ class NovaBotPlugin(Star):
         - /persona tone 活泼 - 设置语气（温和/活泼/严肃/幽默）
         - /persona style 简洁 - 设置回复风格（简洁/详细）
         - /persona formality 正式 - 设置正式程度（轻松/正式）
+        - /persona reset - 重置为默认设置
         """
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
@@ -1337,8 +1338,15 @@ class NovaBotPlugin(Star):
                 "• /persona name 小谷",
                 "• /persona tone 活泼",
                 "• /persona style 简洁",
+                "• /persona reset - 重置为默认",
             ]
             yield event.plain_result("\n".join(lines))
+            return
+
+        # 重置偏好
+        if action == "reset":
+            self.storage.save_preferences(yuque_id, Storage.DEFAULT_PREFERENCES.copy())
+            yield event.plain_result("✅ 已重置为默认设置")
             return
 
         # 设置偏好

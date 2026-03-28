@@ -327,13 +327,18 @@ class NovaBotAgent:
                 "正式": "使用书面语，保持礼貌",
             }
 
+            # 构建偏好提示
+            pref_lines = []
+            if name:
+                pref_lines.append(f"- 称呼：{name}（请用这个称呼叫用户）")
+            pref_lines.append(f"- 语气：{tone} - {tone_guide.get(tone, '')}")
+            pref_lines.append(f"- 回复风格：{style} - {style_guide.get(style, '')}")
+            pref_lines.append(f"- 正式程度：{formality} - {formality_guide.get(formality, '')}")
+
             prompt += f"""
 
 【用户偏好设置】
-- 称呼：{name or '用户'}（请用这个称呼叫用户）
-- 语气：{tone} - {tone_guide.get(tone, '')}
-- 回复风格：{style} - {style_guide.get(style, '')}
-- 正式程度：{formality} - {formality_guide.get(formality, '')}
+{chr(10).join(pref_lines)}
 
 请根据用户偏好调整你的回复方式。"""
 

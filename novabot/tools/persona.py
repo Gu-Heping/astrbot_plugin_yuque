@@ -9,6 +9,7 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .base import BaseTool
+from ..storage import Storage
 
 
 @dataclass
@@ -62,11 +63,11 @@ class SetPreferenceTool(BaseTool):
         if preference_type not in valid_types:
             return f"未知的偏好类型：{preference_type}。可选：{', '.join(valid_types.keys())}"
 
-        # 验证偏好值
+        # 验证偏好值（使用 Storage 常量）
         valid_values = {
-            "tone": ["温和", "活泼", "严肃", "幽默"],
-            "style": ["简洁", "详细"],
-            "formality": ["轻松", "正式"],
+            "tone": Storage.VALID_TONES,
+            "style": Storage.VALID_STYLES,
+            "formality": Storage.VALID_FORMALITIES,
         }
 
         if preference_type in valid_values:
@@ -80,30 +81,6 @@ class SetPreferenceTool(BaseTool):
 
         logger.info(f"[SetPreference] 用户 {binding.get('yuque_name')} 设置 {preference_type} = {value}")
 
-        # 获取更新后的称呼
-        prefs = self.plugin.storage.load_preferences(yuque_id)
-        name = prefs.get("name", "")
-
-        # 根据偏好类型返回不同的确认消息
-        if preference_type == "name":
-            return f"好的，{name}，我记住了！"
-        elif preference_type == "tone":
-            tone_responses = {
-                "温和": f"好的{name}，我会用温和的语气和你聊天。",
-                "活泼": f"好嘞～{name}，以后会更活泼地和你聊天！",
-                "严肃": f"明白了，{name}。我会用更专业的方式回复。",
-                "幽默": f"收到，{name}！以后我会更风趣一些～",
-            }
-            return tone_responses.get(value, f"已设置语气为{value}")
-        elif preference_type == "style":
-            if value == "简洁":
-                return f"收到，{name}，简洁一点。"
-            else:
-                return f"好的，{name}，我会详细说明。"
-        elif preference_type == "formality":
-            if value == "轻松":
-                return f"好嘞{name}，轻松一点～"
-            else:
-                return f"明白了，{name}。我会保持正式。"
-
-        return f"已设置{valid_types[preference_type]}为{value}"
+        # 返回简洁结果，让 Agent 生成友好的确认
+        type_name = valid_types[preference_type]
+        return f"已更新{type_name}为「{value}」"
