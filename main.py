@@ -21,7 +21,7 @@ from .novabot.subscribe import SubscriptionManager, format_subscription_list
 from .novabot.push_notifier import PushNotifier
 from .novabot.weekly import WeeklyReporter
 from .novabot.search_log import SearchLogger
-from .novabot.knowledge_gap import KnowledgeGapAnalyzer
+from .novabot.knowledge_gap import LearningGapAnalyzer, format_gap_report
 from .novabot.token_monitor import TokenMonitor
 from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
@@ -65,7 +65,7 @@ class NovaBotPlugin(Star):
         self.partner_matcher = PartnerMatcher(self.storage)
         self.subscription_manager = SubscriptionManager(self.storage)
         self.search_logger = SearchLogger(self.storage.data_dir)
-        self.gap_analyzer = KnowledgeGapAnalyzer(self.storage.data_dir, self.storage.docs_dir)
+        self.gap_analyzer = LearningGapAnalyzer(self.storage, self.rag, self.token_monitor)
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
         self.client: Optional[YuqueClient] = None
@@ -1213,14 +1213,49 @@ class NovaBotPlugin(Star):
             yield event.plain_result(f"❌ 生成周报失败: {e}")
 
     @filter.command("gap")
-    async def gap_cmd(self, event: AstrMessageEvent):
-        """分析知识缺口"""
+    async def gap_cmd(self, event: AstrMessageEvent, target_domain: str = ""):
+        """分析个人学习缺口
+
+        用法: /gap [目标领域]
+        例如: /gap 爬虫
+        如果不指定领域，会根据用户画像自动推断
+        """
         try:
-            analysis = self.gap_analyzer.analyze_gaps()
-            report = self.gap_analyzer.format_gap_report(analysis)
-            yield event.plain_result(report)
+            # 检查用户是否绑定
+            platform_id = event.get_sender_id()
+            binding = self.storage.get_binding(platform_id)
+
+            if not binding:
+                yield event.plain_result(
+                    "❌ 请先绑定语雀账号\n"
+                    "使用 /bind <语雀用户名> 绑定后，才能分析你的学习缺口。"
+                )
+                return
+
+            yuque_id = binding.get("yuque_id")
+            if not yuque_id:
+                yield event.plain_result("❌ 绑定信息异常，请重新绑定")
+                return
+
+            # 获取 LLM Provider
+            provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+            if not provider:
+                yield event.plain_result("❌ LLM 未配置，无法分析")
+                return
+
+            yield event.plain_result("📊 正在分析你的学习缺口...")
+
+            # 执行分析
+            gap = await self.gap_analyzer.analyze(
+                yuque_id=yuque_id,
+                target_domain=target_domain or None,
+                provider=provider,
+            )
+
+            yield event.plain_result(format_gap_report(gap))
+
         except Exception as e:
-            logger.error(f"知识缺口分析失败: {e}", exc_info=True)
+            logger.error(f"学习缺口分析失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 分析失败: {e}")
 
     @filter.command("card")

@@ -71,6 +71,21 @@ class Storage:
         bindings = self.load_bindings()
         return bindings.get(platform_id)
 
+    def get_binding_by_yuque_id(self, yuque_id: str) -> Optional[dict]:
+        """通过语雀 ID 获取绑定信息
+
+        Args:
+            yuque_id: 语雀用户 ID
+
+        Returns:
+            绑定信息字典，包含 platform_id, yuque_name 等
+        """
+        bindings = self.load_bindings()
+        for platform_id, binding in bindings.items():
+            if binding.get("yuque_id") == yuque_id:
+                return {"platform_id": platform_id, **binding}
+        return None
+
     def add_binding(self, platform_id: str, yuque_info: dict):
         bindings = self.load_bindings()
         bindings[platform_id] = {

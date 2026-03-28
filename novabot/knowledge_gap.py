@@ -1,228 +1,366 @@
 """
-NovaBot 知识缺口分析
-直接分析文档分布，识别知识盲区
+NovaBot 学习缺口分析模块
+分析用户个人学习中的知识缺口
 """
 
-from datetime import datetime
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 
-from .doc_index import DocIndex
+from .llm_utils import call_llm, format_resources_for_path
+from .prompts import GAP_PROMPT, GAP_NO_BINDING_PROMPT, GAP_NO_PROFILE_PROMPT, GAP_NO_TARGET_PROMPT
+from .token_monitor import FEATURE_LEARNING_PATH
+
+if TYPE_CHECKING:
+    from .rag import RAGEngine
+    from .storage import Storage
+    from .doc_index import DocIndex
+    from .token_monitor import TokenMonitor
 
 
-# 预设的技术领域关键词映射
-DOMAIN_KEYWORDS = {
-    "Python": ["python", "py", "pip", "venv", "virtualenv", "django", "flask", "fastapi"],
-    "爬虫": ["爬虫", "spider", "crawler", "scrapy", "requests", "selenium", "beautifulsoup"],
-    "机器学习": ["机器学习", "ml", "machine learning", "sklearn", "scikit-learn", "模型训练"],
-    "深度学习": ["深度学习", "dl", "deep learning", "神经网络", "pytorch", "tensorflow", "keras", "cnn", "rnn", "gan"],
-    "LLM/AI": ["llm", "ai", "gpt", "chatgpt", "agent", "提示词", "prompt", "大模型", "claude", "embedding", "rag"],
-    "前端": ["前端", "react", "vue", "html", "css", "javascript", "js", "ts", "typescript", "webpack", "vite", "node"],
-    "后端": ["后端", "django", "flask", "fastapi", "api", "restful", "数据库", "mysql", "postgresql", "redis", "mongodb"],
-    "Git": ["git", "github", "版本控制", "commit", "branch", "merge", "pull request", "pr"],
-    "Docker/运维": ["docker", "容器", "k8s", "kubernetes", "运维", "linux", "shell", "bash", "nginx", "部署"],
-    "算法": ["算法", "algorithm", "排序", "搜索", "动态规划", "贪心", "递归", "leetcode", "复杂度"],
-    "数据分析": ["数据分析", "pandas", "numpy", "可视化", "matplotlib", "seaborn", "excel", "表格"],
-    "Java": ["java", "spring", "jvm", "maven", "gradle", "mybatis", "tomcat"],
-    "Go": ["go", "golang", "goroutine", "channel", "go mod"],
-    "Rust": ["rust", "cargo", "rustc"],
-    "C/C++": ["c++", "cpp", "c语言", "指针", "内存", "gcc", "clang"],
-    "移动开发": ["android", "ios", "flutter", "react native", "kotlin", "swift", "移动端"],
-    "游戏开发": ["游戏", "game", "unity", "unreal", "godot", "游戏开发"],
-    "数学/建模": ["数学", "建模", "数学建模", "线性代数", "概率", "统计", "微积分", "matlab"],
-    "学术写作": ["论文", "学术", "写作", "latex", "文献", "引用", "答辩"],
-    "产品/运营": ["产品", "运营", "pm", "用户研究", "需求", "axure", "原型"],
-}
+class LearningGapAnalyzer:
+    """学习缺口分析器
 
-
-class KnowledgeGapAnalyzer:
-    """知识缺口分析器
-
-    直接分析文档分布，识别：
-    - 哪些技术领域文档不足
-    - 哪些领域完全没有覆盖
-    - 知识补充建议
+    分析用户个人学习中的知识缺口：
+    - 用户想学的 vs 用户已掌握的
+    - 结合社团知识库，找出缺少的知识点
+    - 给出补充建议
     """
 
-    def __init__(self, data_dir: Path, docs_dir: Path):
-        self.data_dir = Path(data_dir)
-        self.docs_dir = Path(docs_dir)
-        self.doc_index = DocIndex(self.data_dir / "doc_index.db")
+    def __init__(
+        self,
+        storage: "Storage",
+        rag: Optional["RAGEngine"] = None,
+        token_monitor: Optional["TokenMonitor"] = None,
+    ):
+        self.storage = storage
+        self.rag = rag
+        self.token_monitor = token_monitor
 
-    def analyze_gaps(self) -> dict:
-        """分析知识缺口
+        # 初始化 DocIndex
+        from .doc_index import DocIndex
+        self.doc_index = DocIndex(storage.data_dir / "doc_index.db")
+
+    async def analyze(
+        self,
+        yuque_id: str,
+        target_domain: Optional[str] = None,
+        provider=None,
+    ) -> dict:
+        """分析用户学习缺口
+
+        Args:
+            yuque_id: 语雀用户 ID
+            target_domain: 目标领域（可选，不指定则自动推断）
+            provider: LLM Provider
 
         Returns:
-            {
-                "domain_coverage": dict,
-                "gaps": list[dict],
-                "doc_stats": dict,
-                "analysis_time": str,
+            缺口分析结果字典
+        """
+        # 1. 获取用户画像
+        profile = self.storage.load_profile(yuque_id)
+        if not profile:
+            return {
+                "error": "需要生成画像",
+                "message": "使用 /profile refresh 生成用户画像后，才能分析学习缺口。"
             }
-        """
-        result = {
-            "domain_coverage": {},
-            "gaps": [],
-            "doc_stats": {},
-            "analysis_time": datetime.now().isoformat(),
-        }
 
-        # 获取文档统计
-        result["doc_stats"] = self.doc_index.get_stats()
+        profile_data = profile.get("profile", {})
+        interests = profile_data.get("interests", [])
+        skills = profile_data.get("skills", {})
+        level = profile_data.get("level", "beginner")
 
-        # 分析各领域覆盖情况
-        coverage = self._analyze_domain_coverage()
-        result["domain_coverage"] = coverage
+        # 2. 获取用户已写文档
+        user_docs = self._get_user_docs(yuque_id)
+        user_docs_text = self._format_user_docs(user_docs)
 
-        # 识别缺口
-        result["gaps"] = self._identify_gaps(coverage)
+        # 3. 如果没有指定目标领域，需要先推断
+        if not target_domain:
+            if not interests:
+                return {
+                    "error": "无法推断目标",
+                    "message": "你的画像中没有兴趣领域，请指定目标领域：/gap <领域>"
+                }
 
-        return result
+            # 让 LLM 推断最值得分析的目标领域
+            try:
+                suggest_result = await call_llm(
+                    provider=provider,
+                    prompt=GAP_NO_TARGET_PROMPT.format(interests=", ".join(interests)),
+                    require_json=True,
+                )
+                target_domain = suggest_result.get("suggested_target", interests[0])
+                logger.info(f"[GapAnalyzer] 推断目标领域: {target_domain}")
+            except Exception as e:
+                logger.warning(f"[GapAnalyzer] 推断目标失败: {e}, 使用第一个兴趣")
+                target_domain = interests[0]
 
-    def _analyze_domain_coverage(self) -> dict:
-        """分析各技术领域的文档覆盖情况
+        # 4. 获取用户在目标领域的水平
+        current_level = self._get_domain_level(skills, target_domain, level)
 
-        Returns:
-            {domain: {"doc_count": int, "word_count": int, "docs": list}}
-        """
-        coverage = {}
+        # 5. 获取已掌握技能
+        mastered_skills = [
+            skill for skill, lvl in skills.items()
+            if lvl in ("intermediate", "advanced")
+        ]
+
+        # 6. 搜索社团相关资源（排除用户自己的文档）
+        creator_id = self._get_creator_id(yuque_id)
+        community_resources = self._search_resources(
+            target_domain,
+            exclude_author_id=creator_id,
+            exclude_titles=[d["title"] for d in user_docs],
+        )
+        community_resources_text = format_resources_for_path(community_resources)
+
+        # 7. 调用 LLM 分析缺口
+        prompt = GAP_PROMPT.format(
+            target_domain=target_domain,
+            current_level=current_level,
+            interests=", ".join(interests) if interests else "暂无",
+            mastered_skills=", ".join(mastered_skills) if mastered_skills else "暂无",
+            user_docs=user_docs_text,
+            community_resources=community_resources_text,
+        )
 
         try:
-            # 获取所有文档标题
-            conn = self.doc_index._get_conn()
-            rows = conn.execute("""
-                SELECT title, word_count, book_name, author
-                FROM docs
-                WHERE title != ''
-            """).fetchall()
-
-            for row in rows:
-                title = row["title"] or ""
-                word_count = row["word_count"] or 0
-                book_name = row["book_name"] or ""
-
-                # 检查标题是否属于某个领域
-                title_lower = title.lower()
-                for domain, keywords in DOMAIN_KEYWORDS.items():
-                    for kw in keywords:
-                        if kw.lower() in title_lower:
-                            if domain not in coverage:
-                                coverage[domain] = {
-                                    "doc_count": 0,
-                                    "word_count": 0,
-                                    "docs": []
-                                }
-                            coverage[domain]["doc_count"] += 1
-                            coverage[domain]["word_count"] += word_count
-                            coverage[domain]["docs"].append({
-                                "title": title,
-                                "book": book_name,
-                                "words": word_count
-                            })
-                            break  # 一个文档只属于一个领域
-
-            # 按文档数排序
-            coverage = dict(sorted(
-                coverage.items(),
-                key=lambda x: x[1]["doc_count"],
-                reverse=True
-            ))
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个学习诊断专家，善于分析知识缺口并给出补充建议。",
+                require_json=True,
+                token_monitor=self.token_monitor,
+                feature=FEATURE_LEARNING_PATH,
+            )
+            result["target_domain"] = target_domain
+            result["current_level"] = current_level
+            return result
 
         except Exception as e:
-            logger.error(f"[GapAnalyzer] 分析领域覆盖失败: {e}")
+            logger.error(f"[GapAnalyzer] 分析失败: {e}")
+            return {
+                "target_domain": target_domain,
+                "error": f"分析失败: {e}"
+            }
 
-        return coverage
-
-    def _identify_gaps(self, coverage: dict) -> list[dict]:
-        """识别知识缺口
-
-        Args:
-            coverage: 领域覆盖数据
-
-        Returns:
-            [{"domain": str, "status": str, "priority": str, "reason": str}, ...]
-        """
-        gaps = []
-        total_docs = sum(c["doc_count"] for c in coverage.values())
-
-        for domain in DOMAIN_KEYWORDS.keys():
-            if domain not in coverage:
-                # 完全没有覆盖
-                gaps.append({
-                    "domain": domain,
-                    "status": "缺失",
-                    "priority": "高",
-                    "doc_count": 0,
-                    "word_count": 0,
-                    "reason": "完全没有相关文档"
-                })
-            elif coverage[domain]["doc_count"] < 3:
-                # 文档太少
-                gaps.append({
-                    "domain": domain,
-                    "status": "不足",
-                    "priority": "中",
-                    "doc_count": coverage[domain]["doc_count"],
-                    "word_count": coverage[domain]["word_count"],
-                    "reason": f"仅有 {coverage[domain]['doc_count']} 篇文档"
-                })
-
-        # 按优先级排序
-        priority_order = {"高": 0, "中": 1, "低": 2}
-        gaps.sort(key=lambda x: priority_order.get(x["priority"], 3))
-
-        return gaps
-
-    def format_gap_report(self, analysis: dict) -> str:
-        """格式化缺口分析报告
+    def _get_user_docs(self, yuque_id: str) -> list:
+        """获取用户已写的文档列表
 
         Args:
-            analysis: 分析结果
+            yuque_id: 语雀用户 ID
 
         Returns:
-            格式化的报告文本
+            文档列表
         """
+        docs = []
+
+        if self.doc_index:
+            try:
+                # 通过 creator_id 查询（如果存储了）
+                # 或者通过 author 名称匹配
+                binding = self.storage.get_binding_by_yuque_id(yuque_id)
+                author_name = binding.get("yuque_name", "") if binding else ""
+
+                conn = self.doc_index._get_conn()
+                rows = conn.execute("""
+                    SELECT title, book_name, word_count, description
+                    FROM docs
+                    WHERE author LIKE ?
+                    ORDER BY word_count DESC
+                    LIMIT 20
+                """, (f"%{author_name}%",)).fetchall()
+
+                for row in rows:
+                    docs.append({
+                        "title": row["title"] or "",
+                        "book_name": row["book_name"] or "",
+                        "word_count": row["word_count"] or 0,
+                        "description": row["description"] or "",
+                    })
+
+            except Exception as e:
+                logger.warning(f"[GapAnalyzer] 获取用户文档失败: {e}")
+
+        return docs
+
+    def _format_user_docs(self, docs: list) -> str:
+        """格式化用户文档列表
+
+        Args:
+            docs: 文档列表
+
+        Returns:
+            格式化的文本
+        """
+        if not docs:
+            return "暂无已写文档"
+
         lines = []
-        lines.append("📊 知识缺口分析报告")
-        lines.append(f"📅 分析时间：{analysis['analysis_time'][:10]}")
-        lines.append("")
-
-        stats = analysis["doc_stats"]
-        lines.append("📈 文档统计")
-        lines.append(f"• 总文档数：{stats['doc_count']}")
-        lines.append(f"• 总字数：{stats['total_words']:,}")
-        lines.append(f"• 知识库数：{stats['book_count']}")
-        lines.append("")
-
-        # 领域覆盖
-        coverage = analysis["domain_coverage"]
-        if coverage:
-            lines.append("📚 已覆盖领域（按文档数排序）")
-            for domain, data in list(coverage.items())[:10]:
-                docs = data["doc_count"]
-                words = data["word_count"]
-                lines.append(f"• {domain}: {docs} 篇文档, {words:,} 字")
-            lines.append("")
-
-        # 缺口
-        gaps = analysis["gaps"]
-        if gaps:
-            lines.append("🔍 知识缺口")
-            for gap in gaps[:8]:
-                icon = "🔴" if gap["priority"] == "高" else "🟡"
-                lines.append(f"{icon} {gap['domain']} - {gap['reason']}")
-            lines.append("")
-            lines.append("─" * 20)
-            lines.append("💡 建议：补充上述领域的文档可完善知识库覆盖")
-        else:
-            lines.append("✅ 知识库覆盖较完善，暂无明显缺口")
+        for i, doc in enumerate(docs[:10], 1):
+            title = doc["title"]
+            words = doc["word_count"]
+            desc = doc.get("description", "")[:100]
+            lines.append(f"{i}. 《{title}》（{words}字）")
+            if desc:
+                lines.append(f"   简介：{desc}...")
 
         return "\n".join(lines)
 
+    def _get_domain_level(self, skills: dict, domain: str, default_level: str) -> str:
+        """获取用户在特定领域的水平
 
-def format_gap_report(analysis: dict) -> str:
-    """格式化缺口分析报告"""
-    analyzer = KnowledgeGapAnalyzer(Path("."), Path("."))
-    return analyzer.format_gap_report(analysis)
+        Args:
+            skills: 技能字典
+            domain: 目标领域
+            default_level: 默认水平
+
+        Returns:
+            水平等级
+        """
+        domain_lower = domain.lower()
+        for skill, level in skills.items():
+            if domain_lower in skill.lower() or skill.lower() in domain_lower:
+                return level
+        return default_level
+
+    def _get_creator_id(self, yuque_id: str) -> Optional[int]:
+        """获取用户的 creator_id（用于排除自己的文档）
+
+        Args:
+            yuque_id: 语雀用户 ID
+
+        Returns:
+            creator_id 或 None
+        """
+        # 尝试从绑定信息获取
+        binding = self.storage.get_binding_by_yuque_id(yuque_id)
+        if binding and "yuque_user_id" in binding:
+            return binding.get("yuque_user_id")
+        return None
+
+    def _search_resources(
+        self,
+        domain: str,
+        max_results: int = 15,
+        exclude_author_id: Optional[int] = None,
+        exclude_titles: Optional[list] = None,
+    ) -> list:
+        """搜索社团相关资源
+
+        Args:
+            domain: 目标领域
+            max_results: 最大结果数
+            exclude_author_id: 排除的作者 ID
+            exclude_titles: 排除的标题列表
+
+        Returns:
+            资源列表
+        """
+        resources = []
+        exclude_titles = exclude_titles or []
+
+        if self.rag:
+            try:
+                results = self.rag.search(domain, k=max_results * 2)
+                for r in results:
+                    title = r.get("title", "")
+                    author_id = r.get("creator_id")
+
+                    if exclude_author_id and author_id == exclude_author_id:
+                        continue
+                    if title in exclude_titles:
+                        continue
+
+                    resources.append({
+                        "title": title,
+                        "author": r.get("author", ""),
+                        "book_name": r.get("book_name", ""),
+                    })
+
+                    if len(resources) >= max_results:
+                        break
+
+            except Exception as e:
+                logger.warning(f"[GapAnalyzer] 资源搜索失败: {e}")
+
+        return resources
+
+
+def format_gap_report(gap: dict) -> str:
+    """格式化缺口分析报告
+
+    Args:
+        gap: 缺口分析字典
+
+    Returns:
+        格式化的文本
+    """
+    # 错误情况
+    if gap.get("error"):
+        msg = gap.get("message", gap.get("error"))
+        return f"❌ {msg}"
+
+    target = gap.get("target_domain", "未知领域")
+    current_level = gap.get("current_level", "beginner")
+
+    level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
+    level_text = level_map.get(current_level, current_level)
+
+    lines = [f"📊 学习缺口分析：{target}"]
+    lines.append(f"🎯 当前水平：{level_text}")
+    lines.append("")
+
+    # 已掌握知识点
+    mastered = gap.get("mastered_topics", [])
+    if mastered:
+        lines.append("━━━━━━━━━━━━━━━")
+        lines.append("✅ 已掌握的知识")
+        lines.append("")
+        for m in mastered[:10]:
+            topic = m.get("topic", "")
+            source = m.get("source", "")
+            lines.append(f"• {topic}" + (f"（来自：{source}）" if source else ""))
+        lines.append("")
+
+    # 缺少的知识点
+    missing = gap.get("missing_topics", [])
+    if missing:
+        lines.append("━━━━━━━━━━━━━━━")
+        lines.append("❌ 缺少的知识点")
+        lines.append("")
+        for m in missing[:10]:
+            topic = m.get("topic", "")
+            priority = m.get("priority", "medium")
+            reason = m.get("reason", "")
+            icon = "🔴" if priority == "high" else ("🟡" if priority == "medium" else "🟢")
+            lines.append(f"{icon} {topic}" + (f" - {reason}" if reason else ""))
+        lines.append("")
+
+    # 推荐资源
+    resources = gap.get("recommended_resources", [])
+    if resources:
+        lines.append("━━━━━━━━━━━━━━━")
+        lines.append("📚 社团推荐资源")
+        lines.append("")
+        for r in resources[:5]:
+            title = r.get("title", "")
+            covers = r.get("covers", "")
+            lines.append(f"• 《{title}》" + (f" → 补充：{covers}" if covers else ""))
+        lines.append("")
+
+    # 学习建议
+    suggestions = gap.get("learning_suggestions", [])
+    if suggestions:
+        lines.append("━━━━━━━━━━━━━━━")
+        lines.append("💡 补充建议")
+        lines.append("")
+        for s in suggestions:
+            lines.append(f"• {s}")
+        lines.append("")
+
+    # 下一步
+    next_steps = gap.get("next_steps", "")
+    if next_steps:
+        lines.append(f"🚀 下一步：{next_steps}")
+
+    return "\n".join(lines)
