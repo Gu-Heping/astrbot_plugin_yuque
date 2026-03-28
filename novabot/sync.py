@@ -65,6 +65,21 @@ def toc_list_children(parent_uuid: Optional[str], toc_by_uuid: Dict[str, Dict]) 
     return out
 
 
+def _count_chinese_words(text: str) -> int:
+    """统计中文字数（过滤空白字符后的字符数）
+
+    对于中文文档，去掉空格、换行等空白字符后的字符数
+    更接近真实的"字数"
+    """
+    if not text:
+        return 0
+    # 过滤空白字符
+    import re
+    # 移除所有空白字符（空格、换行、制表符等）
+    cleaned = re.sub(r'\s+', '', text)
+    return len(cleaned)
+
+
 def _yuque_id_from_md(file_path: Path) -> Optional[int]:
     """从已有 .md 的 frontmatter 读取 id/yuque_id，无法解析时返回 None"""
     if not file_path.exists() or not file_path.is_file():
@@ -404,7 +419,7 @@ class DocSyncer:
                     "creator_id": doc_creator_id,  # 添加创建者 ID
                     "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
                     "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-                    "word_count": len(body),
+                    "word_count": _count_chinese_words(body),  # 中文字数统计
                     "file_path": rel_path,
                 })
 

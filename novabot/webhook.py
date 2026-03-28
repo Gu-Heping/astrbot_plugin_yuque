@@ -16,7 +16,7 @@ from astrbot.api import logger
 
 from .git_ops import GitOps
 from .rag import RAGEngine
-from .sync import toc_list_children
+from .sync import toc_list_children, _count_chinese_words
 from .yuque_client import YuqueClient
 
 if TYPE_CHECKING:
@@ -646,7 +646,7 @@ class WebhookHandler:
                     "book_namespace": book.get("namespace", "") if book else "",
                     "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
                     "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-                    "word_count": len(body),
+                    "word_count": _count_chinese_words(body),  # 中文字数统计
                     "file_path": rel_path,
                 })
 
