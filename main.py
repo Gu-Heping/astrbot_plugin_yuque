@@ -377,12 +377,15 @@ class NovaBotPlugin(Star):
             # 群聊：检查 @ 或唤醒词
             if self.enable_group_at and self._is_at_me(event):
                 logger.info(f"[on_message] 检测到 @ 触发")
-                return True, self._remove_at(msg)
+                return True, self._remove_at(event, msg)
 
+            import re
             for wake in self.wake_words:
-                if msg.lower().startswith(wake):
+                # 支持唤醒词后有标点（如 "nova，帮我..."）
+                pattern = rf'^{re.escape(wake)}[\s,，:：]*'
+                if re.match(pattern, msg.lower()):
                     logger.info(f"[on_message] 检测到唤醒词: {wake}")
-                    return True, msg[len(wake):].strip()
+                    return True, re.sub(pattern, '', msg, count=1, flags=re.IGNORECASE).strip()
 
             # 群聊中没有触发条件，不处理
             return False, ""
@@ -392,9 +395,11 @@ class NovaBotPlugin(Star):
                 return True, msg
             else:
                 # 也需要唤醒词
+                import re
                 for wake in self.wake_words:
-                    if msg.lower().startswith(wake):
-                        return True, msg[len(wake):].strip()
+                    pattern = rf'^{re.escape(wake)}[\s,，:：]*'
+                    if re.match(pattern, msg.lower()):
+                        return True, re.sub(pattern, '', msg, count=1, flags=re.IGNORECASE).strip()
                 return False, ""
 
     def _is_at_me(self, event: AstrMessageEvent) -> bool:
@@ -409,11 +414,16 @@ class NovaBotPlugin(Star):
                         return True
         return False
 
-    def _remove_at(self, msg: str) -> str:
-        """移除消息中的 @"""
-        # 简单处理：移除开头的 @xxx
-        import re
-        return re.sub(r'^@\S+\s*', '', msg).strip()
+    def _remove_at(self, event: AstrMessageEvent, msg: str) -> str:
+        """移除消息中的 @，从消息链中提取纯文本"""
+        import astrbot.api.message_components as Comp
+        text_parts = []
+        if event.message_obj and event.message_obj.message:
+            for comp in event.message_obj.message:
+                if isinstance(comp, Comp.Plain):
+                    text_parts.append(comp.text)
+        result = "".join(text_parts).strip()
+        return result if result else msg
 
     # ========== 指令 ==========
 
