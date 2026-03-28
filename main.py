@@ -316,15 +316,31 @@ class NovaBotPlugin(Star):
         用户可以直接对话，无需记忆命令。
         Agent 会自动识别意图并调用合适的工具。
         """
-        # 跳过命令消息（以 / 开头），让命令处理器处理
+        # 跳过命令消息
+        # 注意：AstrBot 在某些平台（如飞书）会去掉 / 前缀
+        # 所以需要同时检查原始消息和处理后的消息
         msg = event.message_str.strip()
-        logger.info(f"[on_message] 收到消息: '{msg}', startswith('/'): {msg.startswith('/')}")
-        if msg.startswith("/"):
+        raw_msg = event.message_str  # 可能已被 AstrBot 处理过
+
+        # 检查是否是命令（原始消息以 / 开头，或消息匹配已注册的命令名）
+        is_command = raw_msg.startswith("/") or msg.startswith("/")
+
+        # 如果不是明显的命令，检查是否匹配已知的命令名
+        known_commands = [
+            "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
+            "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
+            "tokens", "ask", "askadmin"
+        ]
+        if not is_command and msg.split()[0].lower() in known_commands:
+            is_command = True
+            logger.info(f"[on_message] 检测到命令（无 / 前缀）: {msg}")
+
+        if is_command:
             logger.info(f"[on_message] 跳过命令消息，让命令处理器处理")
-            return  # 不调用 stop_event()，让命令继续传播
+            return
 
         # 处理非命令消息
-        logger.info(f"[on_message] 处理非命令消息")
+        logger.info(f"[on_message] 处理非命令消息: {msg[:30]}...")
         try:
             response = await self.agent.handle_message(event)
             yield event.plain_result(response)
