@@ -285,23 +285,24 @@ class NovaBotPlugin(Star):
     async def on_llm_response(self, event: AstrMessageEvent, resp: "LLMResponse"):
         """记录正常聊天的 token 使用"""
         try:
+            # 检查是否是流式输出的最后一个 chunk
+            is_chunk = getattr(resp, "is_chunk", False)
+            logger.info(f"[LLM] is_chunk: {is_chunk}")
+
             # 从 raw_completion.usage 获取 token 使用量
             input_tokens = 0
             output_tokens = 0
 
             # 调试：打印所有 usage 来源
-            logger.info(f"[LLM] resp.usage 存在: {hasattr(resp, 'usage')}, 值: {getattr(resp, 'usage', 'N/A')}")
+            logger.info(f"[LLM] resp.usage: {getattr(resp, 'usage', 'N/A')}")
             if hasattr(resp, "raw_completion") and resp.raw_completion:
                 logger.info(f"[LLM] raw_completion.usage: {getattr(resp.raw_completion, 'usage', 'N/A')}")
 
             # 尝试从 resp.usage 获取
-            if hasattr(resp, "usage"):
+            if hasattr(resp, "usage") and resp.usage:
                 usage = resp.usage
-                logger.info(f"[LLM] resp.usage 类型: {type(usage)}")
-                if usage:
-                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
-                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
-                    logger.info(f"[LLM] 从 resp.usage 获取: 入 {input_tokens}, 出 {output_tokens}")
+                input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                output_tokens = getattr(usage, "completion_tokens", 0) or 0
 
             # 尝试从 raw_completion.usage 获取
             if input_tokens == 0 and hasattr(resp, "raw_completion") and resp.raw_completion:
@@ -309,7 +310,6 @@ class NovaBotPlugin(Star):
                 if usage:
                     input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
-                    logger.info(f"[LLM] 从 raw_completion.usage 获取: 入 {input_tokens}, 出 {output_tokens}")
 
             if input_tokens > 0 or output_tokens > 0:
                 self.token_monitor.log_usage(
@@ -319,7 +319,7 @@ class NovaBotPlugin(Star):
                 )
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
             else:
-                logger.warning(f"[LLM] 无法获取 token 使用量（可能是流式输出限制）")
+                logger.debug(f"[LLM] 无法获取 token 使用量（流式输出限制）")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
