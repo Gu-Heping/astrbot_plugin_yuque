@@ -432,12 +432,11 @@ class DocSyncer:
 
             # DOC 类型也可能有子节点，递归处理
             # 子节点应该继承父 DOC 的标题作为路径前缀（与 yuque2git 一致）
-            child_uuid = toc_item.get("child_uuid")
-            if child_uuid:
+            children = toc_list_children(uuid, toc_by_uuid)
+            if children:
                 # 子节点的父路径 = 当前 parent_path + 父 DOC 的标题
                 seg = YuqueClient.slug_safe(title) or YuqueClient.slug_safe(slug)
                 child_parent = f"{parent_path}/{seg}" if parent_path else seg
-                children = toc_list_children(uuid, toc_by_uuid)
                 for child in children:
                     await self._process_toc_item(
                         namespace, repo_name, repo_dir, child, child_parent, toc_by_uuid, repo_index, stats

@@ -302,7 +302,7 @@ class NovaBotPlugin(Star):
                     output_tokens=output_tokens,
                 )
         except Exception as e:
-            logger.debug(f"[LLM] 记录聊天 token 失败: {e}")
+            logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
     # ========== 指令 ==========
 

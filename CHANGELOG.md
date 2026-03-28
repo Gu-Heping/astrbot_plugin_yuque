@@ -4,6 +4,15 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.7] - 2026-03-28
+
+### 修复
+- **DOC 子节点判断不一致**：与 TITLE 和 sync_repo_path_drift 保持一致
+  - 改为直接调用 `toc_list_children()` 判断返回结果
+  - 避免 `child_uuid` 为空但有子节点时漏处理
+- **Token 统计日志级别过低**：logger.debug 改为 logger.warning
+  - 运维时更容易发现 token 统计失败问题
+
 ## [v0.15.6] - 2026-03-28
 
 ### 修复
