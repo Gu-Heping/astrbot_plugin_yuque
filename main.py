@@ -343,6 +343,7 @@ class NovaBotPlugin(Star):
     # ========== 指令 ==========
 
     @filter.command("sync")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def sync_cmd(self, event: AstrMessageEvent, action: str = ""):
         """同步语雀知识库
 
@@ -983,6 +984,7 @@ class NovaBotPlugin(Star):
         yield event.plain_result(f"{'✅' if success else '❌'} {msg}")
 
     @filter.command("rag")
+    @filter.permission_type(filter.PermissionType.ADMIN)
     async def rag_cmd(self, event: AstrMessageEvent, action: str = "", query: str = ""):
         """RAG 检索
 

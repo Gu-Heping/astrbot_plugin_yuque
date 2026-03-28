@@ -4,6 +4,20 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.17.1] - 2026-03-28
+
+### 改进
+- **sync 和 rag 命令权限限制**：改为管理员专用，防止误操作
+  - `/sync` 系列命令仅管理员可调用
+  - `/rag` 系列命令仅管理员可调用
+  - 不影响 Agent 的工具调用（Agent 通过工具类直接访问）
+
+### 修复
+- **Agent 无记忆问题**：集成 AstrBot conversation_manager 实现对话历史
+  - Agent 现在会携带最近的对话历史（最多 5 轮）
+  - 调用完成后自动记录对话到 conversation_manager
+  - 解决"你还记得上一句话吗"返回系统提示词的问题
+
 ## [v0.17.0] - 2026-03-28
 
 ### 新增

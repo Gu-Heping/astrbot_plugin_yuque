@@ -3,9 +3,15 @@ NovaBot Agent 模块
 处理自然语言交互，调用 LLM Tool
 """
 
+import json
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 from astrbot.core.agent.tool import ToolSet
+from astrbot.core.agent.message import (
+    AssistantMessageSegment,
+    UserMessageSegment,
+    TextPart,
+)
 
 
 # 默认系统提示词
@@ -68,8 +74,11 @@ class NovaBotAgent:
         # 获取用户画像（如果已绑定）
         user_context = await self._get_user_context(event)
 
-        # 构建系统提示词
-        system_prompt = self._build_system_prompt(user_context)
+        # 获取对话历史
+        conversation_history = await self._get_conversation_history(umo)
+
+        # 构建系统提示词（包含历史）
+        system_prompt = self._build_system_prompt(user_context, conversation_history)
 
         # 获取工具
         tools = self._get_tools()
@@ -80,6 +89,8 @@ class NovaBotAgent:
         # 调用 Agent
         try:
             logger.info(f"[Agent] 开始处理消息: {event.message_str[:50]}...")
+            if conversation_history:
+                logger.info(f"[Agent] 携带 {len(conversation_history)} 条历史记录")
 
             llm_resp = await self.plugin.context.tool_loop_agent(
                 event=event,
@@ -91,12 +102,15 @@ class NovaBotAgent:
                 tool_call_timeout=60,
             )
 
+            # 记录对话到 conversation_manager
+            await self._record_conversation(umo, event.message_str, llm_resp.completion_text)
+
             logger.info(f"[Agent] 消息处理完成")
             return llm_resp.completion_text
 
         except Exception as e:
             logger.error(f"[Agent] 处理消息失败: {e}", exc_info=True)
-            return f"处理消息时出错，请稍后重试。"
+            return "处理消息时出错，请稍后重试。"
 
     async def _get_user_context(self, event: AstrMessageEvent) -> dict:
         """获取用户上下文信息
@@ -130,16 +144,116 @@ class NovaBotAgent:
             "stats": profile.get("stats") if profile else None,
         }
 
-    def _build_system_prompt(self, user_context: dict) -> str:
+    async def _get_conversation_history(self, umo: str, max_rounds: int = 5) -> list:
+        """获取对话历史
+
+        Args:
+            umo: 会话标识
+            max_rounds: 最大保留历史轮数
+
+        Returns:
+            对话历史列表，每项为 {"role": "user/assistant", "content": "..."}
+        """
+        try:
+            conv_mgr = self.plugin.context.conversation_manager
+            if not conv_mgr:
+                logger.debug("[Agent] conversation_manager 未初始化")
+                return []
+
+            # 获取当前对话 ID
+            curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+            if not curr_cid:
+                logger.debug("[Agent] 无当前对话")
+                return []
+
+            # 获取对话
+            conversation = await conv_mgr.get_conversation(umo, curr_cid)
+            if not conversation or not conversation.history:
+                logger.debug("[Agent] 对话历史为空")
+                return []
+
+            # 解析历史（JSON 格式）
+            try:
+                history_data = json.loads(conversation.history)
+            except json.JSONDecodeError:
+                logger.warning("[Agent] 对话历史解析失败")
+                return []
+
+            # 只保留最近的 max_rounds 轮（每轮包含 user + assistant）
+            # history_data 格式: [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]
+            if isinstance(history_data, list):
+                # 保留最近的几轮（每轮 2 条消息）
+                recent_history = history_data[-(max_rounds * 2):]
+                return recent_history
+
+            return []
+
+        except Exception as e:
+            logger.warning(f"[Agent] 获取对话历史失败: {e}")
+            return []
+
+    async def _record_conversation(self, umo: str, user_msg: str, assistant_msg: str):
+        """记录对话到 conversation_manager
+
+        Args:
+            umo: 会话标识
+            user_msg: 用户消息
+            assistant_msg: Agent 回复
+        """
+        try:
+            conv_mgr = self.plugin.context.conversation_manager
+            if not conv_mgr:
+                logger.debug("[Agent] conversation_manager 未初始化，跳过记录")
+                return
+
+            # 获取当前对话 ID
+            curr_cid = await conv_mgr.get_curr_conversation_id(umo)
+            if not curr_cid:
+                logger.debug("[Agent] 无当前对话，跳过记录")
+                return
+
+            # 构建消息
+            user_msg_segment = UserMessageSegment(content=[TextPart(text=user_msg)])
+            assistant_msg_segment = AssistantMessageSegment(content=[TextPart(text=assistant_msg)])
+
+            # 添加到对话历史
+            await conv_mgr.add_message_pair(
+                cid=curr_cid,
+                user_message=user_msg_segment,
+                assistant_message=assistant_msg_segment,
+            )
+            logger.debug("[Agent] 对话已记录到 conversation_manager")
+
+        except Exception as e:
+            logger.warning(f"[Agent] 记录对话失败: {e}")
+
+    def _build_system_prompt(self, user_context: dict, conversation_history: list = None) -> str:
         """构建系统提示词
 
         Args:
             user_context: 用户上下文
+            conversation_history: 对话历史
 
         Returns:
             完整的系统提示词
         """
         prompt = DEFAULT_SYSTEM_PROMPT
+
+        # 添加对话历史
+        if conversation_history:
+            history_text = "\n".join([
+                f"{'用户' if msg['role'] == 'user' else 'NovaBot'}: {msg.get('content', '')}"
+                for msg in conversation_history
+                if msg.get('role') and msg.get('content')
+            ])
+            if history_text:
+                prompt += f"""
+
+【最近的对话】（请继续这段对话，不要重复回答）
+{history_text}
+
+【当前用户的新消息】
+（你需要回复这条新消息）"""
 
         # 如果用户已绑定且有画像，添加个性化信息
         if user_context.get("bound") and user_context.get("profile"):
