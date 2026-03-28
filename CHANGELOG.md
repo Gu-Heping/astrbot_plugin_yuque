@@ -4,6 +4,23 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.0] - 2026-03-28
+
+### 新增
+- **路径漂移修正**：同步前自动检测并修正文档路径变化
+  - 新增 `sync_repo_path_drift()` 函数：遍历 TOC 计算所有文档理论路径
+  - 使用 `git mv` 确保文件移动被 Git 正确追踪为 rename（而非 delete + add）
+  - 解决父 DOC 移动/重命名后子 DOC 路径不更新的问题
+
+### 修复
+- **DOC 类型子节点路径继承**：子 DOC 现在继承父 DOC 标题作为路径前缀
+  - 与 yuque2git 实现一致
+  - 修复 `/profile refresh` 只显示部分文档的问题（从 7 篇增加到完整同步）
+
+### 改进
+- 同步模块鲁棒性改进（参考 yuque2git commit 0d8ea46, 4e088a8）
+  - 新增 `_yuque_id_from_md()` 辅助函数：从 Markdown frontmatter 读取文档 ID
+
 ## [v0.14.9] - 2026-03-27
 
 ### 修复
