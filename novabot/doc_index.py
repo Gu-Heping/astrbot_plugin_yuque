@@ -54,19 +54,19 @@ class DocIndex:
                 )
             """)
 
+            # 兼容性：检查 creator_id 列是否存在
+            columns = conn.execute("PRAGMA table_info(docs)").fetchall()
+            column_names = [col[1] for col in columns]
+            if "creator_id" not in column_names:
+                logger.info("[DocIndex] 添加 creator_id 列")
+                conn.execute("ALTER TABLE docs ADD COLUMN creator_id INTEGER")
+
             # 创建索引
             conn.execute("CREATE INDEX IF NOT EXISTS idx_author ON docs(author)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_book ON docs(book_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_updated ON docs(updated_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_yuque_id ON docs(yuque_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_creator_id ON docs(creator_id)")
-
-            # 兼容性：如果表已存在但没有 creator_id 字段，添加它
-            try:
-                conn.execute("ALTER TABLE docs ADD COLUMN creator_id INTEGER")
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_creator_id ON docs(creator_id)")
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
 
             conn.commit()
             logger.info(f"[DocIndex] 数据库初始化完成: {self.db_path}")
