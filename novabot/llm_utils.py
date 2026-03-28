@@ -60,13 +60,23 @@ async def call_llm(
                     input_tokens = 0
                     output_tokens = 0
 
-                    # AstrBot 的响应可能包含 usage 信息
-                    if hasattr(resp, "usage") and resp.usage:
-                        input_tokens = getattr(resp.usage, "prompt_tokens", 0) or 0
-                        output_tokens = getattr(resp.usage, "completion_tokens", 0) or 0
-                    elif hasattr(resp, "prompt_tokens"):
-                        input_tokens = resp.prompt_tokens or 0
-                        output_tokens = resp.completion_tokens or 0
+                    # AstrBot LLMResponse 结构：
+                    # - raw_completion: ChatCompletion (OpenAI 格式)
+                    # - raw_completion.usage.prompt_tokens / completion_tokens
+                    if hasattr(resp, "raw_completion") and resp.raw_completion:
+                        usage = getattr(resp.raw_completion, "usage", None)
+                        if usage:
+                            input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                            output_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+                    # 回退：尝试其他可能的字段
+                    if input_tokens == 0 and output_tokens == 0:
+                        if hasattr(resp, "usage") and resp.usage:
+                            input_tokens = getattr(resp.usage, "prompt_tokens", 0) or 0
+                            output_tokens = getattr(resp.usage, "completion_tokens", 0) or 0
+                        elif hasattr(resp, "prompt_tokens"):
+                            input_tokens = resp.prompt_tokens or 0
+                            output_tokens = resp.completion_tokens or 0
 
                     if input_tokens > 0 or output_tokens > 0:
                         token_monitor.log_usage(
