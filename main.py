@@ -1296,6 +1296,88 @@ class NovaBotPlugin(Star):
             logger.error(f"知识卡片生成失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 生成失败: {e}")
 
+    @filter.command("persona")
+    async def persona_cmd(self, event: AstrMessageEvent, action: str = "", value: str = ""):
+        """查看或设置人格偏好
+
+        用法:
+        - /persona - 查看当前设置
+        - /persona name 小谷 - 设置称呼
+        - /persona tone 活泼 - 设置语气（温和/活泼/严肃/幽默）
+        - /persona style 简洁 - 设置回复风格（简洁/详细）
+        - /persona formality 正式 - 设置正式程度（轻松/正式）
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+        prefs = self.storage.load_preferences(yuque_id)
+
+        if not action:
+            # 显示当前设置
+            name = prefs.get("name", "")
+            tone = prefs.get("tone", "温和")
+            style = prefs.get("style", "详细")
+            formality = prefs.get("formality", "轻松")
+
+            lines = [
+                f"📊 {yuque_name} 的人格设置",
+                "",
+                f"• 称呼：{name or '（未设置）'}",
+                f"• 语气：{tone}",
+                f"• 回复风格：{style}",
+                f"• 正式程度：{formality}",
+                "",
+                "💡 修改方式：",
+                "• /persona name 小谷",
+                "• /persona tone 活泼",
+                "• /persona style 简洁",
+            ]
+            yield event.plain_result("\n".join(lines))
+            return
+
+        # 设置偏好
+        valid_actions = {
+            "name": "称呼",
+            "tone": "语气",
+            "style": "回复风格",
+            "formality": "正式程度",
+        }
+
+        if action not in valid_actions:
+            yield event.plain_result(f"未知的设置项：{action}\n可选：{', '.join(valid_actions.keys())}")
+            return
+
+        if not value:
+            yield event.plain_result(f"请提供值：/persona {action} <值>")
+            return
+
+        # 验证值
+        valid_values = {
+            "tone": ["温和", "活泼", "严肃", "幽默"],
+            "style": ["简洁", "详细"],
+            "formality": ["轻松", "正式"],
+        }
+
+        if action in valid_values and value not in valid_values[action]:
+            yield event.plain_result(f"无效的{valid_actions[action]}值：{value}\n可选：{', '.join(valid_values[action])}")
+            return
+
+        # 更新偏好
+        success = self.storage.update_preference(yuque_id, action, value)
+        if success:
+            if action == "name":
+                yield event.plain_result(f"✅ 已设置称呼为「{value}」")
+            else:
+                yield event.plain_result(f"✅ 已设置{valid_actions[action]}为「{value}」")
+        else:
+            yield event.plain_result("❌ 设置失败")
+
     @filter.command("tokens")
     async def tokens_cmd(self, event: AstrMessageEvent):
         """查看 Token 消耗统计"""

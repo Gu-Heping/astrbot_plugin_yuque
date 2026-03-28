@@ -221,6 +221,79 @@ class Storage:
             encoding="utf-8"
         )
 
+    # ========== 用户偏好（人格管理） ==========
+
+    # 默认偏好
+    DEFAULT_PREFERENCES = {
+        "name": "",           # 称呼偏好
+        "tone": "温和",       # 语气：温和/活泼/严肃/幽默
+        "style": "详细",      # 回复风格：简洁/详细
+        "formality": "轻松",  # 正式程度：轻松/正式
+    }
+
+    def load_preferences(self, yuque_id) -> dict:
+        """加载用户偏好
+
+        Args:
+            yuque_id: 语雀用户 ID
+
+        Returns:
+            用户偏好字典，未设置时返回默认值
+        """
+        profile = self.load_profile(yuque_id)
+        if not profile:
+            return self.DEFAULT_PREFERENCES.copy()
+
+        # 合并用户偏好和默认值
+        prefs = profile.get("preferences", {})
+        result = self.DEFAULT_PREFERENCES.copy()
+        result.update(prefs)
+        return result
+
+    def save_preferences(self, yuque_id, preferences: dict):
+        """保存用户偏好
+
+        Args:
+            yuque_id: 语雀用户 ID
+            preferences: 用户偏好字典
+        """
+        profile = self.load_profile(yuque_id) or {}
+        profile["preferences"] = preferences
+        self.save_profile(yuque_id, profile)
+
+    def update_preference(self, yuque_id, key: str, value: str) -> bool:
+        """更新单个偏好
+
+        Args:
+            yuque_id: 语雀用户 ID
+            key: 偏好键名
+            value: 偏好值
+
+        Returns:
+            是否更新成功
+        """
+        # 验证偏好键
+        valid_keys = ["name", "tone", "style", "formality"]
+        if key not in valid_keys:
+            return False
+
+        # 验证偏好值
+        valid_values = {
+            "tone": ["温和", "活泼", "严肃", "幽默"],
+            "style": ["简洁", "详细"],
+            "formality": ["轻松", "正式"],
+            "name": None,  # name 可以是任意字符串
+        }
+
+        if key != "name" and value not in valid_values.get(key, []):
+            return False
+
+        # 更新偏好
+        prefs = self.load_preferences(yuque_id)
+        prefs[key] = value
+        self.save_preferences(yuque_id, prefs)
+        return True
+
     # ========== 文档查询 ==========
 
     def get_docs_by_author(self, author_name: str = None, yuque_id: int = None) -> list[dict]:

@@ -135,8 +135,10 @@ class NovaBotAgent:
 
         # 获取用户画像
         profile = None
+        preferences = None
         if yuque_id:
             profile = self.plugin.storage.load_profile(yuque_id)
+            preferences = self.plugin.storage.load_preferences(yuque_id)
 
         return {
             "bound": True,
@@ -145,6 +147,7 @@ class NovaBotAgent:
             "yuque_name": yuque_name,
             "profile": profile.get("profile") if profile else None,
             "stats": profile.get("stats") if profile else None,
+            "preferences": preferences,
         }
 
     async def _get_conversation_history(self, umo: str, max_rounds: int = 5) -> list:
@@ -297,6 +300,42 @@ class NovaBotAgent:
 【当前用户信息】
 - 未绑定语雀账号
 - 如果用户需要个性化服务，引导使用 /bind 绑定账号"""
+
+        # 注入用户偏好
+        preferences = user_context.get("preferences", {})
+        if preferences and user_context.get("bound"):
+            name = preferences.get("name", "")
+            tone = preferences.get("tone", "温和")
+            style = preferences.get("style", "详细")
+            formality = preferences.get("formality", "轻松")
+
+            # 语气指南
+            tone_guide = {
+                "温和": "语气温和，像朋友一样交流",
+                "活泼": "语气活泼，可以用一些语气词如"呢"、"呀"等",
+                "严肃": "语气专业、严谨",
+                "幽默": "可以适当开玩笑，但不要过度",
+            }
+
+            style_guide = {
+                "简洁": "回复简洁，不要展开太多",
+                "详细": "回复详细，可以展开说明",
+            }
+
+            formality_guide = {
+                "轻松": "使用口语化表达",
+                "正式": "使用书面语，保持礼貌",
+            }
+
+            prompt += f"""
+
+【用户偏好设置】
+- 称呼：{name or '用户'}（请用这个称呼叫用户）
+- 语气：{tone} - {tone_guide.get(tone, '')}
+- 回复风格：{style} - {style_guide.get(style, '')}
+- 正式程度：{formality} - {formality_guide.get(formality, '')}
+
+请根据用户偏好调整你的回复方式。"""
 
         return prompt
 

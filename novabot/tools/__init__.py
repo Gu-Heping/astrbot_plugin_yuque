@@ -6,6 +6,7 @@ from .base import BaseTool
 from .search import SearchKnowledgeBaseTool, GrepLocalDocsTool, ReadDocTool, KnowledgeCardTool
 from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool
 from .repo import ListKnowledgeBasesTool, ListRepoDocsTool
+from .persona import SetPreferenceTool
 
 __all__ = [
     "BaseTool",
@@ -21,6 +22,8 @@ __all__ = [
     # 知识库工具
     "ListKnowledgeBasesTool",
     "ListRepoDocsTool",
+    # 人格偏好工具
+    "SetPreferenceTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -34,4 +37,5 @@ ALL_TOOLS = [
     DocStatsTool,
     ListKnowledgeBasesTool,
     ListRepoDocsTool,
+    SetPreferenceTool,
 ]
