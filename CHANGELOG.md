@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.6] - 2026-03-28
+
+### 修复
+- **RAG 索引 ChromaDB None 错误**：修复 `creator_id` 为 None 导致索引失败
+  - `index_docs()`: 只有 creator_id 非 None 才添加到 metadata（ChromaDB 不接受 None）
+  - `index_from_sync()`: 正确解析 frontmatter 中的 creator_id
+  - 解决 "Expected metadata value to be a str, int, float or bool, got None" 错误
+
 ## [v0.15.5] - 2026-03-28
 
 ### 修复

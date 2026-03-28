@@ -371,10 +371,14 @@ class RAGEngine:
                     "slug": str(doc.get("slug", "") or ""),
                     "author": str(doc.get("author", "") or ""),
                     "book_name": str(doc.get("book_name", "") or ""),
-                    "creator_id": doc.get("creator_id"),  # 创建者 ID（用于过滤用户自己的文档）
                     "source": f"yuque:{doc.get('repo_namespace', '') or ''}/{doc.get('slug', '') or ''}",
                 }
             ))
+
+            # 添加 creator_id（仅当有值时，ChromaDB 不接受 None）
+            creator_id = doc.get("creator_id")
+            if creator_id is not None:
+                documents[-1].metadata["creator_id"] = creator_id
 
         if not documents:
             logger.info("[RAG] 过滤后没有有效文档")
@@ -530,7 +534,12 @@ class RAGEngine:
                 if not body or not body.strip():
                     continue
 
-                # 确保所有字段都是字符串
+                # 提取 creator_id（可能为 None）
+                creator_id_raw = metadata.get("creator_id")
+                creator_id = None
+                if creator_id_raw is not None:
+                    creator_id = int(creator_id_raw) if isinstance(creator_id_raw, (int, float, str)) and str(creator_id_raw).strip() else None
+
                 all_docs.append({
                     "content": str(body),
                     "id": str(metadata.get("id") or ""),
@@ -539,6 +548,7 @@ class RAGEngine:
                     "author": str(metadata.get("author") or ""),
                     "book_name": str(metadata.get("book_name") or ""),
                     "repo_namespace": str(md_file.parent.relative_to(docs_path)),
+                    "creator_id": creator_id,  # 创建者 ID
                 })
 
             except Exception as e:
