@@ -105,11 +105,13 @@ class LearningGapAnalyzer:
         ]
 
         # 6. 搜索社团相关资源（排除用户自己的文档）
-        creator_id = self._get_creator_id(yuque_id)
+        # 合并查询，避免重复调用
         binding = self.storage.get_binding_by_yuque_id(yuque_id)
         author_name = binding.get("yuque_name", "") if binding else ""
+        # 绑定信息中存的是 yuque_id，不是 yuque_user_id
+        creator_id = binding.get("yuque_id") if binding else None
 
-        logger.info(f"[GapAnalyzer] 用户: {author_name}, 目标领域: {target_domain}, 用户文档数: {len(user_docs)}")
+        logger.debug(f"[GapAnalyzer] 用户: {author_name}, 目标领域: {target_domain}, 用户文档数: {len(user_docs)}")
 
         community_resources = self._search_resources(
             target_domain,
@@ -117,7 +119,7 @@ class LearningGapAnalyzer:
             exclude_author_name=author_name,
             exclude_titles=[d["title"] for d in user_docs],
         )
-        logger.info(f"[GapAnalyzer] 社团资源（排除用户文档后）: {len(community_resources)} 篇")
+        logger.debug(f"[GapAnalyzer] 社团资源（排除用户文档后）: {len(community_resources)} 篇")
         community_resources_text = format_resources_for_path(community_resources)
 
         # 7. 调用 LLM 分析缺口
@@ -164,19 +166,31 @@ class LearningGapAnalyzer:
 
         if self.doc_index:
             try:
-                # 通过 creator_id 查询（如果存储了）
-                # 或者通过 author 名称匹配
                 binding = self.storage.get_binding_by_yuque_id(yuque_id)
                 author_name = binding.get("yuque_name", "") if binding else ""
+                # 绑定信息中存的是 yuque_id，SQLite 中存的也是 yuque_id (creator_id)
+                creator_id = binding.get("yuque_id") if binding else None
 
                 conn = self.doc_index._get_conn()
-                rows = conn.execute("""
-                    SELECT title, book_name, word_count, description
-                    FROM docs
-                    WHERE author LIKE ?
-                    ORDER BY word_count DESC
-                    LIMIT 20
-                """, (f"%{author_name}%",)).fetchall()
+
+                # 优先用 creator_id 精确匹配
+                if creator_id:
+                    rows = conn.execute("""
+                        SELECT title, book_name, word_count, description
+                        FROM docs
+                        WHERE creator_id = ?
+                        ORDER BY word_count DESC
+                        LIMIT 20
+                    """, (creator_id,)).fetchall()
+                else:
+                    # 回退到精确名称匹配
+                    rows = conn.execute("""
+                        SELECT title, book_name, word_count, description
+                        FROM docs
+                        WHERE author = ?
+                        ORDER BY word_count DESC
+                        LIMIT 20
+                    """, (author_name,)).fetchall()
 
                 for row in rows:
                     docs.append({
@@ -231,26 +245,11 @@ class LearningGapAnalyzer:
                 return level
         return default_level
 
-    def _get_creator_id(self, yuque_id: str) -> Optional[int]:
-        """获取用户的 creator_id（用于排除自己的文档）
-
-        Args:
-            yuque_id: 语雀用户 ID
-
-        Returns:
-            creator_id 或 None
-        """
-        # 尝试从绑定信息获取
-        binding = self.storage.get_binding_by_yuque_id(yuque_id)
-        if binding and "yuque_user_id" in binding:
-            return binding.get("yuque_user_id")
-        return None
-
     def _search_resources(
         self,
         domain: str,
         max_results: int = 15,
-        exclude_author_id: Optional[int] = None,
+        exclude_author_id=None,
         exclude_author_name: Optional[str] = None,
         exclude_titles: Optional[list] = None,
     ) -> list:
@@ -259,7 +258,7 @@ class LearningGapAnalyzer:
         Args:
             domain: 目标领域
             max_results: 最大结果数
-            exclude_author_id: 排除的作者 ID
+            exclude_author_id: 排除的作者 ID（可能是 int 或 str）
             exclude_author_name: 排除的作者名
             exclude_titles: 排除的标题列表
 
@@ -277,8 +276,8 @@ class LearningGapAnalyzer:
                     author = r.get("author", "")
                     author_id = r.get("creator_id")
 
-                    # 通过 ID 或名称排除用户自己的文档
-                    if exclude_author_id and author_id == exclude_author_id:
+                    # 通过 ID 或名称排除用户自己的文档（统一字符串比较）
+                    if exclude_author_id and str(author_id) == str(exclude_author_id):
                         continue
                     if exclude_author_name and exclude_author_name in author:
                         continue

@@ -82,7 +82,8 @@ class Storage:
         """
         bindings = self.load_bindings()
         for platform_id, binding in bindings.items():
-            if binding.get("yuque_id") == yuque_id:
+            # 统一转为字符串比较，避免类型不一致
+            if str(binding.get("yuque_id", "")) == str(yuque_id):
                 return {"platform_id": platform_id, **binding}
         return None
 
