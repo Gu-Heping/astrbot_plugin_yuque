@@ -79,6 +79,7 @@ class NovaBotPlugin(Star):
         self._webhook_site: Optional[web.TCPSite] = None
         self._webhook_started: bool = False  # 标记服务是否已启动
         self._sync_lock = asyncio.Lock()  # 保护同步操作，防止并发
+        self._doc_index = None  # 懒加载的 DocIndex
 
         # RAG
         self.rag: Optional[RAGEngine] = None
@@ -219,6 +220,14 @@ class NovaBotPlugin(Star):
         # 关闭语雀客户端
         await self._close_client()
         logger.info("NovaBot 插件已卸载")
+
+    def _get_doc_index(self):
+        """获取 DocIndex 实例（懒加载）"""
+        if self._doc_index is None:
+            from .novabot.doc_index import DocIndex
+            db_path = self.storage.data_dir / "doc_index.db"
+            self._doc_index = DocIndex(str(db_path))
+        return self._doc_index
 
     async def _handle_webhook_request(self, request: web.Request) -> web.Response:
         """处理语雀 Webhook 请求"""
@@ -1207,7 +1216,11 @@ class NovaBotPlugin(Star):
         """生成本周知识周报"""
         try:
             docs_dir = self.storage.docs_dir
-            reporter = WeeklyReporter(docs_dir)
+
+            # 获取 DocIndex 实例
+            doc_index = self._get_doc_index()
+
+            reporter = WeeklyReporter(docs_dir, doc_index=doc_index)
 
             # 尝试获取 LLM Provider
             umo = event.unified_msg_origin

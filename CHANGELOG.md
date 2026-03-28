@@ -4,6 +4,18 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.20.1] - 2026-03-28
+
+### 修复
+- **`/weekly` Git 统计问题**：修复 `git shortlog` 返回空导致作者和变更统计为 0
+  - 改用 `git log --format="%an"` 替代 `shortlog`
+  - 新增 `DocIndex.get_weekly_stats()` 基于元数据统计
+  - Git + SQLite 双数据源互补
+
+### 改进
+- 周报数据更可靠：新建/更新文档、作者、字数来自 SQLite
+- Git 数据作为补充：commit 数量、代码变更行数
+
 ## [v0.20.0] - 2026-03-28
 
 ### 新增

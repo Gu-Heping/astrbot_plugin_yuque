@@ -92,14 +92,13 @@ class GitAnalyzer:
 
         since, _ = self._get_date_range(days)
 
-        # 获取提交次数
-        count_output = self._run_git([
-            "shortlog", "-sn", "--author", author, "--since", since
+        # 获取提交次数 - 使用 git log 替代 shortlog
+        log_output = self._run_git([
+            "log", "--author", author, "--since", since,
+            "--format=%H"
         ])
-        if count_output.strip():
-            match = re.match(r'^\s*(\d+)', count_output)
-            if match:
-                result["commits"] = int(match.group(1))
+        commits = [line.strip() for line in log_output.split("\n") if line.strip()]
+        result["commits"] = len(commits)
 
         if result["commits"] == 0:
             return result
@@ -186,22 +185,22 @@ class GitAnalyzer:
         if result["total_commits"] == 0:
             return result
 
-        # 活跃作者排行
-        shortlog = self._run_git([
-            "shortlog", "-sn", "--since", since
+        # 活跃作者排行 - 使用 git log 替代 shortlog（更可靠）
+        log_output = self._run_git([
+            "log", "--since", since,
+            "--format=%an"
         ])
-        for line in shortlog.strip().split("\n"):
-            if not line.strip():
-                continue
-            match = re.match(r'^\s*(\d+)\s+(.+)$', line)
-            if match:
-                result["active_authors"].append({
-                    "author": match.group(2).strip(),
-                    "commits": int(match.group(1)),
-                })
 
-        # 按提交数排序
-        result["active_authors"].sort(key=lambda x: x["commits"], reverse=True)
+        author_counts: dict[str, int] = {}
+        for line in log_output.split("\n"):
+            author = line.strip()
+            if author:
+                author_counts[author] = author_counts.get(author, 0) + 1
+
+        result["active_authors"] = [
+            {"author": author, "commits": count}
+            for author, count in sorted(author_counts.items(), key=lambda x: x[1], reverse=True)
+        ]
 
         # 热门文件（按修改次数）
         log_output = self._run_git([
@@ -367,18 +366,19 @@ class GitAnalyzer:
 
         since, _ = self._get_date_range(days)
 
-        # 先获取所有作者
-        shortlog = self._run_git([
-            "shortlog", "-sn", "--since", since
+        # 先获取所有作者 - 使用 git log 替代 shortlog
+        log_output = self._run_git([
+            "log", "--since", since,
+            "--format=%an"
         ])
 
-        authors = []
-        for line in shortlog.strip().split("\n"):
-            if not line.strip():
-                continue
-            match = re.match(r'^\s*\d+\s+(.+)$', line)
-            if match:
-                authors.append(match.group(1).strip())
+        author_counts: dict[str, int] = {}
+        for line in log_output.split("\n"):
+            author = line.strip()
+            if author:
+                author_counts[author] = author_counts.get(author, 0) + 1
+
+        authors = list(author_counts.keys())
 
         # 获取每个作者的统计
         for author in authors:

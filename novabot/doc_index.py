@@ -323,6 +323,117 @@ class DocIndex:
             logger.error(f"[DocIndex] 列出知识库失败: {e}")
             return []
 
+    def get_weekly_stats(self, since_date: str) -> dict:
+        """获取本周文档统计（基于元数据）
+
+        Args:
+            since_date: 起始日期 YYYY-MM-DD
+
+        Returns:
+            {
+                "new_docs": [{title, author, book_name, word_count}, ...],
+                "updated_docs": [{title, author, book_name}, ...],
+                "author_stats": [{author, doc_count, total_words}, ...],
+                "book_stats": [{book_name, doc_count}, ...],
+                "total_new": int,
+                "total_updated": int,
+                "total_words_new": int,
+            }
+        """
+        result = {
+            "new_docs": [],
+            "updated_docs": [],
+            "author_stats": [],
+            "book_stats": [],
+            "total_new": 0,
+            "total_updated": 0,
+            "total_words_new": 0,
+        }
+
+        try:
+            conn = self._get_conn()
+
+            # 1. 本周新建文档：created_at >= since_date
+            new_docs_rows = conn.execute("""
+                SELECT title, author, book_name, word_count, created_at
+                FROM docs
+                WHERE created_at >= ?
+                ORDER BY created_at DESC
+                LIMIT 20
+            """, (since_date,)).fetchall()
+
+            for row in new_docs_rows:
+                result["new_docs"].append({
+                    "title": row["title"] or "",
+                    "author": row["author"] or "",
+                    "book_name": row["book_name"] or "",
+                    "word_count": row["word_count"] or 0,
+                    "created_at": row["created_at"] or "",
+                })
+
+            result["total_new"] = len(result["new_docs"])
+            result["total_words_new"] = sum(d["word_count"] for d in result["new_docs"])
+
+            # 2. 本周更新文档：updated_at >= since_date 且 created_at < since_date
+            updated_docs_rows = conn.execute("""
+                SELECT title, author, book_name, updated_at
+                FROM docs
+                WHERE updated_at >= ? AND (created_at < ? OR created_at IS NULL)
+                ORDER BY updated_at DESC
+                LIMIT 20
+            """, (since_date, since_date)).fetchall()
+
+            for row in updated_docs_rows:
+                result["updated_docs"].append({
+                    "title": row["title"] or "",
+                    "author": row["author"] or "",
+                    "book_name": row["book_name"] or "",
+                    "updated_at": row["updated_at"] or "",
+                })
+
+            result["total_updated"] = len(result["updated_docs"])
+
+            # 3. 本周作者统计
+            author_rows = conn.execute("""
+                SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
+                FROM docs
+                WHERE updated_at >= ?
+                AND author != ''
+                GROUP BY author
+                ORDER BY doc_count DESC
+                LIMIT 10
+            """, (since_date,)).fetchall()
+
+            for row in author_rows:
+                result["author_stats"].append({
+                    "author": row["author"],
+                    "doc_count": row["doc_count"],
+                    "total_words": row["total_words"] or 0,
+                })
+
+            # 4. 本周知识库统计
+            book_rows = conn.execute("""
+                SELECT book_name, COUNT(*) as doc_count
+                FROM docs
+                WHERE updated_at >= ?
+                AND book_name != ''
+                GROUP BY book_name
+                ORDER BY doc_count DESC
+                LIMIT 10
+            """, (since_date,)).fetchall()
+
+            for row in book_rows:
+                result["book_stats"].append({
+                    "book_name": row["book_name"],
+                    "doc_count": row["doc_count"],
+                })
+
+            return result
+
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取周报统计失败: {e}")
+            return result
+
     def close(self):
         """关闭连接"""
         if self._conn:
