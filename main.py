@@ -10,7 +10,7 @@ from typing import Optional
 from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.provider import ProviderRequest
+from astrbot.api.provider import LLMResponse, ProviderRequest
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from pathlib import Path as PathlibPath
@@ -280,6 +280,29 @@ class NovaBotPlugin(Star):
 - 用户问「我的画像」→ 引导 /profile
 - 用户要同步知识库 → 引导 /sync
 """
+
+    @filter.on_llm_response()
+    async def on_llm_response(self, event: AstrMessageEvent, resp: "LLMResponse"):
+        """记录正常聊天的 token 使用"""
+        try:
+            # 从 raw_completion.usage 获取 token 使用量
+            input_tokens = 0
+            output_tokens = 0
+
+            if hasattr(resp, "raw_completion") and resp.raw_completion:
+                usage = getattr(resp.raw_completion, "usage", None)
+                if usage:
+                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+
+            if input_tokens > 0 or output_tokens > 0:
+                self.token_monitor.log_usage(
+                    feature="chat",
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+        except Exception as e:
+            logger.debug(f"[LLM] 记录聊天 token 失败: {e}")
 
     # ========== 指令 ==========
 
