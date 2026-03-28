@@ -371,6 +371,7 @@ class RAGEngine:
                     "slug": str(doc.get("slug", "") or ""),
                     "author": str(doc.get("author", "") or ""),
                     "book_name": str(doc.get("book_name", "") or ""),
+                    "creator_id": doc.get("creator_id"),  # 创建者 ID（用于过滤用户自己的文档）
                     "source": f"yuque:{doc.get('repo_namespace', '') or ''}/{doc.get('slug', '') or ''}",
                 }
             ))
@@ -578,6 +579,7 @@ class RAGEngine:
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
                     "book_name": doc.metadata.get("book_name", ""),
+                    "creator_id": doc.metadata.get("creator_id"),  # 创建者 ID
                     "id": doc_id,
                 })
 

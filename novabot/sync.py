@@ -356,12 +356,13 @@ class DocSyncer:
                 out_file.parent.mkdir(parents=True, exist_ok=True)
 
                 # 检查是否移动了位置（文档ID对应旧路径，但新路径不同）
+                # 注意：如果 sync_repo_path_drift 已执行 git mv，此处旧文件不存在，检查会跳过
                 rel_path = str(out_file.relative_to(self.output_dir))
                 if yuque_id:
                     yuque_id_str = str(yuque_id)
                     old_path = self.global_index.get(yuque_id_str)
                     if old_path and old_path != rel_path:
-                        # 删除旧文件
+                        # 删除旧文件（如果存在）
                         old_file = self.output_dir / old_path
                         if old_file.exists():
                             try:
@@ -387,6 +388,12 @@ class DocSyncer:
                 # 收集元数据（用于构建搜索索引）
                 book = detail.get("book", {})
                 body = detail.get("body", "") or detail.get("content", "") or ""
+                # 获取创建者 ID：user_id -> creator.id -> user.id
+                doc_creator_id = (
+                    detail.get("user_id") or
+                    (detail.get("creator") or {}).get("id") or
+                    (detail.get("user") or {}).get("id")
+                )
                 self.doc_metadata.append({
                     "yuque_id": yuque_id,
                     "title": detail.get("title", title),
@@ -394,6 +401,7 @@ class DocSyncer:
                     "author": author,
                     "book_name": book.get("name", "") if book else "",
                     "book_namespace": namespace,
+                    "creator_id": doc_creator_id,  # 添加创建者 ID
                     "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
                     "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
                     "word_count": len(body),

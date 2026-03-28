@@ -242,8 +242,11 @@ class YuqueClient:
 
     @staticmethod
     def author_name_from_detail(detail: Dict) -> str:
-        """从文档详情获取作者名"""
-        for key in ("last_editor", "creator", "user"):
+        """从文档详情获取创建者名（不使用 last_editor）
+
+        yuque2git commit 2995580: author 用创建者而非最后编辑者
+        """
+        for key in ("creator", "user"):
             obj = detail.get(key)
             if isinstance(obj, dict):
                 name = (obj.get("name") or obj.get("login") or "").strip()
