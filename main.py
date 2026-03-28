@@ -1216,7 +1216,7 @@ class NovaBotPlugin(Star):
     async def gap_cmd(self, event: AstrMessageEvent):
         """分析知识缺口"""
         try:
-            analysis = self.gap_analyzer.analyze_gaps(days=30)
+            analysis = self.gap_analyzer.analyze_gaps()
             report = self.gap_analyzer.format_gap_report(analysis)
             yield event.plain_result(report)
         except Exception as e:
