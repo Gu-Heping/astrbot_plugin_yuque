@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.17.2] - 2026-03-28
+
+### 修复
+- **Agent 消息处理事件传播**：添加 `event.stop_event()` 阻止后续处理
+  - 避免其他插件或 AstrBot 默认 LLM 再次响应同一条消息
+  - 确保 NovaBot "独占"非命令消息的处理
+
 ## [v0.17.1] - 2026-03-28
 
 ### 改进

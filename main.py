@@ -339,6 +339,9 @@ class NovaBotPlugin(Star):
         except Exception as e:
             logger.error(f"自然语言处理失败: {e}", exc_info=True)
             yield event.plain_result("处理消息时出错，请稍后重试。")
+        finally:
+            # 阻止事件继续传播，避免其他插件或默认 LLM 再次响应
+            event.stop_event()
 
     # ========== 指令 ==========
 
