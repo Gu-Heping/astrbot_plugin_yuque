@@ -24,6 +24,7 @@ from .novabot.search_log import SearchLogger
 from .novabot.knowledge_gap import KnowledgeGapAnalyzer
 from .novabot.token_monitor import TokenMonitor
 from .novabot.ask_box import AskBoxManager
+from .novabot.agent import NovaBotAgent
 from .novabot.tools import ALL_TOOLS
 
 
@@ -31,7 +32,7 @@ from .novabot.tools import ALL_TOOLS
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.16.1")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.17.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -60,6 +61,7 @@ class NovaBotPlugin(Star):
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.gap_analyzer = KnowledgeGapAnalyzer(self.storage.data_dir, self.storage.docs_dir)
         self.ask_box = AskBoxManager(self.storage.data_dir)
+        self.agent = NovaBotAgent(self)
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
 
@@ -316,6 +318,27 @@ class NovaBotPlugin(Star):
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
+
+    # ========== 自然语言交互 ==========
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        """处理非命令消息（自然语言交互）
+
+        用户可以直接对话，无需记忆命令。
+        Agent 会自动识别意图并调用合适的工具。
+        """
+        # 跳过命令消息（以 / 开头）
+        msg = event.message_str.strip()
+        if msg.startswith("/"):
+            return  # 让命令处理器处理
+
+        try:
+            response = await self.agent.handle_message(event)
+            yield event.plain_result(response)
+        except Exception as e:
+            logger.error(f"自然语言处理失败: {e}", exc_info=True)
+            yield event.plain_result("处理消息时出错，请稍后重试。")
 
     # ========== 指令 ==========
 

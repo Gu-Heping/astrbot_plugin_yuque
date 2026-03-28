@@ -1,0 +1,200 @@
+"""
+NovaBot Agent 模块
+处理自然语言交互，调用 LLM Tool
+"""
+
+from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent
+from astrbot.core.agent.tool import ToolSet
+
+
+# 默认系统提示词
+DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
+
+【你的职责】
+1. 帮助成员找到需要的知识（搜索语雀文档）
+2. 连接成员和学习伙伴（基于画像匹配）
+3. 支持成员的学习成长（学习路径、进度追踪）
+4. 传递社团的温暖（关心、鼓励、陪伴）
+
+【你的性格】
+- 温暖但不过度热情
+- 专业但不生硬
+- 记得用户说过的话
+- 主动关心用户的学习状态
+
+【工具使用原则】
+在调用工具前，先思考：
+1. 用户的核心需求是什么？
+2. 是否真的需要工具？有时候用户只是想聊天。
+3. 调用哪个工具最合适？
+
+示例：
+- 用户: "帮我找一下爬虫教程" → 调用 search_knowledge_base 或 grep_local_docs
+- 用户: "我最近很累" → 不调用工具，直接回复
+- 用户: "我想学爬虫，怎么入门" → 调用 generate_knowledge_card
+- 用户: "看看社团里有哪些作者" → 调用 list_authors
+- 用户: "张三写过哪些文档" → 调用 search_docs 按作者筛选
+
+【回答风格】
+- 有温度，像学习伙伴
+- 回答后追问「还想了解什么？」
+- 标注来源：「根据《文档名》by 作者...」
+"""
+
+
+class NovaBotAgent:
+    """NovaBot Agent 处理自然语言交互"""
+
+    def __init__(self, plugin):
+        self.plugin = plugin
+
+    async def handle_message(self, event: AstrMessageEvent) -> str:
+        """处理用户消息，返回 Agent 回复
+
+        Args:
+            event: 消息事件
+
+        Returns:
+            Agent 回复文本
+        """
+        umo = event.unified_msg_origin
+
+        # 获取 Provider ID
+        prov_id = await self.plugin.context.get_current_chat_provider_id(umo)
+        if not prov_id:
+            return "LLM 未配置，无法处理消息。请联系管理员配置 LLM 服务。"
+
+        # 获取用户画像（如果已绑定）
+        user_context = await self._get_user_context(event)
+
+        # 构建系统提示词
+        system_prompt = self._build_system_prompt(user_context)
+
+        # 获取工具
+        tools = self._get_tools()
+
+        if not tools:
+            return "工具未初始化，请检查插件配置。"
+
+        # 调用 Agent
+        try:
+            logger.info(f"[Agent] 开始处理消息: {event.message_str[:50]}...")
+
+            llm_resp = await self.plugin.context.tool_loop_agent(
+                event=event,
+                chat_provider_id=prov_id,
+                prompt=event.message_str,
+                system_prompt=system_prompt,
+                tools=ToolSet(tools),
+                max_steps=10,
+                tool_call_timeout=60,
+            )
+
+            logger.info(f"[Agent] 消息处理完成")
+            return llm_resp.completion_text
+
+        except Exception as e:
+            logger.error(f"[Agent] 处理消息失败: {e}", exc_info=True)
+            return f"处理消息时出错，请稍后重试。"
+
+    async def _get_user_context(self, event: AstrMessageEvent) -> dict:
+        """获取用户上下文信息
+
+        Args:
+            event: 消息事件
+
+        Returns:
+            用户上下文字典，包含绑定状态和画像信息
+        """
+        platform_id = event.get_sender_id()
+        binding = self.plugin.storage.get_binding(platform_id)
+
+        if not binding:
+            return {"bound": False, "platform_id": platform_id}
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "")
+
+        # 获取用户画像
+        profile = None
+        if yuque_id:
+            profile = self.plugin.storage.load_profile(yuque_id)
+
+        return {
+            "bound": True,
+            "platform_id": platform_id,
+            "yuque_id": yuque_id,
+            "yuque_name": yuque_name,
+            "profile": profile.get("profile") if profile else None,
+            "stats": profile.get("stats") if profile else None,
+        }
+
+    def _build_system_prompt(self, user_context: dict) -> str:
+        """构建系统提示词
+
+        Args:
+            user_context: 用户上下文
+
+        Returns:
+            完整的系统提示词
+        """
+        prompt = DEFAULT_SYSTEM_PROMPT
+
+        # 如果用户已绑定且有画像，添加个性化信息
+        if user_context.get("bound") and user_context.get("profile"):
+            profile = user_context["profile"]
+            yuque_name = user_context.get("yuque_name", "未知用户")
+
+            interests = profile.get("interests", [])
+            level = profile.get("level", "unknown")
+            tags = profile.get("tags", [])
+            summary = profile.get("summary", "")
+
+            interests_str = ", ".join(interests) if interests else "暂无"
+            tags_str = ", ".join(tags) if tags else "暂无"
+
+            prompt += f"""
+
+【当前用户信息】
+- 已绑定账号: {yuque_name}
+- 兴趣领域: {interests_str}
+- 整体水平: {level}
+- 标签: {tags_str}
+- 概括: {summary}
+
+请根据用户画像提供个性化建议。如果用户问的问题与其兴趣领域相关，可以提供更深入的建议。"""
+
+        elif user_context.get("bound"):
+            # 已绑定但无画像
+            prompt += f"""
+
+【当前用户信息】
+- 已绑定账号: {user_context.get('yuque_name', '未知')}
+- 暂无画像数据，建议用户使用 /profile refresh 生成画像"""
+
+        else:
+            # 未绑定
+            prompt += """
+
+【当前用户信息】
+- 未绑定语雀账号
+- 如果用户需要个性化服务，引导使用 /bind 绑定账号"""
+
+        return prompt
+
+    def _get_tools(self):
+        """获取工具列表
+
+        Returns:
+            工具实例列表
+        """
+        from .tools import ALL_TOOLS
+
+        tools = []
+        for ToolClass in ALL_TOOLS:
+            tool = ToolClass()
+            tool.plugin = self.plugin
+            tools.append(tool)
+
+        return tools
