@@ -25,6 +25,24 @@
     "type": "string",
     "default": "text-embedding-3-small"
   },
+  "wake_words": {
+    "description": "唤醒词列表（逗号分隔）",
+    "type": "string",
+    "default": "novabot,nova,诺瓦",
+    "hint": "群聊中需要说唤醒词才能触发 NovaBot"
+  },
+  "enable_private_chat": {
+    "description": "私聊直接响应",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，私聊消息直接触发 NovaBot，无需唤醒词"
+  },
+  "enable_group_at": {
+    "description": "群聊 @ 触发",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，@NovaBot 可触发对话"
+  },
   "webhook_enabled": {
     "description": "启用 Webhook 服务（实时同步语雀文档变更）",
     "type": "bool",

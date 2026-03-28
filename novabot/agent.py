@@ -55,16 +55,19 @@ class NovaBotAgent:
     def __init__(self, plugin):
         self.plugin = plugin
 
-    async def handle_message(self, event: AstrMessageEvent) -> str:
+    async def handle_message(self, event: AstrMessageEvent, query: str = None) -> str:
         """处理用户消息，返回 Agent 回复
 
         Args:
             event: 消息事件
+            query: 处理后的查询（可选，如移除唤醒词后的内容）
 
         Returns:
             Agent 回复文本
         """
         umo = event.unified_msg_origin
+        # 使用传入的 query 或原始消息
+        user_message = query if query else event.message_str
 
         # 获取 Provider ID
         prov_id = await self.plugin.context.get_current_chat_provider_id(umo)
@@ -88,14 +91,14 @@ class NovaBotAgent:
 
         # 调用 Agent
         try:
-            logger.info(f"[Agent] 开始处理消息: {event.message_str[:50]}...")
+            logger.info(f"[Agent] 开始处理消息: {user_message[:50]}...")
             if conversation_history:
                 logger.info(f"[Agent] 携带 {len(conversation_history)} 条历史记录")
 
             llm_resp = await self.plugin.context.tool_loop_agent(
                 event=event,
                 chat_provider_id=prov_id,
-                prompt=event.message_str,
+                prompt=user_message,
                 system_prompt=system_prompt,
                 tools=ToolSet(tools),
                 max_steps=10,
@@ -103,7 +106,7 @@ class NovaBotAgent:
             )
 
             # 记录对话到 conversation_manager
-            await self._record_conversation(umo, event.message_str, llm_resp.completion_text)
+            await self._record_conversation(umo, user_message, llm_resp.completion_text)
 
             logger.info(f"[Agent] 消息处理完成")
             return llm_resp.completion_text

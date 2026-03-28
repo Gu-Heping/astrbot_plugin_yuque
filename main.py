@@ -47,6 +47,12 @@ class NovaBotPlugin(Star):
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
 
+        # 消息路由配置
+        wake_words_str = config.get("wake_words", "novabot,nova,诺瓦")
+        self.wake_words = [w.strip().lower() for w in wake_words_str.split(",") if w.strip()]
+        self.enable_private_chat = config.get("enable_private_chat", True)
+        self.enable_group_at = config.get("enable_group_at", True)
+
         # 获取插件数据目录（AstrBot 标准路径，使用 self.name）
         # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
         # get_astrbot_data_path() 返回 str，需要转换为 Path
@@ -311,45 +317,103 @@ class NovaBotPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
-        """处理非命令消息（自然语言交互）
+        """处理消息（根据消息路由规则）
 
-        用户可以直接对话，无需记忆命令。
-        Agent 会自动识别意图并调用合适的工具。
+        消息路由规则：
+        - 私聊：直接响应（可配置）
+        - 群聊：需要 @ 或唤醒词触发
+        - 命令消息：跳过，让命令处理器处理
         """
-        # 跳过命令消息
-        # 注意：AstrBot 在某些平台（如飞书）会去掉 / 前缀
-        # 所以需要同时检查原始消息和处理后的消息
         msg = event.message_str.strip()
-        raw_msg = event.message_str  # 可能已被 AstrBot 处理过
 
-        # 检查是否是命令（原始消息以 / 开头，或消息匹配已注册的命令名）
-        is_command = raw_msg.startswith("/") or msg.startswith("/")
-
-        # 如果不是明显的命令，检查是否匹配已知的命令名
-        known_commands = [
-            "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
-            "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askadmin"
-        ]
-        if not is_command and msg.split()[0].lower() in known_commands:
-            is_command = True
-            logger.info(f"[on_message] 检测到命令（无 / 前缀）: {msg}")
-
-        if is_command:
-            logger.info(f"[on_message] 跳过命令消息，让命令处理器处理")
+        # 跳过命令消息
+        if self._is_command(msg):
             return
 
-        # 处理非命令消息
-        logger.info(f"[on_message] 处理非命令消息: {msg[:30]}...")
+        # 判断是否应该处理这条消息
+        should_handle, query = self._should_handle_message(event, msg)
+        if not should_handle:
+            return  # 不处理，让其他插件处理
+
+        # 处理消息
+        logger.info(f"[on_message] 处理消息: {query[:30]}...")
         try:
-            response = await self.agent.handle_message(event)
+            response = await self.agent.handle_message(event, query)
             yield event.plain_result(response)
         except Exception as e:
             logger.error(f"自然语言处理失败: {e}", exc_info=True)
             yield event.plain_result("处理消息时出错，请稍后重试。")
 
-        # 阻止事件继续传播，避免 AstrBot 默认 LLM 再次响应
+        # 阻止事件继续传播
         event.stop_event()
+
+    def _is_command(self, msg: str) -> bool:
+        """判断是否是命令消息"""
+        # 检查 / 前缀
+        if msg.startswith("/"):
+            return True
+
+        # 飞书等平台可能去掉 / 前缀，检查已知命令名
+        known_commands = [
+            "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
+            "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
+            "tokens", "ask", "askadmin", "nova"
+        ]
+        first_word = msg.split()[0].lower() if msg.split() else ""
+        if first_word in known_commands:
+            return True
+
+        return False
+
+    def _should_handle_message(self, event: AstrMessageEvent, msg: str) -> tuple:
+        """判断是否应该处理这条消息
+
+        Returns:
+            (should_handle, processed_query)
+        """
+        is_group = event.get_group_id() is not None
+
+        if is_group:
+            # 群聊：检查 @ 或唤醒词
+            if self.enable_group_at and self._is_at_me(event):
+                logger.info(f"[on_message] 检测到 @ 触发")
+                return True, self._remove_at(msg)
+
+            for wake in self.wake_words:
+                if msg.lower().startswith(wake):
+                    logger.info(f"[on_message] 检测到唤醒词: {wake}")
+                    return True, msg[len(wake):].strip()
+
+            # 群聊中没有触发条件，不处理
+            return False, ""
+        else:
+            # 私聊：直接响应（可配置）
+            if self.enable_private_chat:
+                return True, msg
+            else:
+                # 也需要唤醒词
+                for wake in self.wake_words:
+                    if msg.lower().startswith(wake):
+                        return True, msg[len(wake):].strip()
+                return False, ""
+
+    def _is_at_me(self, event: AstrMessageEvent) -> bool:
+        """检查是否 @ 了机器人"""
+        import astrbot.api.message_components as Comp
+        message_obj = event.message_obj
+        if message_obj and message_obj.message:
+            for comp in message_obj.message:
+                if isinstance(comp, Comp.At):
+                    # 检查 @ 的是不是自己
+                    if str(comp.qq) == str(event.get_self_id()):
+                        return True
+        return False
+
+    def _remove_at(self, msg: str) -> str:
+        """移除消息中的 @"""
+        # 简单处理：移除开头的 @xxx
+        import re
+        return re.sub(r'^@\S+\s*', '', msg).strip()
 
     # ========== 指令 ==========
 

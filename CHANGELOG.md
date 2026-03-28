@@ -4,6 +4,30 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.18.0] - 2026-03-28
+
+### 新增
+- **消息路由系统**：解决 NovaBot 与其他插件冲突问题
+  - 私聊：直接响应（可配置）
+  - 群聊：需要 @ 或唤醒词触发
+  - 唤醒词配置：`wake_words`（默认：novabot, nova, 诺瓦）
+  - 私聊直接响应开关：`enable_private_chat`
+  - 群聊 @ 触发开关：`enable_group_at`
+
+### 改进
+- **不再霸占所有消息**：未触发时让其他插件处理
+- **支持唤醒词前缀**：群聊中"nova 帮我找爬虫教程"可触发
+- **支持 @ 触发**：群聊中 @NovaBot 可触发对话
+
+### 配置项新增
+```json
+{
+  "wake_words": "novabot,nova,诺瓦",
+  "enable_private_chat": true,
+  "enable_group_at": true
+}
+```
+
 ## [v0.17.4] - 2026-03-28
 
 ### 修复
