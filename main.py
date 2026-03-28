@@ -285,16 +285,12 @@ class NovaBotPlugin(Star):
     async def on_llm_response(self, event: AstrMessageEvent, resp: "LLMResponse"):
         """记录正常聊天的 token 使用"""
         try:
-            # 调试：记录响应结构
-            logger.debug(f"[LLM] on_llm_response 触发, resp type: {type(resp)}")
-
             # 从 raw_completion.usage 获取 token 使用量
             input_tokens = 0
             output_tokens = 0
 
             if hasattr(resp, "raw_completion") and resp.raw_completion:
                 usage = getattr(resp.raw_completion, "usage", None)
-                logger.debug(f"[LLM] raw_completion.usage: {usage}")
                 if usage:
                     input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
@@ -304,9 +300,6 @@ class NovaBotPlugin(Star):
                     usage = resp.usage
                     input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
-                    logger.debug(f"[LLM] resp.usage: {usage}")
-
-            logger.debug(f"[LLM] token 统计: input={input_tokens}, output={output_tokens}")
 
             if input_tokens > 0 or output_tokens > 0:
                 self.token_monitor.log_usage(
@@ -316,7 +309,7 @@ class NovaBotPlugin(Star):
                 )
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
             else:
-                logger.warning(f"[LLM] 无法获取 token 使用量, resp: {dir(resp)}")
+                logger.warning(f"[LLM] 无法获取 token 使用量")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")
 
