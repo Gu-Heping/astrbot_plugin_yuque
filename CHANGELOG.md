@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.15.3] - 2026-03-28
+
+### 修复
+- **Token 统计缺失 LLM 输出**：修复 `/tokens` 只显示 embedding token 而不显示 LLM 调用 token
+  - AstrBot `LLMResponse.raw_completion.usage` 才是正确的 token 使用字段
+  - 之前检查的是不存在的 `resp.usage`，导致 LLM token 未被记录
+
 ## [v0.15.2] - 2026-03-28
 
 ### 修复
