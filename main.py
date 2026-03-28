@@ -318,12 +318,13 @@ class NovaBotPlugin(Star):
         """
         # 跳过命令消息（以 / 开头），让命令处理器处理
         msg = event.message_str.strip()
-        logger.debug(f"[on_message] 收到消息: '{msg}', startswith('/'): {msg.startswith('/')}")
+        logger.info(f"[on_message] 收到消息: '{msg}', startswith('/'): {msg.startswith('/')}")
         if msg.startswith("/"):
-            logger.debug(f"[on_message] 跳过命令消息: {msg}")
+            logger.info(f"[on_message] 跳过命令消息，让命令处理器处理")
             return  # 不调用 stop_event()，让命令继续传播
 
         # 处理非命令消息
+        logger.info(f"[on_message] 处理非命令消息")
         try:
             response = await self.agent.handle_message(event)
             yield event.plain_result(response)
