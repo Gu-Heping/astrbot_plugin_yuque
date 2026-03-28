@@ -352,7 +352,8 @@ class WebhookHandler:
             self._update_toc_json(repo_dir, toc_list)
 
         # Git commit
-        commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""))
+        author = self._match_editor_name(detail) or self._resolve_author(detail)
+        commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""), author)
         if commit_hash:
             logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
 
@@ -538,7 +539,8 @@ class WebhookHandler:
         logger.info(f"[Webhook] 步骤 4/4: Git 提交")
         commit_hash = None
         if deleted_files:
-            commit_hash = self._git_commit(deleted_files, "delete", f"doc_id={doc_id}")
+            # 删除操作无法获取作者，使用空字符串
+            commit_hash = self._git_commit(deleted_files, "delete", f"doc_id={doc_id}", "")
             if commit_hash:
                 logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
 
@@ -706,8 +708,15 @@ class WebhookHandler:
         except Exception as e:
             logger.error(f"[Webhook] 更新向量失败: {e}")
 
-    def _git_commit(self, files, action: str, title: str) -> Optional[str]:
-        """Git 提交"""
+    def _git_commit(self, files, action: str, title: str, author: str = "") -> Optional[str]:
+        """Git 提交
+
+        Args:
+            files: 文件列表
+            action: 操作类型（publish/update/delete）
+            title: 文档标题
+            author: 作者名称
+        """
         if not self.config.get("git_enabled", True):
             return None
 
@@ -718,7 +727,11 @@ class WebhookHandler:
         if isinstance(files, str):
             files = [files]
 
-        message = f"yuque: {action} {title}"
+        # 构建提交消息，包含作者信息
+        if author:
+            message = f"yuque: {action} {title} (by {author})"
+        else:
+            message = f"yuque: {action} {title}"
         return git.add_commit(files, message)
 
     def _update_toc_json(self, repo_dir: Path, toc_list: list):

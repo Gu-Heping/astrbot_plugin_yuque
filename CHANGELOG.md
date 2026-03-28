@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.20.3] - 2026-03-28
+
+### 改进
+- **Git commit 作者信息**：commit message 现在包含真正作者
+  - 之前：`yuque: update 爬虫教程`
+  - 现在：`yuque: update 爬虫教程`
+- 更容易追踪谁在什么时候更新了什么文档
+
 ## [v0.20.2] - 2026-03-28
 
 ### 改进
