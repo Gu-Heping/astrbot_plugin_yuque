@@ -353,11 +353,11 @@ class DocIndex:
         try:
             conn = self._get_conn()
 
-            # 1. 本周新建文档：created_at >= since_date
+            # 1. 本周新建文档：date(created_at) >= since_date
             new_docs_rows = conn.execute("""
                 SELECT title, author, book_name, word_count, created_at
                 FROM docs
-                WHERE created_at >= ?
+                WHERE date(created_at) >= date(?)
                 ORDER BY created_at DESC
                 LIMIT 20
             """, (since_date,)).fetchall()
@@ -374,11 +374,12 @@ class DocIndex:
             result["total_new"] = len(result["new_docs"])
             result["total_words_new"] = sum(d["word_count"] for d in result["new_docs"])
 
-            # 2. 本周更新文档：updated_at >= since_date 且 created_at < since_date
+            # 2. 本周更新文档：date(updated_at) >= since_date 且 date(created_at) < since_date
             updated_docs_rows = conn.execute("""
                 SELECT title, author, book_name, updated_at
                 FROM docs
-                WHERE updated_at >= ? AND (created_at < ? OR created_at IS NULL)
+                WHERE date(updated_at) >= date(?)
+                  AND (date(created_at) < date(?) OR created_at IS NULL)
                 ORDER BY updated_at DESC
                 LIMIT 20
             """, (since_date, since_date)).fetchall()
@@ -397,7 +398,7 @@ class DocIndex:
             author_rows = conn.execute("""
                 SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
                 FROM docs
-                WHERE updated_at >= ?
+                WHERE date(updated_at) >= date(?)
                 AND author != ''
                 GROUP BY author
                 ORDER BY doc_count DESC
@@ -415,7 +416,7 @@ class DocIndex:
             book_rows = conn.execute("""
                 SELECT book_name, COUNT(*) as doc_count
                 FROM docs
-                WHERE updated_at >= ?
+                WHERE date(updated_at) >= date(?)
                 AND book_name != ''
                 GROUP BY book_name
                 ORDER BY doc_count DESC

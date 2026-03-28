@@ -353,9 +353,17 @@ class WeeklyReporter:
 
             if new_docs or updated_docs:
                 lines.append("🔥 本周文档")
-                for i, doc in enumerate(new_docs[:5], 1):
+
+                # 新建文档按字数排序（优先显示字数多的）
+                sorted_new = sorted(new_docs, key=lambda x: x.get("word_count", 0), reverse=True)[:5]
+
+                # 更新文档按更新时间排序（最新的在前）
+                sorted_updated = sorted(updated_docs, key=lambda x: x.get("updated_at", ""), reverse=True)[:5]
+
+                # 合并显示（新建优先）
+                for i, doc in enumerate(sorted_new, 1):
                     lines.append(f"{i}. 《{doc['title']}》- 新建，{doc['word_count']} 字")
-                for i, doc in enumerate(updated_docs[:5], len(new_docs) + 1):
+                for i, doc in enumerate(sorted_updated, len(sorted_new) + 1):
                     lines.append(f"{i}. 《{doc['title']}》- 更新")
                 lines.append("")
         elif activity.get("hot_files"):
