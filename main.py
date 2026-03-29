@@ -1696,38 +1696,70 @@ class NovaBotPlugin(Star):
                 yield event.plain_result(result)
                 return
 
-            # 查找第一个空格的位置
-            first_space = content.find(" ")
-            if first_space == -1:
-                # 单参数：知识库概览
-                book_name = content
-                info = self.kb_manager.get_kb_info(book_name)
+            # 查找匹配的知识库（支持知识库名包含空格）
+            kbs = self.kb_manager.list_kbs()
+            matched_kb = None
+            matched_name = ""
+
+            # 按名称长度降序，优先匹配最长的
+            sorted_kbs = sorted(kbs, key=lambda x: len(x.get("book_name", "")), reverse=True)
+            for kb in sorted_kbs:
+                kb_name = kb.get("book_name", "")
+                # 检查内容是否以知识库名开头（忽略大小写）
+                if content.lower().startswith(kb_name.lower()):
+                    matched_kb = kb
+                    matched_name = kb_name
+                    break
+                # 也支持模糊匹配
+                if kb_name.lower() in content.lower()[:len(kb_name) + 5]:
+                    matched_kb = kb
+                    matched_name = kb_name
+                    break
+
+            if not matched_kb:
+                # 没有匹配的知识库，尝试当作知识库名查询
+                first_space = content.find(" ")
+                if first_space == -1:
+                    # 单参数：当作知识库名
+                    info = self.kb_manager.get_kb_info(content)
+                    if not info:
+                        yield event.plain_result(f"❌ 未找到知识库「{content}」")
+                        return
+                    result = self.kb_manager.format_kb_info(info)
+                    yield event.plain_result(result)
+                    return
+                else:
+                    book_name = content[:first_space]
+                    info = self.kb_manager.get_kb_info(book_name)
+                    if not info:
+                        yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
+                        return
+                    result = self.kb_manager.format_kb_info(info)
+                    yield event.plain_result(result)
+                    return
+
+            # 找到匹配的知识库，提取查询部分
+            query = content[len(matched_name):].strip()
+
+            if not query:
+                # 只有知识库名，显示概览
+                info = self.kb_manager.get_kb_info(matched_name)
                 if not info:
-                    yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
+                    yield event.plain_result(f"❌ 未找到知识库「{matched_name}」")
                     return
                 result = self.kb_manager.format_kb_info(info)
                 yield event.plain_result(result)
                 return
 
-            # 双参数：范围检索
-            book_name = content[:first_space]
-            query = content[first_space + 1:]
+            # 有查询内容，执行范围检索
+            logger.info(f"[KB] 知识库: {matched_name}, 查询: {query}")
 
-            logger.info(f"[KB] 知识库: {book_name}, 查询: {query}")
-
-            # 先验证知识库存在
-            info = self.kb_manager.get_kb_info(book_name)
-            if not info:
-                yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
-                return
-
-            # 范围检索
-            results = self.kb_manager.search_in_kb(info["book_name"], query, k=5)
+            results = self.kb_manager.search_in_kb(matched_name, query, k=5)
             if not results:
-                yield event.plain_result(f"在「{info['book_name']}」中未找到相关内容")
+                yield event.plain_result(f"在「{matched_name}」中未找到相关内容")
                 return
 
-            lines = [f"在「{info['book_name']}」中找到相关内容：", ""]
+            lines = [f"在「{matched_name}」中找到相关内容：", ""]
             for i, r in enumerate(results, 1):
                 title = r.get("title", "未知")
                 author = r.get("author", "")
