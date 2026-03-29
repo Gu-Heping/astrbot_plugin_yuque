@@ -294,6 +294,26 @@ class AskBoxManager:
 
         return False, f"未找到问题 #{question_id}"
 
+    def clear_all(self) -> tuple[bool, str]:
+        """清空所有数据（管理员功能）
+
+        Returns:
+            (success, message)
+        """
+        self._ensure_loaded()
+
+        old_count = len(self._data.get("questions", []))
+        self._data = {
+            "questions": [],
+            "next_question_id": 1,
+            "next_answer_id": 1,
+        }
+        self._save()
+        self._loaded = False  # 强制下次重新加载
+
+        logger.info(f"[AskBox] 已清空 {old_count} 条数据")
+        return True, f"已清空 {old_count} 条数据"
+
     def get_stats(self) -> dict:
         """获取统计信息"""
         self._ensure_loaded()

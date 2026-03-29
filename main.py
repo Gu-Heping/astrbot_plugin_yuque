@@ -399,7 +399,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "nova"
+            "tokens", "ask", "askreset", "nova"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1639,6 +1639,16 @@ class NovaBotPlugin(Star):
         except Exception as e:
             logger.error(f"[Ask] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")
+
+    @filter.command("askreset")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def askreset_cmd(self, event: AstrMessageEvent):
+        """重置知识问答数据（管理员）"""
+        success, msg = self.ask_box.clear_all()
+        if success:
+            yield event.plain_result(f"✅ {msg}\n\n知识问答数据已重置")
+        else:
+            yield event.plain_result(f"❌ {msg}")
 
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
