@@ -399,7 +399,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askadmin", "nova"
+            "tokens", "ask", "nova"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1424,152 +1424,196 @@ class NovaBotPlugin(Star):
             yield event.plain_result(f"❌ 获取失败: {e}")
 
     @filter.command("ask")
-    async def ask_cmd(self, event: AstrMessageEvent, question: str = ""):
-        """匿名提问
+    async def ask_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """知识问答（实名）
 
         用法:
-        - /ask <问题> - 匿名提问
+        - /ask <问题> - 提问
+        - /ask list - 查看问题列表
+        - /ask view <ID> - 查看问题详情
+        - /ask answer <ID> <回答> - 回答问题（需绑定语雀）
+        - /ask like <问题ID> <回答ID> - 点赞回答
+        - /ask mine - 查看我的问题
         """
-        if not question.strip():
-            yield event.plain_result(
-                "📪 匿名提问箱\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "用法: /ask <问题>\n"
-                "\n"
-                "你的问题将被匿名提交，管理员会尽快回答。"
-            )
-            return
+        parts = args.split(maxsplit=2) if args.strip() else []
 
         try:
-            umo = event.unified_msg_origin
-            qid, msg = self.ask_box.submit_question(question.strip(), umo)
-            yield event.plain_result(f"✅ 提交成功\n问题 ID: {qid}\n\n管理员将尽快回答，感谢你的提问！")
-        except Exception as e:
-            logger.error(f"提交问题失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 提交失败: {e}")
-
-    @filter.command("askadmin")
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    async def askadmin_cmd(self, event: AstrMessageEvent, action: str = "", arg1: str = "", arg2: str = ""):
-        """提问箱管理（管理员）
-
-        用法:
-        - /askadmin list - 查看待回答问题
-        - /askadmin answered - 查看已回答问题
-        - /askadmin answer <ID> <回答> - 回答问题
-        - /askadmin delete <ID> - 删除问题
-        - /askadmin stats - 统计信息
-        """
-        try:
-            if action.lower() == "list":
-                questions = self.ask_box.get_pending_questions()
-                if not questions:
-                    yield event.plain_result("📭 暂无待回答问题")
-                    return
-                result = self.ask_box.format_questions_list(questions)
+            # 无参数：显示帮助
+            if not parts:
                 stats = self.ask_box.get_stats()
                 yield event.plain_result(
-                    f"📬 待回答问题 ({stats['pending']} 条)\n"
+                    f"💬 知识问答\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{result}"
-                    f"\n使用 /askadmin answer <ID> <回答> 回答问题"
+                    f"📊 {stats['total_questions']} 问题, {stats['total_answers']} 回答, {stats['total_likes']} 赞\n"
+                    f"\n"
+                    f"指令:\n"
+                    f"  /ask <问题> - 提问（需绑定）\n"
+                    f"  /ask list - 查看问题列表\n"
+                    f"  /ask view <ID> - 查看详情\n"
+                    f"  /ask answer <ID> <回答> - 回答（需绑定）\n"
+                    f"  /ask like <问题ID> <回答ID> - 点赞\n"
+                    f"  /ask mine - 我的问题\n"
                 )
+                return
 
-            elif action.lower() == "answered":
-                questions = self.ask_box.get_answered_questions()
-                if not questions:
-                    yield event.plain_result("📭 暂无已回答问题")
+            action = parts[0].lower()
+
+            # 提问（需绑定语雀）
+            if action not in ("list", "view", "answer", "like", "mine"):
+                content = args.strip()
+                sender_id = event.get_sender_id()
+
+                # 检查是否绑定语雀
+                binding = self.storage.get_binding_by_platform_id(sender_id)
+                if not binding:
+                    yield event.plain_result(
+                        "❌ 提问需要先绑定语雀\n"
+                        "使用 /bind <语雀用户名> 进行绑定"
+                    )
                     return
-                result = self.ask_box.format_questions_list(questions, show_answered=True)
-                yield event.plain_result(
-                    f"✅ 已回答问题\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"{result}"
-                )
 
-            elif action.lower() == "answer":
-                if not arg1 or not arg2:
-                    yield event.plain_result("用法: /askadmin answer <ID> <回答>")
+                sender_name = event.get_sender_name() or f"用户{sender_id}"
+                umo = event.unified_msg_origin
+
+                qid, msg = self.ask_box.submit_question(content, umo, sender_id, sender_name)
+                yield event.plain_result(
+                    f"✅ 提问成功 (ID: {qid})\n\n"
+                    f"使用 /ask view {qid} 查看回答"
+                )
+                return
+
+            # 查看列表
+            if action == "list":
+                questions = self.ask_box.get_all_questions(20)
+                if not questions:
+                    yield event.plain_result("暂无问题，快来提问吧！")
+                    return
+                result = self.ask_box.format_questions_list(questions)
+                yield event.plain_result(
+                    f"📋 问题列表\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"{result}\n"
+                    f"\n"
+                    f"使用 /ask view <ID> 查看详情"
+                )
+                return
+
+            # 查看详情
+            if action == "view":
+                if len(parts) < 2:
+                    yield event.plain_result("用法: /ask view <ID>")
                     return
                 try:
-                    qid = int(arg1)
+                    qid = int(parts[1])
                 except ValueError:
                     yield event.plain_result("❌ 问题 ID 必须是数字")
                     return
 
-                answer = arg2
-                success, msg, question_info = self.ask_box.answer_question(
-                    qid, answer, event.get_sender_id()
+                question = self.ask_box.get_question_by_id(qid)
+                if not question:
+                    yield event.plain_result(f"❌ 未找到问题 #{qid}")
+                    return
+
+                result = self.ask_box.format_question_detail(question)
+                yield event.plain_result(result)
+                return
+
+            # 回答问题（需绑定语雀）
+            if action == "answer":
+                if len(parts) < 3:
+                    yield event.plain_result("用法: /ask answer <ID> <回答>")
+                    return
+                try:
+                    qid = int(parts[1])
+                except ValueError:
+                    yield event.plain_result("❌ 问题 ID 必须是数字")
+                    return
+
+                answer_content = parts[2]
+
+                # 检查是否绑定语雀
+                sender_id = event.get_sender_id()
+                binding = self.storage.get_binding_by_platform_id(sender_id)
+                if not binding:
+                    yield event.plain_result(
+                        "❌ 回答问题需要先绑定语雀\n"
+                        "使用 /bind <语雀用户名> 进行绑定"
+                    )
+                    return
+
+                sender_name = event.get_sender_name() or f"用户{sender_id}"
+                yuque_id = binding.get("yuque_id")
+
+                success, msg, notify_info = self.ask_box.submit_answer(
+                    qid, answer_content, sender_id, sender_name, yuque_id
                 )
+
                 if success:
-                    # 发送通知给提问者
-                    if question_info and question_info.get("umo"):
+                    # 通知提问者
+                    if notify_info and notify_info.get("umo"):
                         try:
                             from astrbot.api.event import MessageChain
-                            umo = question_info["umo"]
-                            content = question_info.get("content", "")
-                            # 截取问题内容（最多 50 字符）
-                            display_content = content[:50] + "..." if len(content) > 50 else content
+                            umo = notify_info["umo"]
+                            question_content = notify_info.get("question_content", "")
+                            display = question_content[:50] + "..." if len(question_content) > 50 else question_content
 
                             notify_msg = (
-                                f"📬 你的问题已被回答\n"
+                                f"📬 你的问题有新回答\n"
                                 f"━━━━━━━━━━━━━━━━━━━━\n"
-                                f"❓ 问题: {display_content}\n"
-                                f"💬 回答: {answer}"
+                                f"❓ 问题: {display}\n"
+                                f"👤 回答者: {notify_info['answerer_name']}\n"
+                                f"\n"
+                                f"使用 /ask view {qid} 查看详情"
                             )
                             chain = MessageChain().message(notify_msg)
                             await self.context.send_message(umo, chain)
-                            logger.info(f"[AskBox] 已通知提问者: {umo}")
+                            logger.info(f"[AskBox] 已通知提问者")
                         except Exception as e:
                             logger.error(f"[AskBox] 通知提问者失败: {e}")
 
-                    yield event.plain_result(f"✅ {msg}\n\n📬 已通知提问者")
-                else:
-                    yield event.plain_result(f"❌ {msg}")
-
-            elif action.lower() == "delete":
-                if not arg1:
-                    yield event.plain_result("用法: /askadmin delete <ID>")
-                    return
-                try:
-                    qid = int(arg1)
-                except ValueError:
-                    yield event.plain_result("❌ 问题 ID 必须是数字")
-                    return
-
-                success, msg = self.ask_box.delete_question(qid)
-                if success:
                     yield event.plain_result(f"✅ {msg}")
                 else:
                     yield event.plain_result(f"❌ {msg}")
+                return
 
-            elif action.lower() == "stats":
-                stats = self.ask_box.get_stats()
-                yield event.plain_result(
-                    f"📊 提问箱统计\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"总问题数: {stats['total']}\n"
-                    f"待回答: {stats['pending']}\n"
-                    f"已回答: {stats['answered']}"
-                )
+            # 点赞回答
+            if action == "like":
+                if len(parts) < 3:
+                    yield event.plain_result("用法: /ask like <问题ID> <回答ID>")
+                    return
+                try:
+                    qid = int(parts[1])
+                    aid = int(parts[2])
+                except ValueError:
+                    yield event.plain_result("❌ ID 必须是数字")
+                    return
 
-            else:
-                stats = self.ask_box.get_stats()
+                user_id = event.get_sender_id()
+                success, msg = self.ask_box.like_answer(qid, aid, user_id)
+
+                if success:
+                    yield event.plain_result(f"👍 {msg}")
+                else:
+                    yield event.plain_result(f"❌ {msg}")
+                return
+
+            # 查看我的问题
+            if action == "mine":
+                sender_id = event.get_sender_id()
+                questions = self.ask_box.get_user_questions(sender_id)
+                if not questions:
+                    yield event.plain_result("你还没有提问过问题")
+                    return
+                result = self.ask_box.format_questions_list(questions)
                 yield event.plain_result(
-                    f"📪 提问箱管理（管理员）\n"
+                    f"📝 我的问题 ({len(questions)} 条)\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"📊 统计: {stats['pending']} 待回答, {stats['answered']} 已回答\n"
-                    f"\n"
-                    f"指令:\n"
-                    f"  /askadmin list - 查看待回答\n"
-                    f"  /askadmin answered - 查看已回答\n"
-                    f"  /askadmin answer <ID> <回答> - 回答\n"
-                    f"  /askadmin delete <ID> - 删除\n"
-                    f"  /askadmin stats - 统计"
+                    f"{result}"
                 )
+                return
 
         except Exception as e:
-            logger.error(f"提问箱管理失败: {e}", exc_info=True)
+            logger.error(f"[Ask] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")
 
     @filter.command("novabot")
@@ -1614,10 +1658,12 @@ class NovaBotPlugin(Star):
             "  /gap - 知识缺口分析\n"
             "  /tokens - Token 消耗统计\n"
             "\n"
-            "📪 提问箱\n"
-            "  /ask <问题> - 匿名提问\n"
-            "  /askadmin list - 待回答问题（管理员）\n"
-            "  /askadmin answer <ID> <回答> - 回答（管理员）\n"
+            "💬 知识问答\n"
+            "  /ask <问题> - 提问（需绑定）\n"
+            "  /ask list - 查看问题列表\n"
+            "  /ask view <ID> - 查看详情\n"
+            "  /ask answer <ID> <回答> - 回答（需绑定）\n"
+            "  /ask like <问题ID> <回答ID> - 点赞\n"
             "\n"
             "  /novabot - 帮助"
         )
