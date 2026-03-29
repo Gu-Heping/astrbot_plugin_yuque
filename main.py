@@ -1686,8 +1686,6 @@ class NovaBotPlugin(Star):
         else:
             content = args.strip()
 
-        logger.info(f"[KB] 原始消息: {msg}, 解析内容: {content}")
-
         try:
             # 无参数：列出知识库
             if not content:

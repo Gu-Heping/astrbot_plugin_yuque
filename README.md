@@ -17,7 +17,8 @@
 | **人格定制** | 每个用户可设置称呼、语气、回复风格 |
 | **学习辅助** | 知识卡片、学习路径、伙伴推荐、学习缺口分析 |
 | **智能推送** | LLM 判断变更价值，订阅知识库/作者更新 |
-| **匿名提问** | 降低提问门槛，管理员回答后自动通知 |
+| **知识问答** | 实名提问、多人回答、点赞机制，促进知识共享 |
+| **知识库层** | 按知识库查看概览、贡献者、范围检索 |
 
 ---
 
@@ -96,7 +97,11 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/subscribe` | 查看订阅 |
 | `/subscribe repo/author/all` | 订阅更新 |
 | `/unsubscribe <ID>` | 取消订阅 |
-| `/ask <问题>` | 匿名提问 |
+| `/kb` | 列出知识库 |
+| `/kb <知识库>` | 查看知识库概览 |
+| `/kb <知识库> <问题>` | 在知识库范围内问答 |
+| `/ask <问题>` | 提问（需绑定） |
+| `/ask list/view/answer/like/mine` | 问答操作 |
 | `/novabot` | 帮助信息 |
 
 ### 管理员指令
@@ -110,9 +115,9 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
 | `/webhook` | Webhook 服务状态 |
-| `/askadmin list/answered/answer/delete/stats` | 提问箱管理 |
 | `/weekly` | 本周知识周报 |
 | `/tokens` | Token 消耗统计 |
+| `/askreset` | 重置问答数据 |
 
 ---
 
@@ -238,6 +243,8 @@ astrbot_plugin_yuque/
 │   ├── knowledge_card.py# 知识卡片
 │   ├── learning_path.py # 学习路径
 │   ├── knowledge_gap.py # 学习缺口
+│   ├── knowledge_base.py# 知识库层
+│   ├── ask_box.py       # 知识问答
 │   ├── subscribe.py     # 订阅管理
 │   ├── push_notifier.py # 智能推送
 │   ├── webhook.py       # Webhook 处理
@@ -253,11 +260,13 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.22.0 | 知识库层（/kb 列表、概览、范围检索） |
+| v0.21.0 | 知识问答重构（实名、多回答、点赞） |
 | v0.20.0 | `/weekly` LLM 增强（主题洞察、热点话题、下周建议） |
 | v0.19.0 | 人格管理系统（称呼、语气、风格定制） |
 | v0.18.0 | 消息路由（唤醒词、@触发）、学习缺口分析 |
 | v0.17.0 | 自然语言交互（Agent 对话） |
-| v0.16.0 | 匿名提问箱 |
+| v0.16.0 | 知识问答 |
 | v0.14.0 | 周报生成、Token 监控 |
 | v0.13.0 | 伙伴推荐、知识卡片、学习路径、智能推送 |
 | v0.11.0 | Webhook 实时同步、Git 版本控制 |
