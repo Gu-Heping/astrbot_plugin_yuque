@@ -82,6 +82,9 @@ class AskBoxManager:
             ValueError: 内容超长
         """
         # 长度校验
+        content = content.strip()
+        if not content:
+            raise ValueError("问题内容不能为空")
         if len(content) > self.MAX_QUESTION_LENGTH:
             raise ValueError(f"问题内容过长（最多 {self.MAX_QUESTION_LENGTH} 字）")
 
@@ -183,6 +186,16 @@ class AskBoxManager:
 
         for question in self._data["questions"]:
             if question.get("id") == question_id:
+                # 禁止回答自己的问题
+                if answerer_id == question.get("sender_id"):
+                    return False, "不能回答自己提出的问题", None
+
+                # 禁止重复回答同一问题
+                existing = [a for a in question.get("answers", [])
+                            if a.get("answerer_id") == answerer_id]
+                if existing:
+                    return False, "你已经回答过这个问题了", None
+
                 answer_id = self._data["next_answer_id"]
                 answer = {
                     "id": answer_id,
@@ -234,6 +247,10 @@ class AskBoxManager:
             if question.get("id") == question_id:
                 for answer in question.get("answers", []):
                     if answer.get("id") == answer_id:
+                        # 禁止给自己的回答点赞
+                        if user_id == answer.get("answerer_id"):
+                            return False, "不能给自己的回答点赞"
+
                         # 检查是否已点赞
                         if user_id in answer.get("liked_by", []):
                             # 取消点赞

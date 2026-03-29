@@ -1453,13 +1453,14 @@ class NovaBotPlugin(Star):
                     f"  /ask answer <ID> <回答> - 回答（需绑定）\n"
                     f"  /ask like <问题ID> <回答ID> - 点赞\n"
                     f"  /ask mine - 我的问题\n"
+                    f"  /ask delete <ID> - 删除我的问题\n"
                 )
                 return
 
             action = parts[0].lower()
 
             # 提问（需绑定语雀）
-            if action not in ("list", "view", "answer", "like", "mine"):
+            if action not in ("list", "view", "answer", "like", "mine", "delete"):
                 content = args.strip()
                 sender_id = event.get_sender_id()
 
@@ -1475,11 +1476,14 @@ class NovaBotPlugin(Star):
                 sender_name = event.get_sender_name() or f"用户{sender_id}"
                 umo = event.unified_msg_origin
 
-                qid, msg = self.ask_box.submit_question(content, umo, sender_id, sender_name)
-                yield event.plain_result(
-                    f"✅ 提问成功 (ID: {qid})\n\n"
-                    f"使用 /ask view {qid} 查看回答"
-                )
+                try:
+                    qid, msg = self.ask_box.submit_question(content, umo, sender_id, sender_name)
+                    yield event.plain_result(
+                        f"✅ 提问成功 (ID: {qid})\n\n"
+                        f"使用 /ask view {qid} 查看回答"
+                    )
+                except ValueError as e:
+                    yield event.plain_result(f"❌ {e}")
                 return
 
             # 查看列表
@@ -1612,6 +1616,25 @@ class NovaBotPlugin(Star):
                 )
                 return
 
+            # 删除问题（仅提问者可删）
+            if action == "delete":
+                if len(parts) < 2:
+                    yield event.plain_result("用法: /ask delete <ID>")
+                    return
+                try:
+                    qid = int(parts[1])
+                except ValueError:
+                    yield event.plain_result("❌ 问题 ID 必须是数字")
+                    return
+
+                sender_id = event.get_sender_id()
+                success, msg = self.ask_box.delete_question(qid, sender_id)
+                if success:
+                    yield event.plain_result(f"✅ {msg}")
+                else:
+                    yield event.plain_result(f"❌ {msg}")
+                return
+
         except Exception as e:
             logger.error(f"[Ask] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")
@@ -1664,6 +1687,8 @@ class NovaBotPlugin(Star):
             "  /ask view <ID> - 查看详情\n"
             "  /ask answer <ID> <回答> - 回答（需绑定）\n"
             "  /ask like <问题ID> <回答ID> - 点赞\n"
+            "  /ask mine - 我的问题\n"
+            "  /ask delete <ID> - 删除我的问题\n"
             "\n"
             "  /novabot - 帮助"
         )
