@@ -1668,19 +1668,31 @@ class NovaBotPlugin(Star):
             yield event.plain_result("❌ 知识库管理器未初始化")
             return
 
-        parts = args.split(maxsplit=1) if args.strip() else []
+        # 从消息直接解析，更可靠
+        msg = event.message_str.strip()
+        # 移除命令前缀
+        if msg.startswith("/kb "):
+            content = msg[4:].strip()
+        elif msg.startswith("/kb"):
+            content = msg[3:].strip()
+        else:
+            content = args.strip()
+
+        logger.info(f"[KB] 原始消息: {msg}, 解析内容: {content}")
 
         try:
             # 无参数：列出知识库
-            if not parts:
+            if not content:
                 kbs = self.kb_manager.list_kbs()
                 result = self.kb_manager.format_kb_list(kbs)
                 yield event.plain_result(result)
                 return
 
-            # 单参数：知识库概览
-            if len(parts) == 1:
-                book_name = parts[0]
+            # 查找第一个空格的位置
+            first_space = content.find(" ")
+            if first_space == -1:
+                # 单参数：知识库概览
+                book_name = content
                 info = self.kb_manager.get_kb_info(book_name)
                 if not info:
                     yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
@@ -1690,34 +1702,35 @@ class NovaBotPlugin(Star):
                 return
 
             # 双参数：范围检索
-            if len(parts) == 2:
-                book_name = parts[0]
-                query = parts[1]
+            book_name = content[:first_space]
+            query = content[first_space + 1:]
 
-                # 先验证知识库存在
-                info = self.kb_manager.get_kb_info(book_name)
-                if not info:
-                    yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
-                    return
+            logger.info(f"[KB] 知识库: {book_name}, 查询: {query}")
 
-                # 范围检索
-                results = self.kb_manager.search_in_kb(info["book_name"], query, k=5)
-                if not results:
-                    yield event.plain_result(f"在「{info['book_name']}」中未找到相关内容")
-                    return
-
-                lines = [f"在「{info['book_name']}」中找到相关内容：", ""]
-                for i, r in enumerate(results, 1):
-                    title = r.get("title", "未知")
-                    author = r.get("author", "")
-                    content = r.get("content", "")[:200]
-                    lines.append(f"【{i}】《{title}》" + (f" - {author}" if author else ""))
-                    lines.append(f"   {content}...")
-                    lines.append("")
-
-                lines.append("💡 提示：使用 /rag search 可进行全局搜索")
-                yield event.plain_result("\n".join(lines))
+            # 先验证知识库存在
+            info = self.kb_manager.get_kb_info(book_name)
+            if not info:
+                yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
                 return
+
+            # 范围检索
+            results = self.kb_manager.search_in_kb(info["book_name"], query, k=5)
+            if not results:
+                yield event.plain_result(f"在「{info['book_name']}」中未找到相关内容")
+                return
+
+            lines = [f"在「{info['book_name']}」中找到相关内容：", ""]
+            for i, r in enumerate(results, 1):
+                title = r.get("title", "未知")
+                author = r.get("author", "")
+                content_text = r.get("content", "")[:200]
+                lines.append(f"【{i}】《{title}》" + (f" - {author}" if author else ""))
+                lines.append(f"   {content_text}...")
+                lines.append("")
+
+            lines.append("💡 提示：使用 /rag search 可进行全局搜索")
+            yield event.plain_result("\n".join(lines))
+            return
 
         except Exception as e:
             logger.error(f"[KB] 操作失败: {e}", exc_info=True)
