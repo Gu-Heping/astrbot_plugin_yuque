@@ -1670,11 +1670,11 @@ class NovaBotPlugin(Star):
 
         # 从消息直接解析，更可靠
         msg = event.message_str.strip()
-        # 移除命令前缀
-        if msg.startswith("/kb "):
-            content = msg[4:].strip()
-        elif msg.startswith("/kb"):
+        # AstrBot 已去掉 / 前缀，直接检查 kb 开头
+        if msg.startswith("kb "):
             content = msg[3:].strip()
+        elif msg.startswith("kb"):
+            content = msg[2:].strip()
         else:
             content = args.strip()
 
