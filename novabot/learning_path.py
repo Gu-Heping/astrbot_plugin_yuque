@@ -88,6 +88,7 @@ class LearningPathRecommender:
         domain: str,
         max_results: int = 10,
         exclude_author_id: Optional[int] = None,
+        exclude_author_name: Optional[str] = None,
         exclude_titles: Optional[list] = None,
     ) -> list:
         """搜索相关资源
@@ -96,6 +97,7 @@ class LearningPathRecommender:
             domain: 目标领域
             max_results: 最大结果数
             exclude_author_id: 排除的作者 ID（过滤用户自己的文档）
+            exclude_author_name: 排除的作者名（ID 缺失时的兜底过滤）
             exclude_titles: 排除的文档标题列表
 
         Returns:
@@ -113,8 +115,10 @@ class LearningPathRecommender:
                     author = r.get("author", "")
                     author_id = r.get("creator_id")
 
-                    # 过滤用户自己的文档
+                    # 过滤用户自己的文档（优先用 ID，兜底用作者名）
                     if exclude_author_id and author_id == exclude_author_id:
+                        continue
+                    if exclude_author_name and author == exclude_author_name:
                         continue
 
                     # 过滤用户已写过的标题
@@ -141,6 +145,7 @@ class LearningPathRecommender:
         target_domain: str,
         provider,
         exclude_author_id: Optional[int] = None,
+        exclude_author_name: Optional[str] = None,
         user_docs: Optional[list] = None,
     ) -> dict:
         """生成学习路径
@@ -150,6 +155,7 @@ class LearningPathRecommender:
             target_domain: 目标领域
             provider: LLM Provider
             exclude_author_id: 排除的作者 ID（过滤用户自己的文档）
+            exclude_author_name: 排除的作者名（ID 缺失时的兜底过滤）
             user_docs: 用户已写的文档标题列表
 
         Returns:
@@ -164,6 +170,7 @@ class LearningPathRecommender:
         resources = self.search_resources(
             target_domain,
             exclude_author_id=exclude_author_id,
+            exclude_author_name=exclude_author_name,
             exclude_titles=user_doc_titles,
         )
         resources_text = format_resources_for_path(resources)

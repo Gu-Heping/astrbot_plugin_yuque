@@ -1020,6 +1020,7 @@ class NovaBotPlugin(Star):
             path = await self.path_recommender.recommend(
                 profile, domain, provider,
                 exclude_author_id=yuque_id,
+                exclude_author_name=binding.get("yuque_name"),
                 user_docs=user_docs,
             )
             result = format_learning_path(path)
