@@ -26,9 +26,14 @@ class AskBoxManager:
 
     def __init__(self, data_dir: Path):
         self.data_dir = Path(data_dir)
+        self.data_dir.mkdir(parents=True, exist_ok=True)
         self.questions_file = self.data_dir / "ask_box.json"
         self._data: dict = {}
         self._loaded = False
+
+    # 内容长度限制
+    MAX_QUESTION_LENGTH = 500
+    MAX_ANSWER_LENGTH = 1000
 
     def _ensure_loaded(self):
         """确保数据已加载"""
@@ -72,7 +77,14 @@ class AskBoxManager:
 
         Returns:
             (question_id, success_message)
+
+        Raises:
+            ValueError: 内容超长
         """
+        # 长度校验
+        if len(content) > self.MAX_QUESTION_LENGTH:
+            raise ValueError(f"问题内容过长（最多 {self.MAX_QUESTION_LENGTH} 字）")
+
         self._ensure_loaded()
 
         question_id = self._data["next_question_id"]
@@ -163,6 +175,10 @@ class AskBoxManager:
         Returns:
             (success, message, notify_info) - notify_info 用于通知提问者
         """
+        # 长度校验
+        if len(content) > self.MAX_ANSWER_LENGTH:
+            return False, f"回答内容过长（最多 {self.MAX_ANSWER_LENGTH} 字）", None
+
         self._ensure_loaded()
 
         for question in self._data["questions"]:

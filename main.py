@@ -1464,7 +1464,7 @@ class NovaBotPlugin(Star):
                 sender_id = event.get_sender_id()
 
                 # 检查是否绑定语雀
-                binding = self.storage.get_binding_by_platform_id(sender_id)
+                binding = self.storage.get_binding(sender_id)
                 if not binding:
                     yield event.plain_result(
                         "❌ 提问需要先绑定语雀\n"
@@ -1533,7 +1533,7 @@ class NovaBotPlugin(Star):
 
                 # 检查是否绑定语雀
                 sender_id = event.get_sender_id()
-                binding = self.storage.get_binding_by_platform_id(sender_id)
+                binding = self.storage.get_binding(sender_id)
                 if not binding:
                     yield event.plain_result(
                         "❌ 回答问题需要先绑定语雀\n"
