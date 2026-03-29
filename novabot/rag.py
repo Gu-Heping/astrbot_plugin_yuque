@@ -557,8 +557,17 @@ class RAGEngine:
         logger.info(f"[RAG] 读取到 {len(all_docs)} 篇文档")
         return self.index_docs(all_docs, progress_callback)
 
-    def search(self, query: str, k: int = 5) -> list[dict]:
-        """语义检索（按文档ID去重）"""
+    def search(self, query: str, k: int = 5, book_filter: str = None) -> list[dict]:
+        """语义检索（按文档ID去重）
+
+        Args:
+            query: 搜索查询
+            k: 返回数量
+            book_filter: 知识库过滤（可选）
+
+        Returns:
+            搜索结果列表
+        """
         if not query or not isinstance(query, str):
             return []
 
@@ -567,8 +576,13 @@ class RAGEngine:
             return []
 
         try:
+            # 构建过滤条件
+            search_kwargs = {"k": k * 3}
+            if book_filter:
+                search_kwargs["filter"] = {"book_name": book_filter}
+
             # 获取更多结果用于去重
-            raw_results = self.vectorstore.similarity_search(query, k=k * 3)
+            raw_results = self.vectorstore.similarity_search(query, **search_kwargs)
 
             # 按文档 ID 去重，保留分数最高的
             seen_ids = set()

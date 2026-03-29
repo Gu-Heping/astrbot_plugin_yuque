@@ -26,6 +26,7 @@ from .novabot.token_monitor import TokenMonitor
 from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
 from .novabot.tools import ALL_TOOLS
+from .novabot.knowledge_base import KnowledgeBaseManager
 
 
 # ============================================================================
@@ -70,6 +71,7 @@ class NovaBotPlugin(Star):
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
         self.gap_analyzer: Optional[LearningGapAnalyzer] = None
+        self.kb_manager: Optional[KnowledgeBaseManager] = None
 
         # Webhook 服务
         self.webhook_handler: Optional[WebhookHandler] = None
@@ -120,6 +122,9 @@ class NovaBotPlugin(Star):
 
         # 初始化学习缺口分析器（依赖 RAG）
         self.gap_analyzer = LearningGapAnalyzer(self.storage, self.rag, self.token_monitor)
+
+        # 初始化知识库管理器（依赖 DocIndex + RAG）
+        self.kb_manager = KnowledgeBaseManager(self._get_doc_index(), self.rag)
 
         logger.info("NovaBot 插件初始化完成 (v0.14.9)")
 
@@ -399,7 +404,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "nova"
+            "tokens", "ask", "askreset", "kb", "nova"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1650,6 +1655,74 @@ class NovaBotPlugin(Star):
         else:
             yield event.plain_result(f"❌ {msg}")
 
+    @filter.command("kb")
+    async def kb_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """知识库管理
+
+        用法:
+        - /kb - 列出所有知识库
+        - /kb <知识库> - 查看知识库概览
+        - /kb <知识库> <问题> - 在知识库范围内问答
+        """
+        if not self.kb_manager:
+            yield event.plain_result("❌ 知识库管理器未初始化")
+            return
+
+        parts = args.split(maxsplit=1) if args.strip() else []
+
+        try:
+            # 无参数：列出知识库
+            if not parts:
+                kbs = self.kb_manager.list_kbs()
+                result = self.kb_manager.format_kb_list(kbs)
+                yield event.plain_result(result)
+                return
+
+            # 单参数：知识库概览
+            if len(parts) == 1:
+                book_name = parts[0]
+                info = self.kb_manager.get_kb_info(book_name)
+                if not info:
+                    yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
+                    return
+                result = self.kb_manager.format_kb_info(info)
+                yield event.plain_result(result)
+                return
+
+            # 双参数：范围检索
+            if len(parts) == 2:
+                book_name = parts[0]
+                query = parts[1]
+
+                # 先验证知识库存在
+                info = self.kb_manager.get_kb_info(book_name)
+                if not info:
+                    yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
+                    return
+
+                # 范围检索
+                results = self.kb_manager.search_in_kb(info["book_name"], query, k=5)
+                if not results:
+                    yield event.plain_result(f"在「{info['book_name']}」中未找到相关内容")
+                    return
+
+                lines = [f"在「{info['book_name']}」中找到相关内容：", ""]
+                for i, r in enumerate(results, 1):
+                    title = r.get("title", "未知")
+                    author = r.get("author", "")
+                    content = r.get("content", "")[:200]
+                    lines.append(f"【{i}】《{title}》" + (f" - {author}" if author else ""))
+                    lines.append(f"   {content}...")
+                    lines.append("")
+
+                lines.append("💡 提示：使用 /rag search 可进行全局搜索")
+                yield event.plain_result("\n".join(lines))
+                return
+
+        except Exception as e:
+            logger.error(f"[KB] 操作失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 操作失败: {e}")
+
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
@@ -1662,7 +1735,12 @@ class NovaBotPlugin(Star):
             "  \"我想学 Python\"\n"
             "  \"社团有哪些作者\"\n"
             "\n"
-            "📖 知识库（管理员）\n"
+            "📖 知识库\n"
+            "  /kb - 列出知识库\n"
+            "  /kb <知识库> - 查看概览\n"
+            "  /kb <知识库> <问题> - 范围检索\n"
+            "\n"
+            "📖 同步（管理员）\n"
             "  /sync - 同步知识库\n"
             "  /sync members - 同步成员\n"
             "  /sync status - 同步状态\n"
