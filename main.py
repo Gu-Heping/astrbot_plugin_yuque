@@ -1441,7 +1441,16 @@ class NovaBotPlugin(Star):
         - /ask like <问题ID> <回答ID> - 点赞回答
         - /ask mine - 查看我的问题
         """
-        parts = args.split(maxsplit=2) if args.strip() else []
+        # 从消息直接解析（AstrBot 的 args 只传第一个参数）
+        msg = event.message_str.strip()
+        if msg.startswith("ask "):
+            content = msg[4:].strip()
+        elif msg.startswith("ask"):
+            content = msg[3:].strip()
+        else:
+            content = args.strip()
+
+        parts = content.split(maxsplit=2) if content else []
 
         try:
             # 无参数：显示帮助
@@ -1467,7 +1476,6 @@ class NovaBotPlugin(Star):
 
             # 提问（需绑定语雀）
             if action not in ("list", "view", "answer", "like", "mine", "delete"):
-                content = args.strip()
                 sender_id = event.get_sender_id()
 
                 # 检查是否绑定语雀
