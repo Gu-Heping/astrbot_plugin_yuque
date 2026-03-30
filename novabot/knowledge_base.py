@@ -3,6 +3,7 @@ NovaBot 知识库层模块
 以知识库为单位的服务能力
 """
 
+import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -168,36 +169,54 @@ class KnowledgeBaseManager:
         try:
             conn = self.doc_index._get_conn()
 
-            # 获取所有文档（按标题排序）
+            # 获取所有文档（按 yuque_id 去重，保留最新）
             all_docs_rows = conn.execute("""
-                SELECT title, author
+                SELECT title, author, yuque_id, MAX(updated_at) as latest_update
                 FROM docs
                 WHERE book_name = ?
+                GROUP BY yuque_id
                 ORDER BY title
             """, (book_name_actual,)).fetchall()
 
             all_docs = [dict(row) for row in all_docs_rows]
 
-            # 尝试获取文件夹/分区信息（如果有的话）
-            # 注：语雀文档可能没有明确的文件夹字段，这里用简单的分组策略
+            # 尝试从 .toc.json 读取真正的目录结构
             folders = []
+            if self.docs_dir:
+                # 找到知识库目录
+                from .yuque_client import YuqueClient
+                dir_name = YuqueClient.slug_safe(book_name_actual)
+                toc_file = self.docs_dir / dir_name / ".toc.json"
 
-            # 按标题前缀分组（如 "项目/xxx" 形式）
-            folder_map = {}
-            for doc in all_docs:
-                title = doc.get("title", "")
-                if "/" in title:
-                    folder_name = title.split("/")[0]
-                    if folder_name not in folder_map:
-                        folder_map[folder_name] = 0
-                    folder_map[folder_name] += 1
+                if toc_file.exists():
+                    try:
+                        toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
+                        # 统计 TITLE 节点作为分区
+                        title_nodes = [n for n in toc_list if n.get("type") == "TITLE"]
+                        for node in title_nodes:
+                            title = node.get("title", "未命名")
+                            # 统计该分区下的文档数（通过 child_uuid 递归查找）
+                            doc_count = self._count_docs_in_toc(node, toc_list)
+                            folders.append({"name": title, "doc_count": doc_count})
+                    except Exception as e:
+                        logger.warning(f"[KB] 读取 TOC 失败: {e}")
 
-            for name, count in folder_map.items():
-                folders.append({"name": name, "doc_count": count})
+            # 如果没有找到分区，尝试按标题前缀分组
+            if not folders:
+                folder_map = {}
+                for doc in all_docs:
+                    title = doc.get("title", "")
+                    if "/" in title:
+                        folder_name = title.split("/")[0]
+                        if folder_name not in folder_map:
+                            folder_map[folder_name] = 0
+                        folder_map[folder_name] += 1
 
-            # 如果没有文件夹，返回空列表
+                for name, count in folder_map.items():
+                    folders.append({"name": name, "doc_count": count})
+
+            # 如果仍然没有分区，标记为未分类
             if not folders and all_docs:
-                # 将所有文档归为"未分类"
                 folders = [{"name": "未分类", "doc_count": len(all_docs)}]
 
             return {
@@ -209,6 +228,31 @@ class KnowledgeBaseManager:
         except Exception as e:
             logger.error(f"[KB] 获取结构失败: {e}")
             return None
+
+    def _count_docs_in_toc(self, node: dict, toc_list: list) -> int:
+        """统计 TOC 节点下的文档数
+
+        Args:
+            node: TOC 节点
+            toc_list: 完整的 TOC 列表
+
+        Returns:
+            文档数量
+        """
+        from .sync import toc_list_children
+
+        toc_by_uuid = {n.get("uuid"): n for n in toc_list if n.get("uuid")}
+        count = 0
+
+        children = toc_list_children(node.get("uuid"), toc_by_uuid)
+        for child in children:
+            if child.get("type") == "DOC":
+                count += 1
+            elif child.get("type") == "TITLE":
+                # 递归统计子分区
+                count += self._count_docs_in_toc(child, toc_list)
+
+        return count
 
     def search_in_kb(self, book_name: str, query: str, k: int = 5) -> list[dict]:
         """在指定知识库范围内检索
