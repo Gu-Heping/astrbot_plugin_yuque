@@ -83,5 +83,11 @@
     "description": "推送内容最大长度（字符数，超出会被截断）",
     "type": "int",
     "default": 2000
+  },
+  "web_search_enabled": {
+    "description": "启用联网搜索（在知识库找不到答案时搜索网络）",
+    "type": "bool",
+    "default": false,
+    "hint": "需要 AstrBot 配置中启用 web_search 并配置搜索引擎"
   }
 }

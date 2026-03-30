@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.10] - 2026-03-30
+
+### 新增
+- **联网搜索配置**：新增 `web_search_enabled` 配置项
+  - 启用后在系统提示词中注入联网搜索工具使用指南
+  - Agent 会在知识库无答案时自动使用 web_search
+  - 前提：AstrBot 配置中已启用 web_search 并配置搜索引擎
+
 ## [v0.23.9] - 2026-03-30
 
 ### 修复

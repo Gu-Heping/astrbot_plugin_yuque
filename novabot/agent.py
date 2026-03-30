@@ -342,6 +342,25 @@ class NovaBotAgent:
 
 请根据用户偏好调整你的回复方式。"""
 
+        # 注入联网搜索提示
+        if self.plugin.config.get("web_search_enabled", False):
+            prompt += """
+
+【联网搜索】
+你具备联网搜索能力，可以在以下情况使用：
+- 知识库中没有相关信息时
+- 用户询问最新新闻、实时信息时
+- 需要验证或补充知识库内容时
+
+使用示例：
+- 用户: "最近有什么 AI 大新闻" → 调用 web_search 搜索
+- 用户: "Python 3.13 有什么新特性" → 先搜索知识库，找不到再用 web_search
+- 用户: "今天天气怎么样" → 调用 web_search 搜索
+
+注意：
+- 优先使用知识库内容回答，联网搜索作为补充
+- 使用联网搜索后，标注「来源：网络搜索」"""
+
         return prompt
 
     def _get_tools(self):
