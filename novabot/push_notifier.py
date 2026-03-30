@@ -192,14 +192,14 @@ class PushNotifier:
                     book_name=doc_info.get("book_name", "未知"),
                     content=content
                 )
-                system_prompt = "你是一个技术文档推送决策专家，善于判断内容价值。"
+                system_prompt = "你是一个知识推送决策专家，服务于 NOVA 社团。"
             else:
                 prompt = UPDATE_PUSH_PROMPT.format(
                     title=doc_info.get("title", "未知"),
                     author=doc_info.get("author", "未知"),
                     diff=content
                 )
-                system_prompt = "你是一个技术文档更新判断专家，善于判断变更价值。"
+                system_prompt = "你是一个知识文档更新判断专家，服务于 NOVA 社团。"
 
             result = await call_llm(
                 provider=prov,
