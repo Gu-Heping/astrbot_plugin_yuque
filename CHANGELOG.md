@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.8] - 2026-03-30
+
+### 改进
+- **get_kb_structure 重构**：直接输出完整 TOC 树状结构
+  - 不再统计"分区"，而是完整呈现语雀 TOC 层级
+  - DOC 类型用 📄，TITLE 类型用 📁
+  - 递归展示所有层级（DOC 也可能有子节点）
+
 ## [v0.23.7] - 2026-03-30
 
 ### 改进
