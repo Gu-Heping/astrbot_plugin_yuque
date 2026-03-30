@@ -136,6 +136,77 @@ class KnowledgeBaseManager:
             logger.error(f"[KB] 获取最近更新失败: {e}")
             return []
 
+    def get_kb_structure(self, book_name: str) -> Optional[dict]:
+        """获取知识库目录结构
+
+        Args:
+            book_name: 知识库名称
+
+        Returns:
+            {
+                book_name: str,
+                folders: [{name, doc_count}, ...],
+                all_docs: [{title, author}, ...],
+            }
+        """
+        # 模糊匹配知识库名
+        books = self.doc_index.list_books()
+        matched = None
+        for b in books:
+            if book_name.lower() in b.get("book_name", "").lower():
+                matched = b
+                break
+
+        if not matched:
+            return None
+
+        book_name_actual = matched["book_name"]
+
+        try:
+            conn = self.doc_index._get_conn()
+
+            # 获取所有文档（按标题排序）
+            all_docs_rows = conn.execute("""
+                SELECT title, author
+                FROM docs
+                WHERE book_name = ?
+                ORDER BY title
+            """, (book_name_actual,)).fetchall()
+
+            all_docs = [dict(row) for row in all_docs_rows]
+
+            # 尝试获取文件夹/分区信息（如果有的话）
+            # 注：语雀文档可能没有明确的文件夹字段，这里用简单的分组策略
+            folders = []
+
+            # 按标题前缀分组（如 "项目/xxx" 形式）
+            folder_map = {}
+            for doc in all_docs:
+                title = doc.get("title", "")
+                if "/" in title:
+                    folder_name = title.split("/")[0]
+                    if folder_name not in folder_map:
+                        folder_map[folder_name] = 0
+                    folder_map[folder_name] += 1
+
+            for name, count in folder_map.items():
+                folders.append({"name": name, "doc_count": count})
+
+            # 如果没有文件夹，返回空列表
+            if not folders and all_docs:
+                # 将所有文档归为"未分类"
+                folders = [{"name": "未分类", "doc_count": len(all_docs)}]
+
+            return {
+                "book_name": book_name_actual,
+                "folders": folders,
+                "all_docs": all_docs,
+            }
+
+        except Exception as e:
+            logger.error(f"[KB] 获取结构失败: {e}")
+            return None
+
     def search_in_kb(self, book_name: str, query: str, k: int = 5) -> list[dict]:
         """在指定知识库范围内检索
 
@@ -458,7 +529,12 @@ class KnowledgeBaseManager:
         """
         from astrbot.core.agent.tool import ToolSet
 
-        from .tools.kb_guide_tool import GetKBInfoTool, SearchKBTool
+        from .tools.kb_guide_tool import (
+            GetKBInfoTool,
+            GetKBStructureTool,
+            ReadDocTool,
+            SearchKBTool,
+        )
 
         # 构建 prompt
         prompt = f"""请分析知识库「{book_name}」，为新人生成详细的导航报告。
@@ -484,8 +560,10 @@ class KnowledgeBaseManager:
 
 ## 你可以使用的工具
 
-- get_kb_info: 获取知识库详细信息
-- search_in_kb: 在知识库范围内搜索
+- get_kb_info: 获取知识库详细信息（文档数、贡献者等）
+- get_kb_structure: 获取知识库目录结构（分区、所有文档标题）
+- read_doc: 读取指定文档的详细内容
+- search_in_kb: 在知识库范围内搜索关键词
 
 ## 输出格式
 
@@ -503,7 +581,9 @@ class KnowledgeBaseManager:
 
 ## 注意事项
 
-- 使用工具搜索"参与"、"规则"、"手册"、"指南"等关键词
+- 先用 get_kb_structure 查看知识库有哪些文档，了解整体结构
+- 用 read_doc 阅读重要文档（如 README、手册、指南、参与规则等）
+- 用 search_in_kb 搜索"参与"、"规则"、"手册"、"指南"等关键词
 - 如果找不到参与方式，可以建议"联系贡献者 XXX 了解"
 - 不要编造不存在的活动或规则
 - 内容要具体，避免空泛的描述
@@ -511,7 +591,7 @@ class KnowledgeBaseManager:
 
         try:
             # 创建工具实例
-            tools = [GetKBInfoTool(), SearchKBTool()]
+            tools = [GetKBInfoTool(), GetKBStructureTool(), ReadDocTool(), SearchKBTool()]
             for tool in tools:
                 tool.kb_manager = self
                 tool.book_name = book_name
