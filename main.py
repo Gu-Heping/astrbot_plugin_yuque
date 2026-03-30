@@ -126,7 +126,7 @@ class NovaBotPlugin(Star):
         # 初始化知识库管理器（依赖 DocIndex + RAG）
         self.kb_manager = KnowledgeBaseManager(self._get_doc_index(), self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.23.1)")
+        logger.info("NovaBot 插件初始化完成 (v0.23.2)")
 
         # 注册 FunctionTool
         self._register_tools()
