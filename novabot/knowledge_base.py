@@ -470,9 +470,11 @@ class KnowledgeBaseManager:
                 LIMIT 10
             """, (book_name, since)).fetchall()
 
+            docs_count = dict(docs_updated)["count"] if docs_updated else 0
+
             return {
                 "period_days": days,
-                "docs_updated": docs_updated["count"] if docs_updated else 0,
+                "docs_updated": docs_count,
                 "active_contributors": [dict(row) for row in active_rows],
                 "since_date": since,
             }
