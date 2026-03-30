@@ -4,13 +4,14 @@ NovaBot 知识库层模块
 """
 
 from datetime import datetime
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, Any
 
 from astrbot.api import logger
 
 if TYPE_CHECKING:
     from .doc_index import DocIndex
     from .rag import RAGEngine
+    from .token_monitor import TokenMonitor
 
 
 class KnowledgeBaseManager:
@@ -255,3 +256,192 @@ class KnowledgeBaseManager:
             return f"{diff.seconds // 60} 分钟前"
         else:
             return "刚刚"
+
+    async def get_kb_guide(
+        self,
+        book_name: str,
+        provider: Any,
+        token_monitor: Optional["TokenMonitor"] = None,
+    ) -> Optional[dict]:
+        """生成知识库新人导航
+
+        通过 LLM 分析知识库内容，生成适合新人阅读的导航指南。
+
+        Args:
+            book_name: 知识库名称
+            provider: LLM Provider 实例
+            token_monitor: Token 监控器（可选）
+
+        Returns:
+            {
+                book_name: str,
+                doc_count: int,
+                total_words: int,
+                contributors: list,
+                recent_updates: list,
+                guide_text: str,  # LLM 生成的导航文本
+            }
+        """
+        from .llm_utils import call_llm
+        from .prompts import KB_GUIDE_PROMPT
+
+        # 1. 获取基础信息
+        info = self.get_kb_info(book_name)
+        if not info:
+            return None
+
+        book_name_actual = info.get("book_name", book_name)
+
+        # 2. 检索代表性文档（README、手册、指南等）
+        keywords = ["README", "手册", "指南", "介绍", "说明", "参与", "入门"]
+        sample_docs = []
+        seen_titles = set()
+
+        for kw in keywords:
+            if len(sample_docs) >= 5:
+                break
+            results = self.search_in_kb(book_name_actual, kw, k=2)
+            for r in results:
+                title = r.get("title", "")
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    sample_docs.append(r)
+
+        # 3. 格式化输入数据
+        contributors_text = self._format_contributors_for_guide(info.get("contributors", []))
+        recent_updates_text = self._format_updates_for_guide(info.get("recent_updates", []))
+        sample_docs_text = self._format_sample_docs_for_guide(sample_docs)
+
+        # 4. 构建 prompt
+        prompt = KB_GUIDE_PROMPT.format(
+            book_name=book_name_actual,
+            doc_count=info.get("doc_count", 0),
+            total_words=info.get("total_words", 0),
+            contributors=contributors_text,
+            recent_updates=recent_updates_text,
+            sample_docs=sample_docs_text,
+        )
+
+        # 5. 调用 LLM
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个知识库导航助手，帮助新人快速了解知识库。",
+                require_json=False,  # 不需要 JSON，直接返回文本
+                token_monitor=token_monitor,
+                feature="kb_guide",
+            )
+
+            return {
+                "book_name": book_name_actual,
+                "doc_count": info.get("doc_count", 0),
+                "total_words": info.get("total_words", 0),
+                "contributors": info.get("contributors", []),
+                "recent_updates": info.get("recent_updates", []),
+                "guide_text": result,
+            }
+
+        except Exception as e:
+            logger.error(f"[KB] 生成导航失败: {e}")
+            # 返回基础信息，不含 LLM 生成的部分
+            return {
+                "book_name": book_name_actual,
+                "doc_count": info.get("doc_count", 0),
+                "total_words": info.get("total_words", 0),
+                "contributors": info.get("contributors", []),
+                "recent_updates": info.get("recent_updates", []),
+                "guide_text": None,
+                "error": str(e),
+            }
+
+    def _format_contributors_for_guide(self, contributors: list[dict]) -> str:
+        """格式化贡献者列表用于导航生成"""
+        if not contributors:
+            return "暂无贡献者信息"
+
+        lines = []
+        for c in contributors[:5]:
+            author = c.get("author", "未知")
+            doc_count = c.get("doc_count", 0)
+            lines.append(f"- {author}: {doc_count} 篇文档")
+
+        return "\n".join(lines)
+
+    def _format_updates_for_guide(self, recent_updates: list[dict]) -> str:
+        """格式化最近更新用于导航生成"""
+        if not recent_updates:
+            return "暂无最近更新"
+
+        lines = []
+        for u in recent_updates[:5]:
+            title = u.get("title", "未知")
+            author = u.get("author", "")
+            updated_at = u.get("updated_at", "")
+
+            time_str = ""
+            if updated_at:
+                try:
+                    dt = datetime.fromisoformat(updated_at)
+                    time_str = dt.strftime("%m.%d")
+                except (ValueError, TypeError):
+                    pass
+
+            line = f"- {time_str} {author} 更新《{title}》"
+            lines.append(line.strip())
+
+        return "\n".join(lines)
+
+    def _format_sample_docs_for_guide(self, sample_docs: list[dict]) -> str:
+        """格式化代表性文档片段用于导航生成"""
+        if not sample_docs:
+            return "暂无代表性文档"
+
+        lines = []
+        for doc in sample_docs[:5]:
+            title = doc.get("title", "未知")
+            content = doc.get("content", "")[:200]  # 截取前 200 字符
+            lines.append(f"### 《{title}》\n{content}...\n")
+
+        return "\n".join(lines)
+
+    def format_kb_guide(self, guide: dict) -> str:
+        """格式化知识库导航输出
+
+        Args:
+            guide: 导航信息字典
+
+        Returns:
+            格式化的导航文本
+        """
+        book_name = guide.get("book_name", "未知")
+        guide_text = guide.get("guide_text")
+        error = guide.get("error")
+
+        lines = [f"📚 知识库：{book_name}", ""]
+
+        if guide_text:
+            # LLM 生成的导航文本
+            lines.append(guide_text)
+        elif error:
+            # 生成失败，显示基础信息
+            lines.append("⚠️ 导航生成失败，显示基础信息：")
+            lines.append("")
+            lines.append(f"📄 文档数：{guide.get('doc_count', 0)}")
+            lines.append(f"📝 总字数：{guide.get('total_words', 0)}")
+
+            contributors = guide.get("contributors", [])
+            if contributors:
+                lines.append("")
+                lines.append("👥 贡献者")
+                for c in contributors[:5]:
+                    author = c.get("author", "未知")
+                    doc_count = c.get("doc_count", 0)
+                    lines.append(f"• {author} - {doc_count} 篇")
+
+            lines.append("")
+            lines.append(f"❌ 错误：{error}")
+        else:
+            lines.append("暂无导航信息")
+
+        return "\n".join(lines)
