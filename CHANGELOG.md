@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.11] - 2026-03-30
+
+### 新增
+- **语雀链接解析工具**：新增 `parse_yuque_url` 工具
+  - 支持直接通过语雀链接定位文档
+  - 解析链接格式：`https://xxx.yuque.com/{namespace}/{doc_slug}`
+  - 自动读取并返回文档内容
+
 ## [v0.23.10] - 2026-03-30
 
 ### 新增

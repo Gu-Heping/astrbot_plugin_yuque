@@ -3,7 +3,13 @@ NovaBot LLM 工具模块
 """
 
 from .base import BaseTool
-from .search import SearchKnowledgeBaseTool, GrepLocalDocsTool, ReadDocTool, KnowledgeCardTool
+from .search import (
+    SearchKnowledgeBaseTool,
+    GrepLocalDocsTool,
+    ReadDocTool,
+    KnowledgeCardTool,
+    ParseYuqueUrlTool,
+)
 from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool
 from .repo import ListKnowledgeBasesTool, ListRepoDocsTool
 from .persona import SetPreferenceTool
@@ -15,6 +21,7 @@ __all__ = [
     "GrepLocalDocsTool",
     "ReadDocTool",
     "KnowledgeCardTool",
+    "ParseYuqueUrlTool",
     # 元数据工具
     "SearchDocsTool",
     "ListAuthorsTool",
@@ -32,6 +39,7 @@ ALL_TOOLS = [
     GrepLocalDocsTool,
     ReadDocTool,
     KnowledgeCardTool,
+    ParseYuqueUrlTool,
     SearchDocsTool,
     ListAuthorsTool,
     DocStatsTool,

@@ -15,6 +15,119 @@ from .base import BaseTool
 
 
 @dataclass
+class ParseYuqueUrlTool(BaseTool):
+    """解析语雀链接工具"""
+
+    name: str = "parse_yuque_url"
+    description: str = "解析语雀文档链接，定位并读取对应文档。当用户提供语雀链接时调用此工具。"
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "语雀文档链接，如 https://nova.yuque.com/wg5tth/clekzy/bopur5sxounppd5q"
+            }
+        },
+        "required": ["url"]
+    })
+    plugin: Any = None
+
+    def _parse_yuque_url(self, url: str) -> tuple[str, str] | None:
+        """解析语雀链接，提取 namespace 和 doc_slug
+
+        Args:
+            url: 语雀链接
+
+        Returns:
+            (namespace, doc_slug) 或 None
+        """
+        # 匹配格式: https://xxx.yuque.com/{namespace}/{doc_slug}
+        # namespace 可能是 user/repo 或 group/repo 形式
+        pattern = r'https?://[\w-]+\.yuque\.com/([\w-]+/[\w-]+)/([\w-]+)'
+        match = re.match(pattern, url)
+        if match:
+            namespace = match.group(1)
+            doc_slug = match.group(2)
+            return namespace, doc_slug
+        return None
+
+    async def run(self, event: AstrMessageEvent, url: str) -> str:
+        docs_dir = self.get_docs_dir()
+        if not docs_dir.exists():
+            return "文档目录不存在，请先执行 /sync 同步"
+
+        # 解析链接
+        parsed = self._parse_yuque_url(url)
+        if not parsed:
+            return f"无法解析语雀链接格式: {url}\n期望格式: https://xxx.yuque.com/namespace/doc-slug"
+
+        namespace, doc_slug = parsed
+        logger.info(f"[parse_yuque_url] 解析链接: namespace={namespace}, slug={doc_slug}")
+
+        # 从 SQLite 查找文档
+        try:
+            from ..doc_index import DocIndex
+            db_path = self.plugin.storage.data_dir / "doc_index.db"
+
+            with DocIndex(str(db_path)) as doc_index:
+                conn = doc_index._get_conn()
+                # 通过 slug 精确匹配
+                rows = conn.execute("""
+                    SELECT title, author, book_name, book_namespace, file_path
+                    FROM docs
+                    WHERE slug = ?
+                    LIMIT 5
+                """, (doc_slug,)).fetchall()
+
+                if not rows:
+                    return f"未找到 slug 为「{doc_slug}」的文档"
+
+                # 尝试匹配 namespace
+                matched_row = None
+                for row in rows:
+                    row_dict = dict(row)
+                    book_ns = row_dict.get("book_namespace", "")
+                    if namespace in book_ns or book_ns in namespace:
+                        matched_row = row_dict
+                        break
+
+                # 没有精确匹配则用第一个
+                if not matched_row:
+                    matched_row = dict(rows[0])
+
+                file_path = matched_row.get("file_path")
+                title = matched_row.get("title", "未知")
+                author = matched_row.get("author", "")
+                book_name = matched_row.get("book_name", "")
+
+                if not file_path:
+                    return f"文档记录存在但缺少文件路径: {title}"
+
+                # 读取文档内容
+                doc_file = docs_dir / file_path
+                if not doc_file.exists():
+                    return f"文档文件不存在: {file_path}"
+
+                content = doc_file.read_text(encoding="utf-8")
+
+                # 去掉 YAML frontmatter
+                if content.startswith("---"):
+                    parts = content.split("---", 2)
+                    if len(parts) >= 3:
+                        content = parts[2].strip()
+
+                # 截断过长内容
+                if len(content) > 5000:
+                    content = content[:5000] + "\n\n... (文档过长，已截断)"
+
+                return f"📄 《{title}》\n作者：{author}\n知识库：{book_name}\n\n{content}"
+
+        except Exception as e:
+            logger.error(f"[parse_yuque_url] 查找文档失败: {e}")
+            return f"查找文档失败: {e}"
+
+
+@dataclass
 class SearchKnowledgeBaseTool(BaseTool):
     """知识库语义搜索工具"""
 
