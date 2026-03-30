@@ -4,6 +4,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.9] - 2026-03-30
+
+### 修复
+- **sqlite3.Row 访问修复**：`get_kb_activity()` 中 `docs_updated` 转换为 dict
+
 ## [v0.23.8] - 2026-03-30
 
 ### 改进
