@@ -4,6 +4,11 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.6] - 2026-03-30
+
+### 修复
+- **sqlite3.Row 访问修复**：转换为 dict 以支持 `.get()` 方法
+
 ## [v0.23.5] - 2026-03-30
 
 ### 修复
