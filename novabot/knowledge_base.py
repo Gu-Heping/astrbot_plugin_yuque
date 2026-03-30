@@ -266,7 +266,7 @@ class KnowledgeBaseManager:
             if not rows:
                 return None
 
-            row = rows[0]
+            row = dict(rows[0])  # 转换为 dict 以支持 .get()
             file_path = row.get("file_path")
 
             if not file_path:
