@@ -149,8 +149,7 @@ class KnowledgeBaseManager:
         Returns:
             {
                 book_name: str,
-                folders: [{name, doc_count}, ...],
-                all_docs: [{title, author}, ...],
+                toc_tree: [{type, title, depth, children: [...]}],  # 树状结构
             }
         """
         # 模糊匹配知识库名
@@ -167,92 +166,62 @@ class KnowledgeBaseManager:
         book_name_actual = matched["book_name"]
 
         try:
-            conn = self.doc_index._get_conn()
-
-            # 获取所有文档（按 yuque_id 去重，保留最新）
-            all_docs_rows = conn.execute("""
-                SELECT title, author, yuque_id, MAX(updated_at) as latest_update
-                FROM docs
-                WHERE book_name = ?
-                GROUP BY yuque_id
-                ORDER BY title
-            """, (book_name_actual,)).fetchall()
-
-            all_docs = [dict(row) for row in all_docs_rows]
-
-            # 尝试从 .toc.json 读取真正的目录结构
-            folders = []
+            # 尝试从 .toc.json 读取 TOC 结构
+            toc_tree = []
             if self.docs_dir:
-                # 找到知识库目录
                 from .yuque_client import YuqueClient
                 dir_name = YuqueClient.slug_safe(book_name_actual)
                 toc_file = self.docs_dir / dir_name / ".toc.json"
 
                 if toc_file.exists():
-                    try:
-                        toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
-                        # 统计 TITLE 节点作为分区
-                        title_nodes = [n for n in toc_list if n.get("type") == "TITLE"]
-                        for node in title_nodes:
-                            title = node.get("title", "未命名")
-                            # 统计该分区下的文档数（通过 child_uuid 递归查找）
-                            doc_count = self._count_docs_in_toc(node, toc_list)
-                            folders.append({"name": title, "doc_count": doc_count})
-                    except Exception as e:
-                        logger.warning(f"[KB] 读取 TOC 失败: {e}")
+                    toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
+                    toc_by_uuid = {n.get("uuid"): n for n in toc_list if n.get("uuid")}
+                    from .sync import toc_list_children
 
-            # 如果没有找到分区，尝试按标题前缀分组
-            if not folders:
-                folder_map = {}
-                for doc in all_docs:
-                    title = doc.get("title", "")
-                    if "/" in title:
-                        folder_name = title.split("/")[0]
-                        if folder_name not in folder_map:
-                            folder_map[folder_name] = 0
-                        folder_map[folder_name] += 1
-
-                for name, count in folder_map.items():
-                    folders.append({"name": name, "doc_count": count})
-
-            # 如果仍然没有分区，标记为未分类
-            if not folders and all_docs:
-                folders = [{"name": "未分类", "doc_count": len(all_docs)}]
+                    # 递归构建树状结构
+                    roots = toc_list_children(None, toc_by_uuid)
+                    toc_tree = self._build_toc_tree(roots, toc_by_uuid, depth=0)
 
             return {
                 "book_name": book_name_actual,
-                "folders": folders,
-                "all_docs": all_docs,
+                "toc_tree": toc_tree,
             }
 
         except Exception as e:
             logger.error(f"[KB] 获取结构失败: {e}")
             return None
 
-    def _count_docs_in_toc(self, node: dict, toc_list: list) -> int:
-        """统计 TOC 节点下的文档数
+    def _build_toc_tree(self, nodes: list, toc_by_uuid: dict, depth: int) -> list:
+        """递归构建 TOC 树状结构
 
         Args:
-            node: TOC 节点
-            toc_list: 完整的 TOC 列表
+            nodes: 当前层级的节点列表
+            toc_by_uuid: UUID -> node 映射
+            depth: 当前深度
 
         Returns:
-            文档数量
+            [{type, title, depth, children}, ...]
         """
         from .sync import toc_list_children
 
-        toc_by_uuid = {n.get("uuid"): n for n in toc_list if n.get("uuid")}
-        count = 0
+        tree = []
+        for node in nodes:
+            node_type = node.get("type", "DOC")
+            title = node.get("title", "")
+            uuid = node.get("uuid")
 
-        children = toc_list_children(node.get("uuid"), toc_by_uuid)
-        for child in children:
-            if child.get("type") == "DOC":
-                count += 1
-            elif child.get("type") == "TITLE":
-                # 递归统计子分区
-                count += self._count_docs_in_toc(child, toc_list)
+            # 递归获取子节点
+            children = toc_list_children(uuid, toc_by_uuid)
+            child_tree = self._build_toc_tree(children, toc_by_uuid, depth + 1) if children else []
 
-        return count
+            tree.append({
+                "type": node_type,
+                "title": title,
+                "depth": depth,
+                "children": child_tree,
+            })
+
+        return tree
 
     def search_in_kb(self, book_name: str, query: str, k: int = 5) -> list[dict]:
         """在指定知识库范围内检索

@@ -85,35 +85,41 @@ class GetKBStructureTool(FunctionTool):
         if not structure:
             return f"未找到知识库「{self.book_name}」"
 
-        lines = [f"📚 知识库结构：{structure.get('book_name', '未知')}", ""]
+        book_name = structure.get("book_name", "未知")
+        toc_tree = structure.get("toc_tree", [])
 
-        # 显示分区/文件夹
-        folders = structure.get("folders", [])
-        if folders:
-            lines.append("📁 文档分区：")
-            for folder in folders[:10]:
-                name = folder.get("name", "未知")
-                doc_count = folder.get("doc_count", 0)
-                lines.append(f"  • {name}（{doc_count} 篇）")
-            if len(folders) > 10:
-                lines.append(f"  ... 共 {len(folders)} 个分区")
+        lines = [f"📚 知识库目录：{book_name}", ""]
+
+        if toc_tree:
+            self._format_toc_tree(toc_tree, lines)
         else:
-            lines.append("（暂无分区信息）")
-
-        lines.append("")
-
-        # 显示所有文档标题
-        all_docs = structure.get("all_docs", [])
-        if all_docs:
-            lines.append("📄 所有文档：")
-            for doc in all_docs[:20]:
-                title = doc.get("title", "未知")
-                author = doc.get("author", "")
-                lines.append(f"  • 《{title}》" + (f" - {author}" if author else ""))
-            if len(all_docs) > 20:
-                lines.append(f"  ... 共 {len(all_docs)} 篇文档")
+            lines.append("（暂无目录结构）")
 
         return "\n".join(lines)
+
+    def _format_toc_tree(self, nodes: list, lines: list, prefix: str = ""):
+        """格式化 TOC 树状结构
+
+        Args:
+            nodes: 节点列表
+            lines: 输出行列表
+            prefix: 缩进前缀
+        """
+        for i, node in enumerate(nodes):
+            node_type = node.get("type", "DOC")
+            title = node.get("title", "")
+            children = node.get("children", [])
+
+            # 根据类型选择图标
+            icon = "📄" if node_type == "DOC" else "📁"
+
+            # 添加当前节点
+            lines.append(f"{prefix}{icon} {title}")
+
+            # 递归输出子节点
+            if children:
+                child_prefix = prefix + "  "
+                self._format_toc_tree(children, lines, child_prefix)
 
 
 @dataclass
