@@ -272,22 +272,25 @@ class PushNotifier:
         highlights = summary.get("highlights", [])
         doc_url = doc_info.get("url", "")
 
-        lines = [
-            f"📄 《{title}》有更新",
-            "",
-        ]
+        # 首行：更新者 + 文档 + 知识库
+        if book_name:
+            header = f"{author} 更新了《{title}》（知识库：{book_name}）"
+        else:
+            header = f"{author} 更新了《{title}》"
 
+        lines = [header, ""]
+
+        # 变更要点
         if highlights:
-            lines.append("📝 变更要点：")
-            for h in highlights[:5]:  # 最多 5 条
-                lines.append(f"• {h}")
+            lines.append("主要变更如下：")
+            lines.append("")
+            for i, h in enumerate(highlights[:5], 1):  # 最多 5 条
+                lines.append(f"{i}. {h}")
             lines.append("")
 
-        lines.append(f"✍️ {author}")
-        if book_name:
-            lines.append(f"📚 {book_name}")
+        # 原文链接
         if doc_url:
-            lines.append(f"🔗 {doc_url}")
+            lines.append(f"原文：{doc_url}")
 
         return "\n".join(lines)
 
