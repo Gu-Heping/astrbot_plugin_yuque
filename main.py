@@ -33,7 +33,7 @@ from .novabot.knowledge_base import KnowledgeBaseManager
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.17.0")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.22.2")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -126,7 +126,7 @@ class NovaBotPlugin(Star):
         # 初始化知识库管理器（依赖 DocIndex + RAG）
         self.kb_manager = KnowledgeBaseManager(self._get_doc_index(), self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.14.9)")
+        logger.info("NovaBot 插件初始化完成 (v0.22.2)")
 
         # 注册 FunctionTool
         self._register_tools()
