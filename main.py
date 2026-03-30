@@ -126,7 +126,7 @@ class NovaBotPlugin(Star):
         # 初始化知识库管理器（依赖 DocIndex + RAG）
         self.kb_manager = KnowledgeBaseManager(self._get_doc_index(), self.rag)
 
-        logger.info("NovaBot 插件初始化完成 (v0.23.0)")
+        logger.info("NovaBot 插件初始化完成 (v0.23.1)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -1702,15 +1702,9 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /kb guide <知识库>")
                     return
 
-                # 获取 Provider
-                prov = self.context.get_using_provider()
-                if not prov:
-                    yield event.plain_result("❌ LLM 未配置，无法生成导航")
-                    return
-
-                yield event.plain_result(f"正在为「{kb_name}」生成新人导航，请稍候...")
-
-                guide = await self.kb_manager.get_kb_guide(kb_name, prov, self.token_monitor)
+                guide = await self.kb_manager.get_kb_guide(
+                    kb_name, self.context, event, self.token_monitor
+                )
                 if not guide:
                     yield event.plain_result(f"❌ 未找到知识库「{kb_name}」")
                     return

@@ -3,12 +3,14 @@ NovaBot 知识库层模块
 以知识库为单位的服务能力
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Optional, Any
 
 from astrbot.api import logger
 
 if TYPE_CHECKING:
+    from astrbot.api.star import Context
+
     from .doc_index import DocIndex
     from .rag import RAGEngine
     from .token_monitor import TokenMonitor
@@ -257,19 +259,129 @@ class KnowledgeBaseManager:
         else:
             return "刚刚"
 
+    def get_kb_activity(self, book_name: str, days: int = 7) -> dict:
+        """获取知识库活跃度统计
+
+        Args:
+            book_name: 知识库名称
+            days: 统计天数（默认 7 天）
+
+        Returns:
+            {
+                "period_days": int,
+                "docs_updated": int,
+                "active_contributors": [{author, doc_count}, ...],
+                "total_updates": int,
+            }
+        """
+        try:
+            conn = self.doc_index._get_conn()
+
+            # 计算起始日期
+            since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+            # 本周更新的文档数
+            docs_updated = conn.execute("""
+                SELECT COUNT(*) as count
+                FROM docs
+                WHERE book_name = ? AND date(updated_at) >= date(?)
+            """, (book_name, since)).fetchone()
+
+            # 本周活跃贡献者
+            active_rows = conn.execute("""
+                SELECT author, COUNT(*) as doc_count
+                FROM docs
+                WHERE book_name = ? AND date(updated_at) >= date(?) AND author != ''
+                GROUP BY author
+                ORDER BY doc_count DESC
+                LIMIT 10
+            """, (book_name, since)).fetchall()
+
+            return {
+                "period_days": days,
+                "docs_updated": docs_updated["count"] if docs_updated else 0,
+                "active_contributors": [dict(row) for row in active_rows],
+                "since_date": since,
+            }
+
+        except Exception as e:
+            logger.error(f"[KB] 获取活跃度失败: {e}")
+            return {
+                "period_days": days,
+                "docs_updated": 0,
+                "active_contributors": [],
+                "since_date": "",
+            }
+
+    def get_kb_sample_docs(self, book_name: str, limit: int = 5) -> list[dict]:
+        """获取知识库代表性文档（用于 Agent 分析）
+
+        按字数排序，优先获取内容充实的文档。
+
+        Args:
+            book_name: 知识库名称
+            limit: 最大返回数量
+
+        Returns:
+            [{title, author, content, word_count}, ...]
+        """
+        if not self.rag:
+            return []
+
+        # 先尝试检索关键文档
+        keywords = ["README", "手册", "指南", "介绍", "说明", "参与", "入门", "规则", "公约", "怎么玩"]
+        sample_docs = []
+        seen_titles = set()
+
+        for kw in keywords:
+            if len(sample_docs) >= limit:
+                break
+            results = self.search_in_kb(book_name, kw, k=2)
+            for r in results:
+                title = r.get("title", "")
+                if title and title not in seen_titles:
+                    seen_titles.add(title)
+                    sample_docs.append(r)
+
+        # 如果不够，补充字数最多的文档
+        if len(sample_docs) < limit:
+            try:
+                conn = self.doc_index._get_conn()
+                rows = conn.execute("""
+                    SELECT title, author, word_count
+                    FROM docs
+                    WHERE book_name = ? AND word_count > 100
+                    ORDER BY word_count DESC
+                    LIMIT ?
+                """, (book_name, limit - len(sample_docs))).fetchall()
+
+                for row in rows:
+                    if row["title"] not in seen_titles:
+                        # 通过 RAG 获取内容
+                        results = self.search_in_kb(book_name, row["title"], k=1)
+                        if results:
+                            sample_docs.append(results[0])
+                            seen_titles.add(row["title"])
+            except Exception as e:
+                logger.warning(f"[KB] 获取补充文档失败: {e}")
+
+        return sample_docs[:limit]
+
     async def get_kb_guide(
         self,
         book_name: str,
-        provider: Any,
+        context: "Context",
+        event: Any = None,
         token_monitor: Optional["TokenMonitor"] = None,
     ) -> Optional[dict]:
         """生成知识库新人导航
 
-        通过 LLM 分析知识库内容，生成适合新人阅读的导航指南。
+        返回统计数据 + Agent 生成的总结。
 
         Args:
             book_name: 知识库名称
-            provider: LLM Provider 实例
+            context: AstrBot Context（用于调用 Agent）
+            event: 消息事件（用于 Agent 调用）
             token_monitor: Token 监控器（可选）
 
         Returns:
@@ -279,12 +391,11 @@ class KnowledgeBaseManager:
                 total_words: int,
                 contributors: list,
                 recent_updates: list,
-                guide_text: str,  # LLM 生成的导航文本
+                activity: dict,
+                sample_docs: list,
+                agent_summary: str,  # Agent 生成的总结
             }
         """
-        from .llm_utils import call_llm
-        from .prompts import KB_GUIDE_PROMPT
-
         # 1. 获取基础信息
         info = self.get_kb_info(book_name)
         if not info:
@@ -292,121 +403,166 @@ class KnowledgeBaseManager:
 
         book_name_actual = info.get("book_name", book_name)
 
-        # 2. 检索代表性文档（README、手册、指南等）
-        keywords = ["README", "手册", "指南", "介绍", "说明", "参与", "入门"]
-        sample_docs = []
-        seen_titles = set()
+        # 2. 获取活跃度统计
+        activity = self.get_kb_activity(book_name_actual, days=7)
 
-        for kw in keywords:
-            if len(sample_docs) >= 5:
-                break
-            results = self.search_in_kb(book_name_actual, kw, k=2)
-            for r in results:
-                title = r.get("title", "")
-                if title and title not in seen_titles:
-                    seen_titles.add(title)
-                    sample_docs.append(r)
+        # 3. 获取代表性文档
+        sample_docs = self.get_kb_sample_docs(book_name_actual, limit=5)
 
-        # 3. 格式化输入数据
-        contributors_text = self._format_contributors_for_guide(info.get("contributors", []))
-        recent_updates_text = self._format_updates_for_guide(info.get("recent_updates", []))
-        sample_docs_text = self._format_sample_docs_for_guide(sample_docs)
-
-        # 4. 构建 prompt
-        prompt = KB_GUIDE_PROMPT.format(
+        # 4. 调用 Agent 生成总结
+        agent_summary = await self._call_agent_for_summary(
+            context=context,
+            event=event,
             book_name=book_name_actual,
-            doc_count=info.get("doc_count", 0),
-            total_words=info.get("total_words", 0),
-            contributors=contributors_text,
-            recent_updates=recent_updates_text,
-            sample_docs=sample_docs_text,
+            info=info,
+            activity=activity,
+            sample_docs=sample_docs,
+            token_monitor=token_monitor,
         )
 
-        # 5. 调用 LLM
+        return {
+            "book_name": book_name_actual,
+            "doc_count": info.get("doc_count", 0),
+            "total_words": info.get("total_words", 0),
+            "contributors": info.get("contributors", []),
+            "recent_updates": info.get("recent_updates", []),
+            "latest_update": info.get("latest_update", ""),
+            "activity": activity,
+            "sample_docs": sample_docs,
+            "agent_summary": agent_summary,
+        }
+
+    async def _call_agent_for_summary(
+        self,
+        context: "Context",
+        event: Any,
+        book_name: str,
+        info: dict,
+        activity: dict,
+        sample_docs: list[dict],
+        token_monitor: Optional["TokenMonitor"] = None,
+    ) -> str:
+        """调用 Agent 生成知识库总结
+
+        Args:
+            context: AstrBot Context
+            event: 消息事件
+            book_name: 知识库名称
+            info: 基础信息
+            activity: 活跃度统计
+            sample_docs: 代表性文档
+            token_monitor: Token 监控器
+
+        Returns:
+            Agent 生成的总结文本
+        """
+        from astrbot.core.agent.tool import ToolSet
+
+        from .tools.kb_guide_tool import GetKBInfoTool, SearchKBTool
+
+        # 构建 prompt
+        prompt = f"""请分析知识库「{book_name}」，为新人生成简洁的导航总结。
+
+## 你需要完成的任务
+
+1. **这个组在做什么**：用 1-2 句话概括知识库主题和目标
+2. **怎么参与**：如果有相关信息，列出参与方式（没有则说"暂无参与指南"）
+
+## 你可以使用的工具
+
+- get_kb_info: 获取知识库详细信息
+- search_in_kb: 在知识库范围内搜索
+
+## 输出格式
+
+请直接输出以下内容：
+
+🎯 这个组在做什么
+（1-2 句话概括）
+
+💡 怎么参与
+（如有信息则列出，没有则说"暂无参与指南"）
+
+## 注意事项
+
+- 不要编造不存在的信息
+- 保持简洁，总字数控制在 150 字以内
+- 如果知识库内容不足以判断，诚实说明
+"""
+
         try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个知识库导航助手，帮助新人快速了解知识库。",
-                require_json=False,  # 不需要 JSON，直接返回文本
-                token_monitor=token_monitor,
-                feature="kb_guide",
-            )
+            # 创建工具实例
+            tools = [GetKBInfoTool(), SearchKBTool()]
+            for tool in tools:
+                tool.kb_manager = self
+                tool.book_name = book_name
 
-            return {
-                "book_name": book_name_actual,
-                "doc_count": info.get("doc_count", 0),
-                "total_words": info.get("total_words", 0),
-                "contributors": info.get("contributors", []),
-                "recent_updates": info.get("recent_updates", []),
-                "guide_text": result,
-            }
-
-        except Exception as e:
-            logger.error(f"[KB] 生成导航失败: {e}")
-            # 返回基础信息，不含 LLM 生成的部分
-            return {
-                "book_name": book_name_actual,
-                "doc_count": info.get("doc_count", 0),
-                "total_words": info.get("total_words", 0),
-                "contributors": info.get("contributors", []),
-                "recent_updates": info.get("recent_updates", []),
-                "guide_text": None,
-                "error": str(e),
-            }
-
-    def _format_contributors_for_guide(self, contributors: list[dict]) -> str:
-        """格式化贡献者列表用于导航生成"""
-        if not contributors:
-            return "暂无贡献者信息"
-
-        lines = []
-        for c in contributors[:5]:
-            author = c.get("author", "未知")
-            doc_count = c.get("doc_count", 0)
-            lines.append(f"- {author}: {doc_count} 篇文档")
-
-        return "\n".join(lines)
-
-    def _format_updates_for_guide(self, recent_updates: list[dict]) -> str:
-        """格式化最近更新用于导航生成"""
-        if not recent_updates:
-            return "暂无最近更新"
-
-        lines = []
-        for u in recent_updates[:5]:
-            title = u.get("title", "未知")
-            author = u.get("author", "")
-            updated_at = u.get("updated_at", "")
-
-            time_str = ""
-            if updated_at:
+            # 获取 Provider ID
+            prov_id = None
+            if event:
                 try:
-                    dt = datetime.fromisoformat(updated_at)
-                    time_str = dt.strftime("%m.%d")
-                except (ValueError, TypeError):
+                    prov_id = await context.get_current_chat_provider_id(event.unified_msg_origin)
+                except Exception:
                     pass
 
-            line = f"- {time_str} {author} 更新《{title}》"
-            lines.append(line.strip())
+            if not prov_id:
+                # 回退：直接用 LLM 生成，不用 Agent
+                prov = context.get_using_provider()
+                if not prov:
+                    return "🎯 这个组在做什么\n暂无信息\n\n💡 怎么参与\n暂无参与指南"
 
-        return "\n".join(lines)
+                # 简单 LLM 调用
+                try:
+                    resp = await prov.text_chat(
+                        prompt=prompt,
+                        context=[],
+                        system_prompt="你是一个知识库导航助手，帮助新人快速了解知识库。请简洁、准确地回答。",
+                    )
+                    return resp.completion_text.strip()
+                except Exception as e:
+                    logger.error(f"[KB Guide] LLM 调用失败: {e}")
+                    return "🎯 这个组在做什么\n暂无信息\n\n💡 怎么参与\n暂无参与指南"
 
-    def _format_sample_docs_for_guide(self, sample_docs: list[dict]) -> str:
-        """格式化代表性文档片段用于导航生成"""
-        if not sample_docs:
-            return "暂无代表性文档"
+            # 调用 Agent
+            from astrbot.api import logger as api_logger
+            api_logger.info(f"[KB Guide] 调用 Agent 分析知识库: {book_name}")
 
-        lines = []
-        for doc in sample_docs[:5]:
-            title = doc.get("title", "未知")
-            content = doc.get("content", "")[:200]  # 截取前 200 字符
-            lines.append(f"### 《{title}》\n{content}...\n")
+            resp = await context.tool_loop_agent(
+                event=event,
+                chat_provider_id=prov_id,
+                prompt=prompt,
+                system_prompt="你是一个知识库导航助手，帮助新人快速了解知识库。请简洁、准确地回答。",
+                tools=ToolSet(tools),
+                max_steps=5,
+                tool_call_timeout=30,
+            )
 
-        return "\n".join(lines)
+            result = resp.completion_text.strip()
+
+            # 记录 token
+            if token_monitor:
+                try:
+                    if hasattr(resp, "raw_completion") and resp.raw_completion:
+                        usage = getattr(resp.raw_completion, "usage", None)
+                        if usage:
+                            token_monitor.log_usage(
+                                feature="kb_guide",
+                                input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+                                output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+                            )
+                except Exception as e:
+                    api_logger.debug(f"[KB Guide] Token 记录失败: {e}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"[KB Guide] Agent 调用失败: {e}", exc_info=True)
+            return "🎯 这个组在做什么\n暂无信息\n\n💡 怎么参与\n暂无参与指南"
 
     def format_kb_guide(self, guide: dict) -> str:
         """格式化知识库导航输出
+
+        展示统计数据 + Agent 生成的总结。
 
         Args:
             guide: 导航信息字典
@@ -415,33 +571,82 @@ class KnowledgeBaseManager:
             格式化的导航文本
         """
         book_name = guide.get("book_name", "未知")
-        guide_text = guide.get("guide_text")
-        error = guide.get("error")
+        doc_count = guide.get("doc_count", 0)
+        total_words = guide.get("total_words", 0)
+        contributors = guide.get("contributors", [])
+        recent_updates = guide.get("recent_updates", [])
+        latest_update = guide.get("latest_update", "")
+        activity = guide.get("activity", {})
+        agent_summary = guide.get("agent_summary", "")
 
         lines = [f"📚 知识库：{book_name}", ""]
 
-        if guide_text:
-            # LLM 生成的导航文本
-            lines.append(guide_text)
-        elif error:
-            # 生成失败，显示基础信息
-            lines.append("⚠️ 导航生成失败，显示基础信息：")
-            lines.append("")
-            lines.append(f"📄 文档数：{guide.get('doc_count', 0)}")
-            lines.append(f"📝 总字数：{guide.get('total_words', 0)}")
+        # === 基本统计 ===
+        lines.append("📊 基本统计")
+        latest_str = ""
+        if latest_update:
+            try:
+                dt = datetime.fromisoformat(latest_update)
+                latest_str = dt.strftime("%Y-%m-%d")
+            except (ValueError, TypeError):
+                pass
+        lines.append(f"• 文档数：{doc_count} 篇")
+        lines.append(f"• 总字数：{total_words:,} 字")
+        lines.append(f"• 贡献者：{len(contributors)} 位")
+        if latest_str:
+            lines.append(f"• 最新更新：{latest_str}")
+        lines.append("")
 
-            contributors = guide.get("contributors", [])
-            if contributors:
-                lines.append("")
-                lines.append("👥 贡献者")
-                for c in contributors[:5]:
-                    author = c.get("author", "未知")
-                    doc_count = c.get("doc_count", 0)
-                    lines.append(f"• {author} - {doc_count} 篇")
-
+        # === 贡献者 ===
+        if contributors:
+            lines.append("👥 贡献者")
+            for c in contributors[:5]:
+                author = c.get("author", "未知")
+                doc_count = c.get("doc_count", 0)
+                total_w = c.get("total_words", 0)
+                lines.append(f"• {author} - {doc_count} 篇（{total_w:,} 字）")
+            if len(contributors) > 5:
+                lines.append(f"  ... 共 {len(contributors)} 位")
             lines.append("")
-            lines.append(f"❌ 错误：{error}")
+
+        # === 最近更新 ===
+        if recent_updates:
+            lines.append("📝 最近更新")
+            for u in recent_updates[:5]:
+                title = u.get("title", "未知")
+                author = u.get("author", "")
+                updated_at = u.get("updated_at", "")
+
+                time_str = ""
+                if updated_at:
+                    try:
+                        dt = datetime.fromisoformat(updated_at)
+                        time_str = dt.strftime("%m.%d")
+                    except (ValueError, TypeError):
+                        pass
+
+                lines.append(f"• {time_str} {author} 《{title}》")
+            lines.append("")
+
+        # === 本周活跃 ===
+        if activity and activity.get("docs_updated", 0) > 0:
+            lines.append("🔥 本周活跃")
+            lines.append(f"• 更新 {activity['docs_updated']} 篇文档")
+
+            active_contributors = activity.get("active_contributors", [])
+            if active_contributors:
+                names = [c["author"] for c in active_contributors[:5]]
+                lines.append(f"• 活跃成员：{', '.join(names)}")
+            lines.append("")
+
+        # === Agent 生成的总结 ===
+        if agent_summary:
+            lines.append(agent_summary)
         else:
-            lines.append("暂无导航信息")
+            lines.append("🎯 这个组在做什么")
+            lines.append("暂无信息")
+            lines.append("")
+            lines.append("💡 怎么参与")
+            lines.append("暂无参与指南")
 
         return "\n".join(lines)
