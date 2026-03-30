@@ -123,8 +123,10 @@ class NovaBotPlugin(Star):
         # 初始化学习缺口分析器（依赖 RAG）
         self.gap_analyzer = LearningGapAnalyzer(self.storage, self.rag, self.token_monitor)
 
-        # 初始化知识库管理器（依赖 DocIndex + RAG）
-        self.kb_manager = KnowledgeBaseManager(self._get_doc_index(), self.rag)
+        # 初始化知识库管理器（依赖 DocIndex + RAG + docs_dir）
+        self.kb_manager = KnowledgeBaseManager(
+            self._get_doc_index(), self.rag, self.storage.docs_dir
+        )
 
         logger.info("NovaBot 插件初始化完成 (v0.23.2)")
 

@@ -4,6 +4,14 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.23.5] - 2026-03-30
+
+### 修复
+- **Agent read_doc 工具修复**：从 Markdown 文件读取完整内容
+  - 之前：使用 RAG 搜索返回截断片段
+  - 现在：直接从文件读取，支持 3000 字截断
+  - 添加 `get_doc_content()` 方法通过标题模糊匹配获取文档
+
 ## [v0.23.4] - 2026-03-30
 
 ### 改进

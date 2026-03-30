@@ -144,16 +144,19 @@ class ReadDocTool(FunctionTool):
         if not title:
             return "请提供文档标题"
 
-        # 通过搜索找到文档
-        results = self.kb_manager.search_in_kb(self.book_name, title, k=1)
-        if not results:
+        # 直接从文件读取完整内容
+        doc = self.kb_manager.get_doc_content(self.book_name, title)
+        if not doc:
             return f"未找到标题包含「{title}」的文档"
 
-        doc = results[0]
         doc_title = doc.get("title", "未知")
         author = doc.get("author", "")
         content = doc.get("content", "")
         book_name = doc.get("book_name", "")
+
+        # 截断过长的内容
+        if len(content) > 3000:
+            content = content[:3000] + "\n\n... (内容已截断，共 " + str(len(content)) + " 字)"
 
         lines = [
             f"📖 《{doc_title}》",

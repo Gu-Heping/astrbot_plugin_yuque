@@ -3,7 +3,9 @@ NovaBot 知识库层模块
 以知识库为单位的服务能力
 """
 
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Any
 
 from astrbot.api import logger
@@ -25,9 +27,10 @@ class KnowledgeBaseManager:
     - 范围检索
     """
 
-    def __init__(self, doc_index: "DocIndex", rag: Optional["RAGEngine"] = None):
+    def __init__(self, doc_index: "DocIndex", rag: Optional["RAGEngine"] = None, docs_dir: Optional[Path] = None):
         self.doc_index = doc_index
         self.rag = rag
+        self.docs_dir = docs_dir
 
     def list_kbs(self) -> list[dict]:
         """列出所有知识库
@@ -222,6 +225,92 @@ class KnowledgeBaseManager:
             return []
 
         return self.rag.search(query, k=k, book_filter=book_name)
+
+    def get_doc_content(self, book_name: str, title: str) -> Optional[dict]:
+        """获取文档完整内容
+
+        Args:
+            book_name: 知识库名称
+            title: 文档标题（支持模糊匹配）
+
+        Returns:
+            {title, author, book_name, content} 或 None
+        """
+        if not self.docs_dir:
+            logger.warning("[KB] docs_dir 未设置，无法读取文档")
+            return None
+
+        try:
+            conn = self.doc_index._get_conn()
+
+            # 模糊匹配知识库
+            books = self.doc_index.list_books()
+            matched_book = None
+            for b in books:
+                if book_name.lower() in b.get("book_name", "").lower():
+                    matched_book = b.get("book_name")
+                    break
+
+            if not matched_book:
+                return None
+
+            # 模糊匹配标题
+            rows = conn.execute("""
+                SELECT title, author, book_name, file_path
+                FROM docs
+                WHERE book_name = ? AND title LIKE ?
+                ORDER BY word_count DESC
+                LIMIT 1
+            """, (matched_book, f"%{title}%")).fetchall()
+
+            if not rows:
+                return None
+
+            row = rows[0]
+            file_path = row.get("file_path")
+
+            if not file_path:
+                return None
+
+            # 读取文件内容
+            doc_file = self.docs_dir / file_path
+            if not doc_file.exists():
+                logger.warning(f"[KB] 文档文件不存在: {file_path}")
+                return None
+
+            content = doc_file.read_text(encoding="utf-8")
+
+            # 解析 frontmatter，提取正文
+            # 去掉 YAML frontmatter
+            if content.startswith("---"):
+                parts = content.split("---", 2)
+                if len(parts) >= 3:
+                    content = parts[2].strip()
+
+            # 去掉元信息表格
+            lines = content.split('\n')
+            content_start = 0
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped:
+                    content_start = i + 1
+                    continue
+                if stripped.startswith('|') or re.match(r'^\|[-:\s|]+\|$', stripped):
+                    content_start = i + 1
+                    continue
+                break
+            content = '\n'.join(lines[content_start:]).strip()
+
+            return {
+                "title": row.get("title"),
+                "author": row.get("author"),
+                "book_name": row.get("book_name"),
+                "content": content,
+            }
+
+        except Exception as e:
+            logger.error(f"[KB] 获取文档内容失败: {e}")
+            return None
 
     def format_kb_list(self, kbs: list[dict]) -> str:
         """格式化知识库列表
