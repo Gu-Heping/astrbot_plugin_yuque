@@ -1715,6 +1715,20 @@ class NovaBotPlugin(Star):
                 yield event.plain_result(result)
                 return
 
+            # 检查是否是 updates 子命令
+            if content.lower().startswith("updates"):
+                parts = content.split(maxsplit=2)
+                kb_name = parts[1] if len(parts) > 1 else ""
+                days = int(parts[2]) if len(parts) > 2 else 7
+
+                if not kb_name:
+                    yield event.plain_result("用法: /kb updates <知识库> [天数]")
+                    return
+
+                result = self.kb_manager.format_kb_updates(kb_name, days)
+                yield event.plain_result(result)
+                return
+
             # 查找匹配的知识库（支持知识库名包含空格）
             kbs = self.kb_manager.list_kbs()
             matched_kb = None

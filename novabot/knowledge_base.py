@@ -853,3 +853,82 @@ class KnowledgeBaseManager:
             lines.append("暂无参与指南")
 
         return "\n".join(lines)
+
+    def format_kb_updates(self, book_name: str, days: int = 7) -> str:
+        """格式化知识库更新感知输出
+
+        Args:
+            book_name: 知识库名称
+            days: 统计天数
+
+        Returns:
+            格式化的更新动态文本
+        """
+        # 模糊匹配知识库
+        books = self.doc_index.list_books()
+        matched = None
+        for b in books:
+            if book_name.lower() in b.get("book_name", "").lower():
+                matched = b
+                break
+
+        if not matched:
+            return f"未找到知识库「{book_name}」"
+
+        book_name_actual = matched["book_name"]
+
+        # 获取活跃度统计
+        activity = self.get_kb_activity(book_name_actual, days)
+
+        # 获取最近更新
+        updates = self.get_kb_recent_updates(book_name_actual, limit=20)
+
+        # 计算日期范围
+        since_date = activity.get("since_date", "")
+        today = datetime.now().strftime("%m.%d")
+
+        lines = [f"📚 {book_name_actual} · 近 {days} 天动态（{since_date} ~ {today}）", ""]
+
+        # === 更新记录 ===
+        docs_updated = activity.get("docs_updated", 0)
+        lines.append(f"📝 更新记录（{docs_updated} 篇）")
+
+        if updates:
+            for u in updates[:15]:
+                title = u.get("title", "未知")
+                author = u.get("author", "")
+                updated_at = u.get("updated_at", "")
+
+                time_str = ""
+                if updated_at:
+                    try:
+                        dt = datetime.fromisoformat(updated_at)
+                        time_str = dt.strftime("%m.%d")
+                    except (ValueError, TypeError):
+                        pass
+
+                lines.append(f"• {time_str} {author} 《{title}》")
+
+            if len(updates) > 15:
+                lines.append(f"... 共 {docs_updated} 篇")
+        else:
+            lines.append("（暂无更新）")
+
+        lines.append("")
+
+        # === 活跃贡献者 ===
+        active_contributors = activity.get("active_contributors", [])
+        if active_contributors:
+            lines.append("👥 活跃贡献者")
+            for c in active_contributors[:5]:
+                author = c.get("author", "未知")
+                doc_count = c.get("doc_count", 0)
+                lines.append(f"• {author} - 更新 {doc_count} 篇")
+            if len(active_contributors) > 5:
+                lines.append(f"  ... 共 {len(active_contributors)} 位")
+            lines.append("")
+
+        # === 提示 ===
+        lines.append("💡 提示：使用 /kb <知识库> <问题> 在知识库内问答")
+
+        return "\n".join(lines)
