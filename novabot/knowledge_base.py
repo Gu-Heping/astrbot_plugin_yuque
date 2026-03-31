@@ -886,8 +886,16 @@ class KnowledgeBaseManager:
         # 计算日期范围
         since_date = activity.get("since_date", "")
         today = datetime.now().strftime("%m.%d")
+        # 统一显示格式：since_date 是 YYYY-MM-DD，转换为 MM.DD
+        since_str = ""
+        if since_date:
+            try:
+                dt = datetime.strptime(since_date, "%Y-%m-%d")
+                since_str = dt.strftime("%m.%d")
+            except (ValueError, TypeError):
+                since_str = since_date
 
-        lines = [f"📚 {book_name_actual} · 近 {days} 天动态（{since_date} ~ {today}）", ""]
+        lines = [f"📚 {book_name_actual} · 近 {days} 天动态（{since_str} ~ {today}）", ""]
 
         # === 更新记录 ===
         docs_updated = activity.get("docs_updated", 0)

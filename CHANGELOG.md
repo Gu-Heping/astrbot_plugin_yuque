@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.24.1] - 2026-03-31
+
+### 修复
+- **format_kb_updates 日期格式统一**：since_date 从 YYYY-MM-DD 转换为 MM.DD 格式
+- **parse_yuque_url 元信息表格处理**：去掉文档开头的作者/时间表格
+
 ## [v0.24.0] - 2026-03-31
 
 ### 新增

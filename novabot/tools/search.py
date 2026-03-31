@@ -116,6 +116,20 @@ class ParseYuqueUrlTool(BaseTool):
                     if len(parts) >= 3:
                         content = parts[2].strip()
 
+                # 去掉元信息表格
+                lines = content.split('\n')
+                content_start = 0
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if not stripped:
+                        content_start = i + 1
+                        continue
+                    if stripped.startswith('|') or re.match(r'^\|[-:\s|]+\|$', stripped):
+                        content_start = i + 1
+                        continue
+                    break
+                content = '\n'.join(lines[content_start:]).strip()
+
                 # 截断过长内容
                 if len(content) > 5000:
                     content = content[:5000] + "\n\n... (文档过长，已截断)"
