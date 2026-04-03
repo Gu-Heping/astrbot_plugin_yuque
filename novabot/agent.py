@@ -127,6 +127,19 @@ class NovaBotAgent:
                 tool_call_timeout=60,
             )
 
+            # 记录 Token 使用（如果可用）
+            if self.plugin.token_limiter and user_context.get("bound"):
+                yuque_id = user_context.get("yuque_id")
+                if yuque_id and hasattr(llm_resp, "usage") and llm_resp.usage:
+                    usage = llm_resp.usage
+                    input_tokens = getattr(usage, "prompt_tokens", 0) or 0
+                    output_tokens = getattr(usage, "completion_tokens", 0) or 0
+                    if input_tokens > 0 or output_tokens > 0:
+                        self.plugin.token_limiter.record_usage(
+                            str(yuque_id), input_tokens + output_tokens
+                        )
+                        logger.debug(f"[Agent] 记录 token: {input_tokens + output_tokens}")
+
             # 记录对话到 conversation_manager
             await self._record_conversation(umo, user_message, llm_resp.completion_text)
 

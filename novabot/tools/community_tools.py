@@ -319,8 +319,8 @@ class FindCollaboratorsTool(BaseTool):
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             doc_index = self.plugin.storage.doc_index
             if doc_index:
-                # 搜索相关文档并提取作者
-                docs = doc_index.search_docs(keyword=topic, limit=20)
+                # 搜索相关文档并提取作者（按标题搜索）
+                docs = doc_index.search(title=topic, limit=20)
                 author_count: dict = {}
                 for doc in docs:
                     author = doc.get("author") or doc.get("creator_id")
