@@ -24,6 +24,11 @@
   - `check_question_history`：检查问题历史
   - `record_question`：记录新问题
 
+### 修复
+- **数据迁移**：旧版本数据自动补全缺失字段
+  - 加载时自动检测并补全 `learning_progress`、`question_archive`
+  - 无需手动迁移，直接升级即可
+
 ### 智能行为
 - 用户问同一问题多次时提醒："这个问题你问过 3 次了"
 - 自动记录用户的问题到问题档案

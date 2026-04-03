@@ -88,6 +88,9 @@ class ConversationMemory:
                     # 验证数据结构
                     if not isinstance(memory, dict):
                         memory = self._create_empty_memory(user_id)
+                    else:
+                        # 迁移：补全缺失的字段（兼容旧版本）
+                        memory = self._migrate_memory(memory)
                 except json.JSONDecodeError as e:
                     logger.warning(f"[Memory] 用户记忆文件损坏 ({user_id}): {e}")
                     memory = self._create_empty_memory(user_id)
@@ -98,7 +101,55 @@ class ConversationMemory:
             with self._cache_lock:
                 self._cache[user_id] = memory
 
-            return memory
+            # 如果发生了迁移，保存一次（在锁外调用 _save_user_memory，它有自己的锁）
+            migrated = memory.pop("_migrated", False)
+
+        # 锁外保存（_save_user_memory 有自己的锁）
+        if migrated:
+            self._save_user_memory(user_id, memory)
+            logger.info(f"[Memory] 数据迁移完成: {user_id}")
+
+        return memory
+
+    def _migrate_memory(self, memory: dict) -> dict:
+        """迁移旧版本数据结构
+
+        确保所有必要字段存在，兼容旧版本升级。
+
+        Args:
+            memory: 加载的记忆字典
+
+        Returns:
+            迁移后的记忆字典
+        """
+        changed = False
+
+        # v0.26.0 基础字段
+        if "sessions" not in memory:
+            memory["sessions"] = []
+            changed = True
+        if "stats" not in memory:
+            memory["stats"] = {
+                "total_sessions": 0,
+                "total_messages": 0,
+                "first_conversation": None,
+                "last_conversation": None,
+            }
+            changed = True
+
+        # v0.26.1 学习进度
+        if "learning_progress" not in memory:
+            memory["learning_progress"] = {}
+            changed = True
+
+        # v0.26.2 问题档案
+        if "question_archive" not in memory:
+            memory["question_archive"] = []
+            changed = True
+
+        # 标记是否需要保存
+        memory["_migrated"] = changed
+        return memory
 
     def _save_user_memory(self, user_id: str, memory: dict):
         """保存用户记忆
