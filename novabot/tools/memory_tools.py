@@ -493,3 +493,238 @@ class RecordLearningMilestoneTool(BaseTool):
         except Exception as e:
             logger.error(f"[RecordMilestoneTool] 记录里程碑失败: {e}", exc_info=True)
             return f"记录里程碑时出错: {e}"
+
+
+@dataclass
+class GetUnresolvedQuestionsTool(BaseTool):
+    """获取未解决问题工具
+
+    当用户问"我有什么问题没解决"、"还有哪些困惑"时调用。
+    """
+
+    name: str = "get_unresolved_questions"
+    description: str = (
+        "查看用户未解决的问题。"
+        "当用户问'我有什么问题没解决'、'还有哪些困惑'、'什么问题一直困扰我'时调用。"
+    )
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {},
+        "required": []
+    })
+    plugin: Any = None
+
+    async def run(self, event: AstrMessageEvent) -> str:
+        """获取未解决问题
+
+        Args:
+            event: 消息事件
+
+        Returns:
+            未解决问题列表
+        """
+        try:
+            platform_id = event.get_sender_id()
+            binding = self.plugin.storage.get_binding(platform_id)
+
+            if not binding:
+                return "用户未绑定语雀账号。"
+
+            yuque_id = binding.get("yuque_id")
+            yuque_name = binding.get("yuque_name", "未知")
+
+            if not yuque_id:
+                return "绑定信息异常。"
+
+            # 检查记忆管理器
+            if not self.plugin.memory_manager:
+                return "长期记忆系统未初始化。"
+
+            questions = self.plugin.memory_manager.get_unresolved_questions(str(yuque_id))
+
+            if not questions:
+                return f"🎉 {yuque_name} 没有未解决的问题！"
+
+            lines = [
+                f"❓ {yuque_name} 的未解决问题 ({len(questions)} 个)",
+                "━━━━━━━━━━━━━━━━━━━━",
+            ]
+
+            for q in questions:
+                question_text = q.get("question", "")
+                ask_count = q.get("ask_count", 1)
+                qid = q.get("question_id", "")
+
+                lines.append(f"• [{qid}] {question_text}")
+                if ask_count > 1:
+                    lines.append(f"  (问过 {ask_count} 次)")
+
+            lines.append("\n使用 /questions resolve <ID> 标记已解决")
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"[UnresolvedQuestionsTool] 获取问题失败: {e}", exc_info=True)
+            return f"获取问题时出错: {e}"
+
+
+@dataclass
+class CheckQuestionHistoryTool(BaseTool):
+    """检查问题历史工具
+
+    当用户提问时检查是否问过类似问题。
+    """
+
+    name: str = "check_question_history"
+    description: str = (
+        "检查用户是否问过类似问题。"
+        "当用户提问时调用，返回历史记录和解决状态。"
+    )
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "要检查的问题内容"
+            }
+        },
+        "required": ["question"]
+    })
+    plugin: Any = None
+
+    async def run(self, event: AstrMessageEvent, question: str = "") -> str:
+        """检查问题历史
+
+        Args:
+            event: 消息事件
+            question: 问题内容
+
+        Returns:
+            问题历史信息
+        """
+        try:
+            if not question:
+                return "请提供问题内容。"
+
+            platform_id = event.get_sender_id()
+            binding = self.plugin.storage.get_binding(platform_id)
+
+            if not binding:
+                return "用户未绑定语雀账号。"
+
+            yuque_id = binding.get("yuque_id")
+
+            if not yuque_id:
+                return "绑定信息异常。"
+
+            # 检查记忆管理器
+            if not self.plugin.memory_manager:
+                return "长期记忆系统未初始化。"
+
+            # 检查历史
+            history = self.plugin.memory_manager.check_question_history(
+                str(yuque_id), question
+            )
+
+            if not history:
+                # 新问题，记录下来
+                self.plugin.memory_manager.add_question(
+                    user_id=str(yuque_id),
+                    question=question,
+                )
+                return "这是新问题，已记录到问题档案。"
+
+            # 找到历史记录
+            ask_count = history.get("ask_count", 1)
+            resolved = history.get("resolved", False)
+            qid = history.get("question_id", "")
+            related_docs = history.get("related_docs", [])
+            suggested_mentor = history.get("suggested_mentor")
+
+            lines = [f"这个问题你问过 {ask_count} 次了。"]
+
+            if resolved:
+                resolution = history.get("resolution", "")
+                lines.append(f"✅ 已解决：{resolution}")
+            else:
+                lines.append("❌ 还没有解决。")
+
+            if related_docs:
+                lines.append("\n相关文档：")
+                for doc_id in related_docs[:5]:
+                    lines.append(f"• 文档 ID: {doc_id}")
+
+            if suggested_mentor and not resolved:
+                lines.append(f"\n推荐导师：{suggested_mentor}")
+
+            lines.append(f"\n问题 ID: {qid}")
+            return "\n".join(lines)
+
+        except Exception as e:
+            logger.error(f"[QuestionHistoryTool] 检查问题失败: {e}", exc_info=True)
+            return f"检查问题时出错: {e}"
+
+
+@dataclass
+class RecordQuestionTool(BaseTool):
+    """记录问题工具
+
+    当用户提问时记录问题。
+    """
+
+    name: str = "record_question"
+    description: str = (
+        "记录用户的问题。"
+        "当用户提出一个明确的问题时调用。"
+    )
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": "问题内容"
+            }
+        },
+        "required": ["question"]
+    })
+    plugin: Any = None
+
+    async def run(self, event: AstrMessageEvent, question: str = "") -> str:
+        """记录问题
+
+        Args:
+            event: 消息事件
+            question: 问题内容
+
+        Returns:
+            记录结果
+        """
+        try:
+            if not question:
+                return "请提供问题内容。"
+
+            platform_id = event.get_sender_id()
+            binding = self.plugin.storage.get_binding(platform_id)
+
+            if not binding:
+                return "用户未绑定语雀账号。"
+
+            yuque_id = binding.get("yuque_id")
+
+            if not yuque_id:
+                return "绑定信息异常。"
+
+            # 检查记忆管理器
+            if not self.plugin.memory_manager:
+                return "长期记忆系统未初始化。"
+
+            # 记录问题
+            qid = self.plugin.memory_manager.add_question(
+                user_id=str(yuque_id),
+                question=question,
+            )
+
+            return f"已记录问题 (ID: {qid})"
+
+        except Exception as e:
+            logger.error(f"[RecordQuestionTool] 记录问题失败: {e}", exc_info=True)
+            return f"记录问题时出错: {e}"

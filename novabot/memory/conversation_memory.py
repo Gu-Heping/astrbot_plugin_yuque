@@ -137,6 +137,7 @@ class ConversationMemory:
                 "last_conversation": None,
             },
             "learning_progress": {},  # 学习进度追踪
+            "question_archive": [],   # 问题档案
         }
 
     def add_session(
@@ -707,3 +708,250 @@ class ConversationMemory:
             }
 
         return summary
+
+    # ========== 问题档案 ==========
+
+    def add_question(
+        self,
+        user_id: str,
+        question: str,
+        session_id: str = None,
+        related_docs: List[int] = None,
+    ) -> str:
+        """添加问题或更新已有问题的计数
+
+        Args:
+            user_id: 用户标识
+            question: 问题内容
+            session_id: 会话 ID
+            related_docs: 相关文档 ID 列表
+
+        Returns:
+            question_id
+        """
+        if not user_id or not question:
+            logger.warning("[Memory] 无效参数，跳过问题记录")
+            return ""
+
+        memory = self._load_user_memory(user_id)
+
+        # 确保 question_archive 存在
+        if "question_archive" not in memory:
+            memory["question_archive"] = []
+
+        question_text = question.strip()
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+
+        # 尝试匹配相似问题
+        similar_question = self._find_similar_question(
+            memory["question_archive"], question_text
+        )
+
+        if similar_question:
+            # 更新已有问题
+            similar_question["ask_count"] += 1
+            similar_question["last_asked"] = timestamp
+            if session_id and session_id not in similar_question.get("asked_in_sessions", []):
+                similar_question.setdefault("asked_in_sessions", []).append(session_id)
+            if related_docs:
+                for doc_id in related_docs:
+                    if doc_id not in similar_question.get("related_docs", []):
+                        similar_question.setdefault("related_docs", []).append(doc_id)
+
+            self._save_user_memory(user_id, memory)
+            logger.info(f"[Memory] 更新问题计数: {similar_question['question_id']}")
+            return similar_question["question_id"]
+
+        # 创建新问题
+        question_id = f"q_{str(uuid4())[:8]}"
+        new_question = {
+            "question_id": question_id,
+            "question": question_text,
+            "first_asked": timestamp,
+            "last_asked": timestamp,
+            "ask_count": 1,
+            "resolved": False,
+            "resolution": None,
+            "related_docs": related_docs or [],
+            "suggested_mentor": None,
+            "asked_in_sessions": [session_id] if session_id else [],
+        }
+
+        memory["question_archive"].append(new_question)
+
+        # 限制问题数量（最多 100 个）
+        if len(memory["question_archive"]) > 100:
+            # 优先删除已解决的问题
+            unresolved = [q for q in memory["question_archive"] if not q.get("resolved")]
+            resolved = [q for q in memory["question_archive"] if q.get("resolved")]
+            # 保留未解决的，删除最旧的已解决
+            memory["question_archive"] = unresolved + resolved[-(100 - len(unresolved)):]
+
+        self._save_user_memory(user_id, memory)
+        logger.info(f"[Memory] 添加新问题: {question_id}")
+        return question_id
+
+    def _find_similar_question(self, questions: List[dict], question_text: str) -> Optional[dict]:
+        """查找相似问题
+
+        Args:
+            questions: 问题列表
+            question_text: 待匹配问题
+
+        Returns:
+            相似问题，未找到返回 None
+        """
+        if not questions:
+            return None
+
+        # 简单实现：关键词匹配
+        # 提取关键词（去除常见词）
+        stop_words = {"怎么", "如何", "什么", "为什么", "吗", "呢", "啊", "呀", "的", "是", "有"}
+        keywords = set(question_text.lower().split())
+        keywords = keywords - stop_words
+
+        best_match = None
+        best_score = 0
+
+        for q in questions:
+            q_text = q.get("question", "").lower()
+            q_words = set(q_text.split()) - stop_words
+
+            # 计算交集
+            common = keywords & q_words
+            if common:
+                score = len(common) / max(len(keywords), len(q_words), 1)
+                if score > 0.5 and score > best_score:
+                    best_score = score
+                    best_match = q
+
+        return best_match
+
+    def resolve_question(self, user_id: str, question_id: str, resolution: str = "") -> bool:
+        """标记问题已解决
+
+        Args:
+            user_id: 用户标识
+            question_id: 问题 ID
+            resolution: 解决方案描述
+
+        Returns:
+            是否成功
+        """
+        memory = self._load_user_memory(user_id)
+        questions = memory.get("question_archive", [])
+
+        for q in questions:
+            if q.get("question_id") == question_id:
+                q["resolved"] = True
+                q["resolution"] = resolution
+                self._save_user_memory(user_id, memory)
+                logger.info(f"[Memory] 问题已解决: {question_id}")
+                return True
+
+        return False
+
+    def get_unresolved_questions(self, user_id: str) -> List[dict]:
+        """获取未解决的问题
+
+        Args:
+            user_id: 用户标识
+
+        Returns:
+            未解决问题列表
+        """
+        memory = self._load_user_memory(user_id)
+        questions = memory.get("question_archive", [])
+
+        return [q for q in questions if not q.get("resolved")]
+
+    def get_frequent_questions(
+        self, user_id: str, min_ask_count: int = 2
+    ) -> List[dict]:
+        """获取反复出现的问题
+
+        Args:
+            user_id: 用户标识
+            min_ask_count: 最小询问次数
+
+        Returns:
+            反复出现的问题列表
+        """
+        memory = self._load_user_memory(user_id)
+        questions = memory.get("question_archive", [])
+
+        return [q for q in questions if q.get("ask_count", 1) >= min_ask_count]
+
+    def get_all_questions(self, user_id: str) -> List[dict]:
+        """获取所有问题
+
+        Args:
+            user_id: 用户标识
+
+        Returns:
+            所有问题列表
+        """
+        memory = self._load_user_memory(user_id)
+        return memory.get("question_archive", [])
+
+    def check_question_history(self, user_id: str, question: str) -> Optional[dict]:
+        """检查问题历史
+
+        Args:
+            user_id: 用户标识
+            question: 问题内容
+
+        Returns:
+            历史问题记录，未找到返回 None
+        """
+        memory = self._load_user_memory(user_id)
+        questions = memory.get("question_archive", [])
+
+        return self._find_similar_question(questions, question)
+
+    def set_suggested_mentor(
+        self, user_id: str, question_id: str, mentor_name: str
+    ) -> bool:
+        """设置推荐导师
+
+        Args:
+            user_id: 用户标识
+            question_id: 问题 ID
+            mentor_name: 导师名称
+
+        Returns:
+            是否成功
+        """
+        memory = self._load_user_memory(user_id)
+        questions = memory.get("question_archive", [])
+
+        for q in questions:
+            if q.get("question_id") == question_id:
+                q["suggested_mentor"] = mentor_name
+                self._save_user_memory(user_id, memory)
+                return True
+
+        return False
+
+    def get_question_stats(self, user_id: str) -> dict:
+        """获取问题统计
+
+        Args:
+            user_id: 用户标识
+
+        Returns:
+            统计信息
+        """
+        questions = self.get_all_questions(user_id)
+
+        total = len(questions)
+        resolved = sum(1 for q in questions if q.get("resolved"))
+        unresolved = total - resolved
+        frequent = sum(1 for q in questions if q.get("ask_count", 1) >= 2)
+
+        return {
+            "total": total,
+            "resolved": resolved,
+            "unresolved": unresolved,
+            "frequent": frequent,
+        }

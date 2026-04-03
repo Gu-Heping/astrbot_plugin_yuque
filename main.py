@@ -34,7 +34,7 @@ from .novabot.memory import ConversationMemory
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.1")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.2")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -424,7 +424,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress"
+            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1909,6 +1909,12 @@ class NovaBotPlugin(Star):
             "  /progress <领域> - 查看指定领域\n"
             "  /progress add <领域> <事件> - 添加里程碑\n"
             "\n"
+            "❓ 问题档案\n"
+            "  /questions - 未解决的问题\n"
+            "  /questions all - 所有问题\n"
+            "  /questions frequent - 反复出现的问题\n"
+            "  /questions resolve <ID> - 标记已解决\n"
+            "\n"
             "  /novabot - 帮助"
         )
 
@@ -2217,4 +2223,173 @@ class NovaBotPlugin(Star):
 
         except Exception as e:
             logger.error(f"[Progress] 操作失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 操作失败: {e}")
+
+    @filter.command("questions")
+    async def questions_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """问题档案管理
+
+        用法:
+        - /questions - 查看未解决的问题
+        - /questions all - 查看所有问题
+        - /questions resolve <ID> - 标记问题已解决
+        - /questions frequent - 查看反复出现的问题
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+
+        if not yuque_id:
+            yield event.plain_result("绑定信息异常，请重新绑定")
+            return
+
+        # 检查记忆管理器
+        if not self.memory_manager:
+            yield event.plain_result("长期记忆系统未初始化")
+            return
+
+        user_id = str(yuque_id)
+
+        # 从消息中解析参数
+        msg = event.message_str.strip()
+        import re
+        questions_match = re.search(r'questions\s+(.+)$', msg, re.IGNORECASE)
+        if questions_match:
+            content = questions_match.group(1).strip()
+        else:
+            content = args.strip()
+
+        try:
+            # 无参数：显示未解决的问题
+            if not content:
+                questions = self.memory_manager.get_unresolved_questions(user_id)
+
+                if not questions:
+                    yield event.plain_result(
+                        f"🎉 {yuque_name} 没有未解决的问题！\n\n"
+                        f"用法:\n"
+                        f"  /questions all - 查看所有问题\n"
+                        f"  /questions frequent - 反复出现的问题"
+                    )
+                    return
+
+                lines = [
+                    f"❓ {yuque_name} 的未解决问题 ({len(questions)} 个)",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                ]
+
+                for q in questions:
+                    question_text = q.get("question", "")
+                    ask_count = q.get("ask_count", 1)
+                    qid = q.get("question_id", "")
+
+                    lines.append(f"• [{qid}] {question_text}")
+                    if ask_count > 1:
+                        lines.append(f"  (问过 {ask_count} 次)")
+
+                lines.append("\n使用 /questions resolve <ID> 标记已解决")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            parts = content.split(maxsplit=1)
+            action = parts[0].lower() if parts else ""
+
+            # 查看所有问题
+            if action == "all":
+                questions = self.memory_manager.get_all_questions(user_id)
+
+                if not questions:
+                    yield event.plain_result(f"{yuque_name} 暂无问题记录")
+                    return
+
+                stats = self.memory_manager.get_question_stats(user_id)
+
+                lines = [
+                    f"📋 {yuque_name} 的问题档案",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                    f"总计: {stats['total']} | 已解决: {stats['resolved']} | 未解决: {stats['unresolved']}",
+                    "",
+                ]
+
+                for q in questions[:20]:  # 最多显示 20 个
+                    question_text = q.get("question", "")
+                    ask_count = q.get("ask_count", 1)
+                    resolved = q.get("resolved", False)
+                    qid = q.get("question_id", "")
+
+                    status = "✅" if resolved else "❓"
+                    count_str = f" (×{ask_count})" if ask_count > 1 else ""
+                    lines.append(f"{status} [{qid}] {question_text}{count_str}")
+
+                if len(questions) > 20:
+                    lines.append(f"\n... 还有 {len(questions) - 20} 个问题")
+
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 反复出现的问题
+            if action == "frequent":
+                questions = self.memory_manager.get_frequent_questions(user_id, min_ask_count=2)
+
+                if not questions:
+                    yield event.plain_result(f"{yuque_name} 没有反复出现的问题")
+                    return
+
+                lines = [
+                    f"🔄 {yuque_name} 反复出现的问题 ({len(questions)} 个)",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                ]
+
+                # 按问的次数排序
+                questions.sort(key=lambda q: q.get("ask_count", 1), reverse=True)
+
+                for q in questions:
+                    question_text = q.get("question", "")
+                    ask_count = q.get("ask_count", 1)
+                    resolved = q.get("resolved", False)
+                    qid = q.get("question_id", "")
+
+                    status = "✅" if resolved else "❓"
+                    lines.append(f"{status} [{qid}] {question_text} (问过 {ask_count} 次)")
+
+                lines.append("\n这些问题可能需要找导师帮忙")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 标记问题已解决
+            if action == "resolve":
+                if len(parts) < 2:
+                    yield event.plain_result("用法: /questions resolve <ID>\n例如: /questions resolve q_abc123")
+                    return
+
+                qid = parts[1].strip()
+                resolution = ""
+                if len(parts) > 2:
+                    resolution = parts[2]
+
+                success = self.memory_manager.resolve_question(user_id, qid, resolution)
+                if success:
+                    yield event.plain_result(f"✅ 问题 {qid} 已标记为已解决")
+                else:
+                    yield event.plain_result(f"❌ 未找到问题 {qid}")
+                return
+
+            # 未知操作
+            yield event.plain_result(
+                f"未知操作: {action}\n"
+                f"用法:\n"
+                f"  /questions - 未解决的问题\n"
+                f"  /questions all - 所有问题\n"
+                f"  /questions frequent - 反复出现的问题\n"
+                f"  /questions resolve <ID> - 标记已解决"
+            )
+
+        except Exception as e:
+            logger.error(f"[Questions] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")

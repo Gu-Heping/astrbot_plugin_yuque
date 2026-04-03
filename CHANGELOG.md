@@ -4,6 +4,31 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.26.2] - 2026-04-03
+
+### 新增
+- **问题档案**：追踪用户的问题及解决状态
+  - `ConversationMemory` 新增 `question_archive` 数据结构
+  - 新增方法：`add_question()`、`resolve_question()`、`get_unresolved_questions()`、`get_frequent_questions()`
+  - 相似问题自动匹配，更新计数
+  - 最多存储 100 个问题
+
+- **问题档案指令**：`/questions`
+  - `/questions` - 查看未解决的问题
+  - `/questions all` - 查看所有问题
+  - `/questions frequent` - 反复出现的问题
+  - `/questions resolve <ID>` - 标记已解决
+
+- **问题档案 Agent 工具**：自然语言访问
+  - `get_unresolved_questions`：查看未解决问题
+  - `check_question_history`：检查问题历史
+  - `record_question`：记录新问题
+
+### 智能行为
+- 用户问同一问题多次时提醒："这个问题你问过 3 次了"
+- 自动记录用户的问题到问题档案
+- 帮助识别反复出现的困惑
+
 ## [v0.26.1] - 2026-04-03
 
 ### 新增
