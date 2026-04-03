@@ -729,6 +729,26 @@ class NovaBotPlugin(Star):
                 yield event.plain_result("尚未同步，使用 /sync 开始")
             return
 
+        # 手动更新协作网络
+        if action.lower() == "collab":
+            if not self.collaboration_manager:
+                yield event.plain_result("❌ 协作网络系统未初始化")
+                return
+
+            try:
+                self._update_collaboration_network()
+                stats = self.collaboration_manager.get_network_stats()
+                yield event.plain_result(
+                    f"✅ 协作网络更新完成\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"协作关系: {stats.get('total_collaborations', 0)} 条\n"
+                    f"参与成员: {stats.get('total_members', 0)} 人"
+                )
+            except Exception as e:
+                logger.error(f"[Sync] 更新协作网络失败: {e}", exc_info=True)
+                yield event.plain_result(f"❌ 更新失败: {e}")
+            return
+
         # 检查是否已在同步（使用锁保护）
         state = self.storage.load_sync_state()
         if self._sync_lock.locked():
@@ -806,6 +826,13 @@ class NovaBotPlugin(Star):
                 state.pop("rag_progress", None)
                 self.storage.save_sync_state(state)
 
+                # 更新协作网络（从文档元数据提取知识库贡献者）
+                if self.collaboration_manager and result and result.get("docs", 0) > 0:
+                    try:
+                        self._update_collaboration_network()
+                    except Exception as e:
+                        logger.error(f"[Collaboration] 更新协作网络失败: {e}", exc_info=True)
+
                 docs_count = result.get("docs", 0) if result else 0
                 removed_count = result.get("removed", 0) if result else 0
                 logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
@@ -845,6 +872,63 @@ class NovaBotPlugin(Star):
                 state.pop("status", None)
                 state.pop("rag_progress", None)
                 self.storage.save_sync_state(state)
+
+    def _update_collaboration_network(self):
+        """从文档元数据更新协作网络
+
+        根据知识库贡献者建立协作关系。
+        """
+        if not self.collaboration_manager:
+            return
+
+        doc_index = self._get_doc_index()
+        if not doc_index:
+            logger.warning("[Collaboration] 文档索引未初始化")
+            return
+
+        # 获取所有文档
+        try:
+            docs = doc_index.get_all_docs()
+        except Exception as e:
+            logger.error(f"[Collaboration] 获取文档列表失败: {e}")
+            return
+
+        # 按知识库分组，收集贡献者
+        repo_contributors: dict = {}  # {book_name: set(creator_ids)}
+
+        for doc in docs:
+            book_name = doc.get("book_name", "")
+            creator_id = doc.get("creator_id")
+
+            if not book_name or not creator_id:
+                continue
+
+            if book_name not in repo_contributors:
+                repo_contributors[book_name] = set()
+            repo_contributors[book_name].add(str(creator_id))
+
+        # 更新协作网络
+        total_repos = 0
+        total_relations = 0
+
+        for book_name, contributors in repo_contributors.items():
+            if len(contributors) < 2:
+                # 只有一个贡献者，无需建立协作关系
+                continue
+
+            # 记录知识库贡献者（会自动建立协作关系）
+            self.collaboration_manager.add_repo_contributors(
+                book_name, list(contributors)
+            )
+            total_repos += 1
+            # 计算关系数：n 个贡献者两两组合
+            n = len(contributors)
+            total_relations += n * (n - 1) // 2
+
+        logger.info(
+            f"[Collaboration] 协作网络更新完成: "
+            f"{total_repos} 个知识库, {total_relations} 条关系"
+        )
 
     @filter.command("bind")
     async def bind_cmd(self, event: AstrMessageEvent, arg: str = ""):
@@ -2001,6 +2085,7 @@ class NovaBotPlugin(Star):
             "  /sync - 同步知识库\n"
             "  /sync members - 同步成员\n"
             "  /sync status - 同步状态\n"
+            "  /sync collab - 更新协作网络\n"
             "  /rag search <关键词> - 语义搜索\n"
             "  /webhook - Webhook 服务状态\n"
             "\n"

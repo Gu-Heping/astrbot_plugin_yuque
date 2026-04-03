@@ -435,6 +435,29 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取周报统计失败: {e}")
             return result
 
+    def get_all_docs(self, limit: int = 10000) -> List[Dict]:
+        """获取所有文档（用于分析）
+
+        Args:
+            limit: 最大返回数量，默认 10000
+
+        Returns:
+            文档列表 [{yuque_id, title, author, book_name, creator_id, ...}, ...]
+        """
+        try:
+            conn = self._get_conn()
+            rows = conn.execute("""
+                SELECT yuque_id, title, author, book_name, book_namespace, creator_id,
+                       created_at, updated_at, word_count, file_path
+                FROM docs
+                ORDER BY updated_at DESC
+                LIMIT ?
+            """, (limit,)).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取所有文档失败: {e}")
+            return []
+
     def close(self):
         """关闭连接"""
         if self._conn:

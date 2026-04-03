@@ -27,6 +27,11 @@
   - `rag_cache_ttl`：RAG 缓存有效期
   - `webhook_queue_enabled`：启用 Webhook 队列
 
+### 修复
+- **协作网络数据未生成**：同步后自动从文档元数据提取知识库贡献者
+- **`Storage.get_all_members` 不存在**：使用正确的 `load_members()` 方法
+- **新增 `/sync collab` 命令**：手动更新协作网络
+
 ### 优化
 - RAG 搜索性能提升（缓存命中时无需向量化）
 - 高峰期 Token 消耗可控（用户级限流）
