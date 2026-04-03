@@ -96,6 +96,21 @@ class NovaBotAgent:
         if not tools:
             return "工具未初始化，请检查插件配置。"
 
+        # 检查 Token 限额（v0.27.2）
+        if self.plugin.token_limiter and user_context.get("bound"):
+            yuque_id = user_context.get("yuque_id")
+            if yuque_id:
+                is_allowed, remaining, used = self.plugin.token_limiter.check_limit(str(yuque_id))
+                if not is_allowed:
+                    return (
+                        f"⚠️ 您的每日 Token 额度已用完。\n"
+                        f"已使用: {used:,} / 限额: {self.plugin.token_limiter.daily_limit:,}\n"
+                        f"请明天再试，或联系管理员提升额度。"
+                    )
+                elif remaining < 5000:
+                    # 剩余不足 5000 时提醒
+                    logger.warning(f"[Agent] 用户 {yuque_id} Token 即将用尽: 剩余 {remaining}")
+
         # 调用 Agent
         try:
             logger.info(f"[Agent] 开始处理消息: {user_message[:50]}...")

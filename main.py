@@ -330,6 +330,8 @@ class NovaBotPlugin(Star):
             push_notifier=self.push_notifier,
             subscription_manager=self.subscription_manager,
             storage=self.storage,
+            trajectory_manager=self.trajectory_manager,
+            cache_clear_callback=self.rag.clear_cache if self.rag else None,
         )
         logger.info("[Webhook] Webhook 应用设置完成")
 
@@ -511,11 +513,23 @@ class NovaBotPlugin(Star):
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
 
             if input_tokens > 0 or output_tokens > 0:
+                total_tokens = input_tokens + output_tokens
+
+                # 记录到 Token 监控
                 self.token_monitor.log_usage(
                     feature="chat",
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
                 )
+
+                # 记录到用户限流器（v0.27.2）
+                if self.token_limiter:
+                    platform_id = event.get_sender_id()
+                    binding = self.storage.get_binding(platform_id)
+                    if binding and binding.get("yuque_id"):
+                        yuque_id = str(binding["yuque_id"])
+                        self.token_limiter.record_usage(yuque_id, total_tokens)
+
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
         except Exception as e:
             logger.warning(f"[LLM] 记录聊天 token 失败: {e}")

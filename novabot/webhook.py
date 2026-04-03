@@ -51,6 +51,8 @@ class WebhookHandler:
         push_notifier: Optional["PushNotifier"] = None,
         subscription_manager: Optional["SubscriptionManager"] = None,
         storage: Optional["Storage"] = None,
+        trajectory_manager=None,
+        cache_clear_callback: Optional[Callable[[], None]] = None,
     ):
         """
         初始化 Webhook 处理器
@@ -64,6 +66,8 @@ class WebhookHandler:
             push_notifier: 推送管理器（可选）
             subscription_manager: 订阅管理器（可选）
             storage: 存储实例（可选，用于匹配团队成员）
+            trajectory_manager: 成员轨迹管理器（可选）
+            cache_clear_callback: RAG 缓存清理回调（可选）
         """
         self.docs_dir = docs_dir
         self.data_dir = data_dir
@@ -73,6 +77,8 @@ class WebhookHandler:
         self.push_notifier = push_notifier
         self.subscription_manager = subscription_manager
         self.storage = storage
+        self.trajectory_manager = trajectory_manager
+        self.cache_clear_callback = cache_clear_callback
 
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）
@@ -346,6 +352,14 @@ class WebhookHandler:
         logger.info(f"[Webhook] 步骤 4/5: 更新 ChromaDB 向量")
         self._update_rag(detail, rel_path)
 
+        # 清理 RAG 缓存（v0.27.2）
+        if self.cache_clear_callback:
+            try:
+                self.cache_clear_callback()
+                logger.debug("[Webhook] RAG 缓存已清理")
+            except Exception as e:
+                logger.warning(f"[Webhook] 清理缓存失败: {e}")
+
         # 更新 .toc.json
         logger.info(f"[Webhook] 步骤 5/5: 更新 .toc.json")
         if toc_list:
@@ -360,6 +374,9 @@ class WebhookHandler:
         # 智能推送判断
         push_result = await self._handle_push(doc_id, commit_hash, rel_path, detail)
 
+        # 记录成员轨迹（v0.27.0）
+        self._record_trajectory(detail, data.get("action_type", "update"))
+
         return {
             "status": "ok",
             "doc_id": doc_id,
@@ -368,6 +385,41 @@ class WebhookHandler:
             "commit": commit_hash,
             "push": push_result,
         }
+
+    def _record_trajectory(self, detail: dict, action_type: str):
+        """记录成员轨迹
+
+        Args:
+            detail: 文档详情
+            action_type: 操作类型（publish/update）
+        """
+        if not self.trajectory_manager:
+            return
+
+        try:
+            # 获取创建者 ID
+            creator_id = detail.get("user_id") or (detail.get("creator") or {}).get("id")
+            if not creator_id:
+                return
+
+            creator_id = str(creator_id)
+
+            # 确定事件类型
+            event_type = "publish_doc" if action_type == "publish" else "update_doc"
+
+            # 记录事件
+            self.trajectory_manager.record_event(
+                member_id=creator_id,
+                event_type=event_type,
+                title=detail.get("title", ""),
+                description=f"知识库: {detail.get('book', {}).get('name', '')}",
+                related_id=str(detail.get("id", "")),
+            )
+
+            logger.debug(f"[Webhook] 记录轨迹: {creator_id} - {event_type}")
+
+        except Exception as e:
+            logger.warning(f"[Webhook] 记录轨迹失败: {e}")
 
     async def _handle_push(
         self,
@@ -521,6 +573,12 @@ class WebhookHandler:
         logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
         if self.rag:
             self.rag.delete_doc(doc_id)
+            # 清理缓存
+            if self.cache_clear_callback:
+                try:
+                    self.cache_clear_callback()
+                except Exception as e:
+                    logger.warning(f"[Webhook] 清理缓存失败: {e}")
 
         # 更新 .toc.json：优先重新拉取完整 TOC 覆盖
         logger.info(f"[Webhook] 步骤 3/4: 更新 .toc.json")
