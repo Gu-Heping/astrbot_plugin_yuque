@@ -136,6 +136,7 @@ class ConversationMemory:
                 "first_conversation": None,
                 "last_conversation": None,
             },
+            "learning_progress": {},  # 学习进度追踪
         }
 
     def add_session(
@@ -498,3 +499,211 @@ class ConversationMemory:
         if topics:
             return topics[0]
         return summary if summary else None
+
+    # ========== 学习进度追踪 ==========
+
+    def add_learning_milestone(
+        self,
+        user_id: str,
+        domain: str,
+        event: str,
+        doc_title: str = None,
+        doc_id: int = None,
+    ) -> bool:
+        """添加学习里程碑
+
+        Args:
+            user_id: 用户标识
+            domain: 学习领域（如"爬虫"）
+            event: 里程碑事件描述
+            doc_title: 相关文档标题
+            doc_id: 相关文档 ID
+
+        Returns:
+            是否添加成功
+        """
+        if not user_id or not domain or not event:
+            logger.warning("[Memory] 无效参数，跳过学习里程碑记录")
+            return False
+
+        # 加载记忆
+        memory = self._load_user_memory(user_id)
+
+        # 确保 learning_progress 存在
+        if "learning_progress" not in memory:
+            memory["learning_progress"] = {}
+
+        # 规范化领域名（去除空格、统一大小写）
+        domain_key = domain.strip()
+
+        # 确保领域存在
+        if domain_key not in memory["learning_progress"]:
+            memory["learning_progress"][domain_key] = {
+                "level": "beginner",
+                "milestones": [],
+                "last_active": None,
+                "next_step": None,
+                "related_docs": [],
+            }
+
+        progress = memory["learning_progress"][domain_key]
+
+        # 创建里程碑
+        milestone = {
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "timestamp": datetime.now().isoformat(),
+            "event": event.strip(),
+        }
+        if doc_title:
+            milestone["doc_title"] = doc_title
+        if doc_id:
+            milestone["doc_id"] = doc_id
+
+        # 添加里程碑
+        progress["milestones"].append(milestone)
+        progress["last_active"] = datetime.now().strftime("%Y-%m-%d")
+
+        # 记录相关文档
+        if doc_id and doc_id not in progress["related_docs"]:
+            progress["related_docs"].append(doc_id)
+
+        # 限制里程碑数量（最多 50 个）
+        if len(progress["milestones"]) > 50:
+            progress["milestones"] = progress["milestones"][-50:]
+
+        # 保存
+        self._save_user_memory(user_id, memory)
+
+        logger.info(f"[Memory] 添加学习里程碑: user={user_id}, domain={domain_key}, event={event}")
+        return True
+
+    def get_learning_progress(self, user_id: str, domain: str = None) -> dict:
+        """获取学习进度
+
+        Args:
+            user_id: 用户标识
+            domain: 学习领域（可选，不传则返回所有领域）
+
+        Returns:
+            学习进度字典
+        """
+        memory = self._load_user_memory(user_id)
+        progress = memory.get("learning_progress", {})
+
+        if domain:
+            # 返回指定领域
+            domain_key = domain.strip()
+            return progress.get(domain_key, {
+                "level": "beginner",
+                "milestones": [],
+                "last_active": None,
+                "next_step": None,
+                "related_docs": [],
+            })
+
+        # 返回所有领域
+        return progress
+
+    def update_learning_level(self, user_id: str, domain: str, level: str) -> bool:
+        """更新学习等级
+
+        Args:
+            user_id: 用户标识
+            domain: 学习领域
+            level: beginner/intermediate/advanced
+
+        Returns:
+            是否更新成功
+        """
+        if level not in ("beginner", "intermediate", "advanced"):
+            logger.warning(f"[Memory] 无效的学习等级: {level}")
+            return False
+
+        memory = self._load_user_memory(user_id)
+
+        if "learning_progress" not in memory:
+            memory["learning_progress"] = {}
+
+        domain_key = domain.strip()
+
+        if domain_key not in memory["learning_progress"]:
+            memory["learning_progress"][domain_key] = {
+                "level": level,
+                "milestones": [],
+                "last_active": None,
+                "next_step": None,
+                "related_docs": [],
+            }
+        else:
+            memory["learning_progress"][domain_key]["level"] = level
+
+        self._save_user_memory(user_id, memory)
+        logger.info(f"[Memory] 更新学习等级: user={user_id}, domain={domain_key}, level={level}")
+        return True
+
+    def set_next_step(self, user_id: str, domain: str, next_step: str) -> bool:
+        """设置下一步学习建议
+
+        Args:
+            user_id: 用户标识
+            domain: 学习领域
+            next_step: 下一步建议
+
+        Returns:
+            是否设置成功
+        """
+        memory = self._load_user_memory(user_id)
+
+        if "learning_progress" not in memory:
+            memory["learning_progress"] = {}
+
+        domain_key = domain.strip()
+
+        if domain_key not in memory["learning_progress"]:
+            memory["learning_progress"][domain_key] = {
+                "level": "beginner",
+                "milestones": [],
+                "last_active": None,
+                "next_step": next_step,
+                "related_docs": [],
+            }
+        else:
+            memory["learning_progress"][domain_key]["next_step"] = next_step
+
+        self._save_user_memory(user_id, memory)
+        return True
+
+    def get_all_domains(self, user_id: str) -> List[str]:
+        """获取用户所有学习领域
+
+        Args:
+            user_id: 用户标识
+
+        Returns:
+            学习领域列表
+        """
+        memory = self._load_user_memory(user_id)
+        progress = memory.get("learning_progress", {})
+        return list(progress.keys())
+
+    def get_learning_summary(self, user_id: str) -> dict:
+        """获取学习进度摘要
+
+        Args:
+            user_id: 用户标识
+
+        Returns:
+            摘要信息：各领域等级和里程碑数
+        """
+        progress = self.get_learning_progress(user_id)
+
+        summary = {}
+        for domain, data in progress.items():
+            summary[domain] = {
+                "level": data.get("level", "beginner"),
+                "milestones_count": len(data.get("milestones", [])),
+                "last_active": data.get("last_active"),
+                "next_step": data.get("next_step"),
+            }
+
+        return summary

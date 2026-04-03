@@ -34,7 +34,7 @@ from .novabot.memory import ConversationMemory
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.0")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -424,7 +424,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory"
+            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1904,6 +1904,11 @@ class NovaBotPlugin(Star):
             "  /memory search <关键词> - 搜索对话\n"
             "  /memory clear - 清除记忆\n"
             "\n"
+            "📈 学习进度\n"
+            "  /progress - 查看学习进度\n"
+            "  /progress <领域> - 查看指定领域\n"
+            "  /progress add <领域> <事件> - 添加里程碑\n"
+            "\n"
             "  /novabot - 帮助"
         )
 
@@ -2048,4 +2053,168 @@ class NovaBotPlugin(Star):
 
         except Exception as e:
             logger.error(f"[Memory] 操作失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 操作失败: {e}")
+
+    @filter.command("progress")
+    async def progress_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """学习进度管理
+
+        用法:
+        - /progress - 查看所有领域进度
+        - /progress <领域> - 查看指定领域进度
+        - /progress add <领域> <事件> - 添加里程碑
+        - /progress level <领域> <等级> - 设置等级(beginner/intermediate/advanced)
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+
+        if not yuque_id:
+            yield event.plain_result("绑定信息异常，请重新绑定")
+            return
+
+        # 检查记忆管理器
+        if not self.memory_manager:
+            yield event.plain_result("长期记忆系统未初始化")
+            return
+
+        user_id = str(yuque_id)
+
+        # 从消息中解析完整参数
+        msg = event.message_str.strip()
+        import re
+        progress_match = re.search(r'progress\s+(.+)$', msg, re.IGNORECASE)
+        if progress_match:
+            content = progress_match.group(1).strip()
+        else:
+            content = args.strip()
+
+        try:
+            # 无参数：显示所有领域进度
+            if not content:
+                progress = self.memory_manager.get_learning_progress(user_id)
+
+                if not progress:
+                    yield event.plain_result(
+                        f"📊 {yuque_name} 的学习进度\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"暂无学习记录\n\n"
+                        f"用法:\n"
+                        f"  /progress add <领域> <事件> - 添加里程碑\n"
+                        f"  /progress level <领域> <等级> - 设置等级"
+                    )
+                    return
+
+                level_map = {
+                    "beginner": "入门",
+                    "intermediate": "进阶",
+                    "advanced": "高级",
+                }
+
+                lines = [f"📊 {yuque_name} 的学习进度", "━━━━━━━━━━━━━━━━━━━━"]
+                for domain_name, data in progress.items():
+                    level = data.get("level", "beginner")
+                    milestones_count = len(data.get("milestones", []))
+                    last_active = data.get("last_active", "无")
+
+                    lines.append(
+                        f"• {domain_name}: {level_map.get(level, level)} "
+                        f"({milestones_count} 个里程碑)"
+                    )
+
+                lines.append("\n使用 /progress <领域> 查看详情")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            parts = content.split(maxsplit=2)
+            action = parts[0].lower() if parts else ""
+
+            # 添加里程碑
+            if action == "add":
+                if len(parts) < 3:
+                    yield event.plain_result("用法: /progress add <领域> <事件>\n例如: /progress add 爬虫 完成基础教程")
+                    return
+
+                domain = parts[1]
+                event_desc = parts[2]
+
+                success = self.memory_manager.add_learning_milestone(
+                    user_id=user_id,
+                    domain=domain,
+                    event=event_desc,
+                )
+
+                if success:
+                    yield event.plain_result(f"✅ 已记录里程碑：{domain} - {event_desc}")
+                else:
+                    yield event.plain_result("❌ 记录失败")
+                return
+
+            # 设置等级
+            if action == "level":
+                if len(parts) < 3:
+                    yield event.plain_result(
+                        "用法: /progress level <领域> <等级>\n"
+                        "等级: beginner(入门) / intermediate(进阶) / advanced(高级)"
+                    )
+                    return
+
+                domain = parts[1]
+                level = parts[2].lower()
+
+                if level not in ("beginner", "intermediate", "advanced"):
+                    yield event.plain_result("等级必须是: beginner / intermediate / advanced")
+                    return
+
+                success = self.memory_manager.update_learning_level(user_id, domain, level)
+                if success:
+                    level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
+                    yield event.plain_result(f"✅ 已设置「{domain}」等级为 {level_map.get(level, level)}")
+                else:
+                    yield event.plain_result("❌ 设置失败")
+                return
+
+            # 查看指定领域
+            domain = content.strip()
+            progress = self.memory_manager.get_learning_progress(user_id, domain)
+
+            level_map = {
+                "beginner": "入门",
+                "intermediate": "进阶",
+                "advanced": "高级",
+            }
+
+            milestones = progress.get("milestones", [])
+            level = progress.get("level", "beginner")
+            next_step = progress.get("next_step")
+
+            lines = [
+                f"📊 {yuque_name} 的「{domain}」学习进度",
+                "━━━━━━━━━━━━━━━━━━━━",
+                f"等级: {level_map.get(level, level)}",
+            ]
+
+            if milestones:
+                lines.append(f"\n里程碑 ({len(milestones)} 个):")
+                for m in milestones[-10:]:
+                    date = m.get("date", "")
+                    event_desc = m.get("event", "")
+                    lines.append(f"• {date} - {event_desc}")
+            else:
+                lines.append("\n暂无里程碑记录")
+
+            if next_step:
+                lines.append(f"\n下一步建议: {next_step}")
+
+            lines.append("\n用法: /progress add <领域> <事件>")
+            yield event.plain_result("\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"[Progress] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")

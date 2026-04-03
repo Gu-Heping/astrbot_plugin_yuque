@@ -26,6 +26,8 @@ from .memory_tools import (
     RecallConversationTool,
     GetSessionDetailTool,
     GetUserStatsTool,
+    GetLearningProgressTool,
+    RecordLearningMilestoneTool,
 )
 
 __all__ = [
@@ -57,6 +59,8 @@ __all__ = [
     "RecallConversationTool",
     "GetSessionDetailTool",
     "GetUserStatsTool",
+    "GetLearningProgressTool",
+    "RecordLearningMilestoneTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -83,4 +87,6 @@ ALL_TOOLS = [
     RecallConversationTool,
     GetSessionDetailTool,
     GetUserStatsTool,
+    GetLearningProgressTool,
+    RecordLearningMilestoneTool,
 ]

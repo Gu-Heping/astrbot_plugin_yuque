@@ -4,6 +4,28 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.26.1] - 2026-04-03
+
+### 新增
+- **学习进度追踪**：记录各领域学习里程碑
+  - `ConversationMemory` 新增 `learning_progress` 数据结构
+  - 新增方法：`add_learning_milestone()`、`get_learning_progress()`、`update_learning_level()`
+  - 数据存储：每领域最多 50 个里程碑
+
+- **学习进度指令**：`/progress`
+  - `/progress` - 查看所有领域进度
+  - `/progress <领域>` - 查看指定领域详情
+  - `/progress add <领域> <事件>` - 添加里程碑
+  - `/progress level <领域> <等级>` - 设置等级
+
+- **学习进度 Agent 工具**：自然语言访问学习进度
+  - `get_learning_progress`：查看进度（"我学到哪了"）
+  - `record_learning_milestone`：记录里程碑（"我学完了XX"）
+
+### 改进
+- 帮助文档新增 `/progress` 指令说明
+- 已知命令列表新增 `progress`
+
 ## [v0.26.0] - 2026-04-03
 
 ### 新增
