@@ -157,16 +157,26 @@ class GetMemberTrajectoryTool(BaseTool):
         lines = [f"【与「{topic}」相关的成员活动】"]
         for result in results[:5]:  # 最多显示 5 个成员
             member_id = result.get("member_id", "")
+            member_name = self._resolve_member_name(member_id)
             match_count = result.get("match_count", 0)
             events = result.get("matching_events", [])[:3]
 
-            lines.append(f"\n{member_id}（{match_count} 次相关活动）")
+            lines.append(f"\n{member_name}（{match_count} 次相关活动）")
             for evt in events:
                 event_name = evt.get("event_name", "")
                 title = evt.get("title", "")
                 lines.append(f"  • {event_name}：{title[:30]}")
 
         return "\n".join(lines)
+
+    def _resolve_member_name(self, member_id: str) -> str:
+        """解析成员 ID 到姓名"""
+        if hasattr(self.plugin, "storage") and self.plugin.storage:
+            members = self.plugin.storage.load_members()
+            info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+            if info:
+                return info.get("name") or info.get("login") or member_id
+        return member_id
 
 
 @dataclass
@@ -234,10 +244,11 @@ class FindCollaboratorsTool(BaseTool):
                 lines = [f"【{member_name} 的潜在协作伙伴】"]
                 for p in potential[:5]:
                     partner_id = p.get("member_id", "")
+                    partner_name = self._resolve_member_name(partner_id)
                     score = p.get("match_score", 0)
                     reasons = p.get("match_reasons", [])
 
-                    lines.append(f"\n{partner_id}（匹配度 {score:.0%}）")
+                    lines.append(f"\n{partner_name}（匹配度 {score:.0%}）")
                     for reason in reasons:
                         lines.append(f"  • {reason}")
 
@@ -264,13 +275,22 @@ class FindCollaboratorsTool(BaseTool):
     async def _resolve_member_id(self, member_name: str) -> Optional[str]:
         """解析成员姓名到成员 ID"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
-            members = self.plugin.storage.get_all_members()
-            for member in members:
-                name = member.get("name", "")
-                login = member.get("login", "")
+            members = self.plugin.storage.load_members()
+            for user_id, info in members.items():
+                name = info.get("name", "")
+                login = info.get("login", "")
                 if member_name in [name, login, name.lower(), login.lower()]:
-                    return str(member.get("user_id") or member.get("login"))
+                    return str(user_id)
         return None
+
+    def _resolve_member_name(self, member_id: str) -> str:
+        """解析成员 ID 到姓名"""
+        if hasattr(self.plugin, "storage") and self.plugin.storage:
+            members = self.plugin.storage.load_members()
+            info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+            if info:
+                return info.get("name") or info.get("login") or member_id
+        return member_id
 
     async def _find_experts_by_topic(self, topic: str) -> str:
         """根据主题找有相关经验的成员"""
@@ -282,11 +302,12 @@ class FindCollaboratorsTool(BaseTool):
                 lines = [f"【「{topic}」领域活跃成员】"]
                 for result in results[:5]:
                     member_id = result.get("member_id", "")
+                    member_name = self._resolve_member_name(member_id)
                     match_count = result.get("match_count", 0)
                     stats = result.get("stats", {})
 
                     lines.append(
-                        f"\n{member_id}\n"
+                        f"\n{member_name}\n"
                         f"  • 相关活动 {match_count} 次\n"
                         f"  • 文档 {stats.get('doc_count', 0)} 篇"
                     )
@@ -386,11 +407,12 @@ class GetCollaboratorsTool(BaseTool):
             lines = [f"【{member_name} 的协作伙伴】"]
             for collab in collaborators[:10]:
                 partner_id = collab.get("member_id", "")
+                partner_name = self._resolve_member_name(partner_id)
                 strength = collab.get("strength", 0)
                 source_name = collab.get("source_name", "")
                 context = collab.get("context", "")
 
-                line = f"• {partner_id}（强度 {strength:.0%}，{source_name}"
+                line = f"• {partner_name}（强度 {strength:.0%}，{source_name}"
                 if context:
                     line += f"：{context}"
                 line += "）"
@@ -408,10 +430,19 @@ class GetCollaboratorsTool(BaseTool):
     async def _resolve_member_id(self, member_name: str) -> Optional[str]:
         """解析成员姓名到成员 ID"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
-            members = self.plugin.storage.get_all_members()
-            for member in members:
-                name = member.get("name", "")
-                login = member.get("login", "")
+            members = self.plugin.storage.load_members()
+            for user_id, info in members.items():
+                name = info.get("name", "")
+                login = info.get("login", "")
                 if member_name in [name, login, name.lower(), login.lower()]:
-                    return str(member.get("user_id") or member.get("login"))
+                    return str(user_id)
         return None
+
+    def _resolve_member_name(self, member_id: str) -> str:
+        """解析成员 ID 到姓名"""
+        if hasattr(self.plugin, "storage") and self.plugin.storage:
+            members = self.plugin.storage.load_members()
+            info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+            if info:
+                return info.get("name") or info.get("login") or member_id
+        return member_id

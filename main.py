@@ -2784,12 +2784,16 @@ class NovaBotPlugin(Star):
                     return
 
                 lines = [f"【与「{topic}」相关的成员活动】"]
+                members = self.storage.load_members()
                 for result in results[:5]:
                     member_id = result.get("member_id", "")
+                    # 解析成员姓名
+                    member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+                    member_name = (member_info.get("name") or member_info.get("login") or member_id) if member_info else member_id
                     match_count = result.get("match_count", 0)
                     events = result.get("matching_events", [])[:3]
 
-                    lines.append(f"\n{member_id}（{match_count} 次相关活动）")
+                    lines.append(f"\n{member_name}（{match_count} 次相关活动）")
                     for evt in events:
                         event_name = evt.get("event_name", "")
                         title = evt.get("title", "")
@@ -2910,12 +2914,16 @@ class NovaBotPlugin(Star):
                     return
 
                 lines = [f"【「{topic}」领域潜在协作伙伴】"]
+                members = self.storage.load_members()
                 for p in potential[:5]:
                     partner_id = p.get("member_id", "")
+                    # 解析成员姓名
+                    member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
+                    partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
                     score = p.get("match_score", 0)
                     reasons = p.get("match_reasons", [])
 
-                    lines.append(f"\n{partner_id}（匹配度 {score:.0%}）")
+                    lines.append(f"\n{partner_name}（匹配度 {score:.0%}）")
                     for reason in reasons:
                         lines.append(f"  • {reason}")
 
@@ -2950,13 +2958,17 @@ class NovaBotPlugin(Star):
                 return
 
             lines = [f"【{target_name} 的协作伙伴】"]
+            members = self.storage.load_members()
             for collab in collaborators[:10]:
                 partner_id = collab.get("member_id", "")
+                # 解析成员姓名
+                member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
+                partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
                 strength = collab.get("strength", 0)
                 source_name = collab.get("source_name", "")
                 context = collab.get("context", "")
 
-                line = f"• {partner_id}（强度 {strength:.0%}，{source_name}"
+                line = f"• {partner_name}（强度 {strength:.0%}，{source_name}"
                 if context:
                     line += f"：{context}"
                 line += "）"
