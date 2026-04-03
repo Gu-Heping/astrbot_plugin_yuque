@@ -316,8 +316,8 @@ class FindCollaboratorsTool(BaseTool):
                 return "\n".join(lines)
 
         # 从文档索引搜索相关作者
-        if hasattr(self.plugin, "storage") and self.plugin.storage:
-            doc_index = self.plugin.storage.doc_index
+        if hasattr(self.plugin, "_get_doc_index"):
+            doc_index = self.plugin._get_doc_index()
             if doc_index:
                 # 搜索相关文档并提取作者（按标题搜索）
                 docs = doc_index.search(title=topic, limit=20)
