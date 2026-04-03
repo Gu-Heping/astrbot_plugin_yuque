@@ -4,6 +4,37 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.27.3] - 2026-04-03
+
+### 安全修复
+- **Webhook 安全验证**：无 IP 白名单时拒绝 User-Agent 异常请求
+- **路径穿越防护**：
+  - `slug_safe` 过滤 `..` 防止目录穿越
+  - 写文件前使用 `is_relative_to` 边界检查
+- **错误详情泄露**：Webhook 异常时返回通用错误消息
+- **用户偏好 name 字段**：长度限制 50 字符，过滤换行符防止 Prompt Injection
+
+### 修复
+- **URL 编码**：改用 `urllib.parse.urlencode` 正确编码查询参数
+- **datetime.now() 时区**：统一使用 UTC 时区，避免与语雀时间戳不一致
+- **Token 限额竞态条件**：添加 `check_and_reserve` 原子操作方法
+- **成员轨迹时间戳**：`record_event` 支持传入时间戳参数
+- **Webhook 轨迹记录**：
+  - 更新事件记录最后编辑者而非创建者
+  - 忽略删除事件
+  - 使用文档实际更新时间
+- **community_tools**：
+  - 使用正确的 `load_members()` 方法
+  - 添加 ID 到姓名的转换
+  - 使用正确的 `_get_doc_index()` 方法
+- **Agent token 记录**：调用后记录实际 token 使用
+- **Storage.get_all_bindings()**：添加缺失的方法
+
+### 改进
+- **_doc_locks 内存管理**：添加最大容量限制 (1000)，防止内存泄漏
+- **Webhook 启动警告**：无 IP 白名单时显示安全警告
+- **yuque_base_url 默认值**：改为 `www.yuque.com` 并添加配置说明
+
 ## [v0.27.2] - 2026-04-03
 
 ### 新增
