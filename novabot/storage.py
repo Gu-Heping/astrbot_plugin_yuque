@@ -94,6 +94,21 @@ class Storage:
                 return {"platform_id": platform_id, **binding}
         return None
 
+    def get_all_bindings(self) -> list:
+        """获取所有绑定记录
+
+        Returns:
+            绑定列表 [{platform_id, yuque_id, yuque_name, ...}, ...]
+        """
+        bindings = self.load_bindings()
+        result = []
+        for platform_id, binding in bindings.items():
+            result.append({
+                "platform_id": platform_id,
+                **binding,
+            })
+        return result
+
     def add_binding(self, platform_id: str, yuque_info: dict):
         bindings = self.load_bindings()
         bindings[platform_id] = {
