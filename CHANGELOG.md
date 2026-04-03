@@ -4,6 +4,22 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.25.0] - 2026-04-03
+
+### 新增
+- **自然语言交互工具**：将 7 个指令功能开放为 Agent 可调用的工具
+  - `partner_recommend`：伙伴推荐（"推荐学习伙伴"）
+  - `learning_path`：学习路径（"我想学XX"）
+  - `weekly_report`：周报生成（"本周周报"）
+  - `knowledge_gap`：学习缺口分析（"我的学习缺口"）
+  - `subscribe`：订阅管理（"订阅XX知识库"）
+  - `unsubscribe`：取消订阅（"取消订阅"）
+  - `profile_view`：查看画像（"看看我的画像"）
+
+### 修复
+- **/kb 命令消息解析**：改用正则表达式，支持群聊回复格式
+- **/novabot 帮助文档遗漏**：补充 5 个遗漏的命令说明
+
 ## [v0.24.1] - 2026-03-31
 
 ### 修复

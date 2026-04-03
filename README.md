@@ -216,6 +216,7 @@ NovaBot 为 AI 提供以下工具（自动调用）：
 | `search_knowledge_base` | RAG 语义搜索 |
 | `grep_local_docs` | 关键词精确匹配 |
 | `read_doc` | 读取完整文档 |
+| `parse_yuque_url` | 解析语雀链接 |
 | `search_docs` | 按作者/知识库/标题筛选 |
 | `list_authors` | 列出所有作者 |
 | `list_knowledge_bases` | 列出知识库 |
@@ -223,6 +224,13 @@ NovaBot 为 AI 提供以下工具（自动调用）：
 | `doc_stats` | 文档统计 |
 | `generate_knowledge_card` | 生成知识卡片 |
 | `set_preference` | 设置用户偏好 |
+| `partner_recommend` | 推荐学习伙伴 |
+| `learning_path` | 生成学习路径 |
+| `weekly_report` | 生成本周周报 |
+| `knowledge_gap` | 分析学习缺口 |
+| `subscribe` | 订阅知识库/作者 |
+| `unsubscribe` | 取消订阅 |
+| `profile_view` | 查看用户画像 |
 
 ---
 
@@ -260,6 +268,9 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.25.0 | 自然语言交互工具（伙伴推荐、学习路径、周报、学习缺口、订阅、画像） |
+| v0.24.0 | 更新感知（/kb updates）、语雀链接解析 |
+| v0.23.0 | 联网搜索配置、TOC 结构优化 |
 | v0.22.0 | 知识库层（/kb 列表、概览、范围检索） |
 | v0.21.0 | 知识问答重构（实名、多回答、点赞） |
 | v0.20.0 | `/weekly` LLM 增强（主题洞察、热点话题、下周建议） |
