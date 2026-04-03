@@ -19,7 +19,7 @@ class ConversationMemory:
     # 默认配置
     DEFAULT_MAX_SESSIONS = 100  # 每用户最多保留的会话数
     DEFAULT_RETENTION_DAYS = 30  # 对话历史保留天数
-    DEFAULT_MAX_MESSAGES_PER_SESSION = 50  # 每会话最多保留的消息数
+    # DEFAULT_MAX_MESSAGES_PER_SESSION = 50  # 预留：多轮对话时的消息数限制
 
     def __init__(
         self,
@@ -129,13 +129,20 @@ class ConversationMemory:
             memory["sessions"] = []
             changed = True
         if "stats" not in memory:
-            memory["stats"] = {
-                "total_sessions": 0,
-                "total_messages": 0,
-                "first_conversation": None,
-                "last_conversation": None,
-            }
+            memory["stats"] = {}
             changed = True
+
+        # 确保 stats 字段完整
+        default_stats = {
+            "total_sessions": 0,
+            "total_messages": 0,
+            "first_conversation": None,
+            "last_conversation": None,
+        }
+        for key, default_value in default_stats.items():
+            if key not in memory.get("stats", {}):
+                memory.setdefault("stats", {})[key] = default_value
+                changed = True
 
         # v0.26.1 学习进度
         if "learning_progress" not in memory:
@@ -578,15 +585,23 @@ class ConversationMemory:
             logger.warning("[Memory] 无效参数，跳过学习里程碑记录")
             return False
 
+        # 空字符串检查
+        domain_key = domain.strip()
+        if not domain_key:
+            logger.warning("[Memory] 学习领域为空，跳过记录")
+            return False
+
+        event_text = event.strip()
+        if not event_text:
+            logger.warning("[Memory] 事件描述为空，跳过记录")
+            return False
+
         # 加载记忆
         memory = self._load_user_memory(user_id)
 
         # 确保 learning_progress 存在
         if "learning_progress" not in memory:
             memory["learning_progress"] = {}
-
-        # 规范化领域名（去除空格、统一大小写）
-        domain_key = domain.strip()
 
         # 确保领域存在
         if domain_key not in memory["learning_progress"]:
@@ -855,24 +870,60 @@ class ConversationMemory:
         if not questions:
             return None
 
-        # 简单实现：关键词匹配
-        # 提取关键词（去除常见词）
-        stop_words = {"怎么", "如何", "什么", "为什么", "吗", "呢", "啊", "呀", "的", "是", "有"}
-        keywords = set(question_text.lower().split())
-        keywords = keywords - stop_words
+        # 提取关键词（支持中英文）
+        # 1. 去除常见停用词
+        stop_words = {"怎么", "如何", "什么", "为什么", "吗", "呢", "啊", "呀", "的", "是", "有", "how", "what", "why", "the", "a", "is"}
+
+        # 2. 提取关键词（简单实现：按空格分割 + 中文逐字提取）
+        keywords = set()
+        text_lower = question_text.lower()
+
+        # 英文关键词（按空格分割）
+        for word in text_lower.split():
+            if word and word not in stop_words:
+                keywords.add(word)
+
+        # 中文关键词（提取 2-4 字的组合）
+        import re
+        chinese_chars = re.findall(r'[\u4e00-\u9fff]+', text_lower)
+        for phrase in chinese_chars:
+            if len(phrase) >= 2:
+                # 提取 2-4 字的组合
+                for n in range(2, min(5, len(phrase) + 1)):
+                    for i in range(len(phrase) - n + 1):
+                        ngram = phrase[i:i+n]
+                        if ngram not in stop_words:
+                            keywords.add(ngram)
+
+        if not keywords:
+            return None
 
         best_match = None
         best_score = 0
 
         for q in questions:
             q_text = q.get("question", "").lower()
-            q_words = set(q_text.split()) - stop_words
+            q_keywords = set()
+
+            # 英文
+            for word in q_text.split():
+                if word and word not in stop_words:
+                    q_keywords.add(word)
+
+            # 中文
+            for phrase in re.findall(r'[\u4e00-\u9fff]+', q_text):
+                if len(phrase) >= 2:
+                    for n in range(2, min(5, len(phrase) + 1)):
+                        for i in range(len(phrase) - n + 1):
+                            ngram = phrase[i:i+n]
+                            if ngram not in stop_words:
+                                q_keywords.add(ngram)
 
             # 计算交集
-            common = keywords & q_words
+            common = keywords & q_keywords
             if common:
-                score = len(common) / max(len(keywords), len(q_words), 1)
-                if score > 0.5 and score > best_score:
+                score = len(common) / max(len(keywords), len(q_keywords), 1)
+                if score > 0.3 and score > best_score:  # 降低阈值，中文匹配更宽松
                     best_score = score
                     best_match = q
 
