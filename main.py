@@ -743,24 +743,39 @@ class NovaBotPlugin(Star):
                 yield event.plain_result("尚未同步，使用 /sync 开始")
             return
 
-        # 手动更新协作网络
+        # 手动更新协作网络和成员轨迹
         if action.lower() == "collab":
-            if not self.collaboration_manager:
-                yield event.plain_result("❌ 协作网络系统未初始化")
-                return
+            results = []
 
-            try:
-                self._update_collaboration_network()
-                stats = self.collaboration_manager.get_network_stats()
+            # 更新协作网络
+            if self.collaboration_manager:
+                try:
+                    self._update_collaboration_network()
+                    stats = self.collaboration_manager.get_network_stats()
+                    results.append(f"协作关系: {stats.get('total_collaborations', 0)} 条")
+                    results.append(f"参与成员: {stats.get('total_members', 0)} 人")
+                except Exception as e:
+                    logger.error(f"[Sync] 更新协作网络失败: {e}", exc_info=True)
+                    results.append(f"协作网络更新失败: {e}")
+
+            # 初始化成员轨迹
+            if self.trajectory_manager:
+                try:
+                    self._init_member_trajectories()
+                    active_members = self.trajectory_manager.get_all_active_members(days=30)
+                    results.append(f"成员轨迹: {len(active_members)} 人有活动记录")
+                except Exception as e:
+                    logger.error(f"[Sync] 初始化轨迹失败: {e}", exc_info=True)
+                    results.append(f"轨迹初始化失败: {e}")
+
+            if results:
                 yield event.plain_result(
-                    f"✅ 协作网络更新完成\n"
+                    f"✅ 数据初始化完成\n"
                     f"━━━━━━━━━━━━━━━\n"
-                    f"协作关系: {stats.get('total_collaborations', 0)} 条\n"
-                    f"参与成员: {stats.get('total_members', 0)} 人"
+                    + "\n".join(results)
                 )
-            except Exception as e:
-                logger.error(f"[Sync] 更新协作网络失败: {e}", exc_info=True)
-                yield event.plain_result(f"❌ 更新失败: {e}")
+            else:
+                yield event.plain_result("❌ 数据系统未初始化")
             return
 
         # 检查是否已在同步（使用锁保护）
@@ -846,6 +861,13 @@ class NovaBotPlugin(Star):
                         self._update_collaboration_network()
                     except Exception as e:
                         logger.error(f"[Collaboration] 更新协作网络失败: {e}", exc_info=True)
+
+                # 初始化成员轨迹（从文档元数据提取发布记录）
+                if self.trajectory_manager and result and result.get("docs", 0) > 0:
+                    try:
+                        self._init_member_trajectories()
+                    except Exception as e:
+                        logger.error(f"[Trajectory] 初始化轨迹失败: {e}", exc_info=True)
 
                 docs_count = result.get("docs", 0) if result else 0
                 removed_count = result.get("removed", 0) if result else 0
@@ -942,6 +964,69 @@ class NovaBotPlugin(Star):
         logger.info(
             f"[Collaboration] 协作网络更新完成: "
             f"{total_repos} 个知识库, {total_relations} 条关系"
+        )
+
+    def _init_member_trajectories(self):
+        """从文档元数据初始化成员轨迹
+
+        为每个贡献者创建发布/更新文档的轨迹记录。
+        """
+        if not self.trajectory_manager:
+            return
+
+        doc_index = self._get_doc_index()
+        if not doc_index:
+            logger.warning("[Trajectory] 文档索引未初始化")
+            return
+
+        # 获取所有文档
+        try:
+            docs = doc_index.get_all_docs()
+        except Exception as e:
+            logger.error(f"[Trajectory] 获取文档列表失败: {e}")
+            return
+
+        total_events = 0
+        member_docs: dict = {}  # {creator_id: [docs]}
+
+        # 按创建者分组
+        for doc in docs:
+            creator_id = doc.get("creator_id")
+            if not creator_id:
+                continue
+
+            creator_id = str(creator_id)
+            if creator_id not in member_docs:
+                member_docs[creator_id] = []
+            member_docs[creator_id].append(doc)
+
+        # 为每个成员创建轨迹
+        for creator_id, doc_list in member_docs.items():
+            # 按更新时间排序，取最近的 20 篇
+            doc_list.sort(key=lambda d: d.get("updated_at", ""), reverse=True)
+
+            for doc in doc_list[:20]:
+                title = doc.get("title", "")
+                book_name = doc.get("book_name", "")
+                created_at = doc.get("created_at", "")
+                updated_at = doc.get("updated_at", "")
+
+                # 判断是发布还是更新（简单逻辑：如果是创建时间就是发布）
+                # 使用 updated_at 作为事件时间
+                event_type = "publish_doc"
+
+                self.trajectory_manager.record_event(
+                    member_id=creator_id,
+                    event_type=event_type,
+                    title=title,
+                    description=f"知识库: {book_name}",
+                    related_id=str(doc.get("yuque_id", "")),
+                )
+                total_events += 1
+
+        logger.info(
+            f"[Trajectory] 成员轨迹初始化完成: "
+            f"{len(member_docs)} 个成员, {total_events} 条轨迹"
         )
 
     @filter.command("bind")
