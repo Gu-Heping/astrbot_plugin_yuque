@@ -4,6 +4,30 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.26.0] - 2026-04-03
+
+### 新增
+- **长期记忆系统**：对话历史存储与查询
+  - 新增 `novabot/memory/` 模块
+  - `ConversationMemory` 类管理对话历史
+  - 支持按用户存储、搜索、清除记忆
+  - 数据保留 30 天，每用户最多 100 个会话
+
+- **记忆管理指令**：`/memory`
+  - `/memory` - 查看记忆概览
+  - `/memory recent` - 最近对话
+  - `/memory search <关键词>` - 搜索对话
+  - `/memory clear` - 清除记忆
+
+- **记忆 Agent 工具**：自然语言访问记忆
+  - `recall_conversation`：回忆对话（"我上次问过什么"）
+  - `get_session_detail`：对话详情（"详细说说第X条"）
+  - `get_user_stats`：对话统计（"我聊过多少次"）
+
+### 改进
+- Agent 对话完成后自动记录到长期记忆
+- 帮助文档新增 `/memory` 指令说明
+
 ## [v0.25.1] - 2026-04-03
 
 ### 修复

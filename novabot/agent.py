@@ -115,6 +115,18 @@ class NovaBotAgent:
             # 记录对话到 conversation_manager
             await self._record_conversation(umo, user_message, llm_resp.completion_text)
 
+            # 新增：记录到长期记忆（需已绑定语雀）
+            if self.plugin.memory_manager and user_context.get("bound"):
+                yuque_id = user_context.get("yuque_id")
+                if yuque_id:
+                    self.plugin.memory_manager.add_session(
+                        user_id=str(yuque_id),
+                        umo=umo,
+                        user_msg=user_message,
+                        assistant_msg=llm_resp.completion_text,
+                    )
+                    logger.debug(f"[Agent] 已记录到长期记忆: yuque_id={yuque_id}")
+
             logger.info(f"[Agent] 消息处理完成")
             return llm_resp.completion_text
 
@@ -237,8 +249,33 @@ class NovaBotAgent:
             )
             logger.debug("[Agent] 对话已记录到 conversation_manager")
 
+            # 新增：记录到长期记忆
+            await self._record_to_long_term_memory(umo, user_msg, assistant_msg)
+
         except Exception as e:
             logger.warning(f"[Agent] 记录对话失败: {e}")
+
+    async def _record_to_long_term_memory(self, umo: str, user_msg: str, assistant_msg: str):
+        """记录对话到长期记忆系统
+
+        Args:
+            umo: 会话标识
+            user_msg: 用户消息
+            assistant_msg: Agent 回复
+        """
+        try:
+            # 检查记忆管理器是否初始化
+            if not self.plugin.memory_manager:
+                logger.debug("[Agent] 长期记忆系统未初始化，跳过记录")
+                return
+
+            # 获取绑定信息（需要语雀 ID 作为用户标识）
+            # 从 umo 中提取平台 ID（需要从 event 获取，这里暂时跳过）
+            # 实际记录会在 handle_message 中完成，那里可以获取 event
+            logger.debug("[Agent] 长期记忆记录需在 handle_message 中完成")
+
+        except Exception as e:
+            logger.warning(f"[Agent] 长期记忆记录失败: {e}")
 
     def _build_system_prompt(self, user_context: dict, conversation_history: list = None) -> str:
         """构建系统提示词

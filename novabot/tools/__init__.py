@@ -22,6 +22,11 @@ from .natural_language import (
     UnsubscribeTool,
     ProfileViewTool,
 )
+from .memory_tools import (
+    RecallConversationTool,
+    GetSessionDetailTool,
+    GetUserStatsTool,
+)
 
 __all__ = [
     "BaseTool",
@@ -48,6 +53,10 @@ __all__ = [
     "SubscribeTool",
     "UnsubscribeTool",
     "ProfileViewTool",
+    # 记忆工具
+    "RecallConversationTool",
+    "GetSessionDetailTool",
+    "GetUserStatsTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -70,4 +79,8 @@ ALL_TOOLS = [
     SubscribeTool,
     UnsubscribeTool,
     ProfileViewTool,
+    # 记忆工具
+    RecallConversationTool,
+    GetSessionDetailTool,
+    GetUserStatsTool,
 ]

@@ -27,13 +27,14 @@ from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
 from .novabot.tools import ALL_TOOLS
 from .novabot.knowledge_base import KnowledgeBaseManager
+from .novabot.memory import ConversationMemory
 
 
 # ============================================================================
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.22.2")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.0")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -68,6 +69,7 @@ class NovaBotPlugin(Star):
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
+        self.memory_manager = ConversationMemory(self.storage.data_dir)  # 长期记忆
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
         self.gap_analyzer: Optional[LearningGapAnalyzer] = None
@@ -128,7 +130,7 @@ class NovaBotPlugin(Star):
             self._get_doc_index(), self.rag, self.storage.docs_dir
         )
 
-        logger.info("NovaBot 插件初始化完成 (v0.23.2)")
+        logger.info("NovaBot 插件初始化完成 (v0.26.0)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -422,7 +424,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "kb", "nova"
+            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1896,5 +1898,154 @@ class NovaBotPlugin(Star):
             "  /ask delete <ID> - 删除我的问题\n"
             "  /askreset - 重置提问箱（管理员）\n"
             "\n"
+            "🧠 记忆\n"
+            "  /memory - 查看记忆概览\n"
+            "  /memory recent - 最近对话\n"
+            "  /memory search <关键词> - 搜索对话\n"
+            "  /memory clear - 清除记忆\n"
+            "\n"
             "  /novabot - 帮助"
         )
+
+    @filter.command("memory")
+    async def memory_cmd(self, event: AstrMessageEvent, action: str = "", keyword: str = ""):
+        """记忆管理
+
+        用法:
+        - /memory - 查看记忆概览
+        - /memory recent - 最近对话
+        - /memory search <关键词> - 搜索对话
+        - /memory clear - 清除记忆
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+
+        if not yuque_id:
+            yield event.plain_result("绑定信息异常，请重新绑定")
+            return
+
+        # 检查记忆管理器
+        if not self.memory_manager:
+            yield event.plain_result("长期记忆系统未初始化")
+            return
+
+        user_id = str(yuque_id)
+
+        try:
+            # 无参数：显示概览
+            if not action:
+                stats = self.memory_manager.get_user_stats(user_id)
+                yield event.plain_result(
+                    f"🧠 {yuque_name} 的记忆概览\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"• 总会话数: {stats.get('total_sessions', 0)}\n"
+                    f"• 总消息数: {stats.get('total_messages', 0)}\n"
+                    f"• 近7天活跃: {stats.get('recent_7_days', 0)} 次\n"
+                    f"\n"
+                    f"指令:\n"
+                    f"  /memory recent - 最近对话\n"
+                    f"  /memory search <关键词> - 搜索\n"
+                    f"  /memory clear - 清除记忆"
+                )
+                return
+
+            action_lower = action.lower()
+
+            # 最近对话
+            if action_lower == "recent":
+                sessions = self.memory_manager.get_recent_sessions(user_id, limit=10)
+                if not sessions:
+                    yield event.plain_result("暂无对话历史")
+                    return
+
+                lines = [f"📋 {yuque_name} 的最近对话", "━━━━━━━━━━━━━━━━━━━━"]
+                for session in sessions:
+                    from datetime import datetime
+                    started_at = session.get("started_at", "")
+                    if started_at:
+                        try:
+                            dt = datetime.fromisoformat(started_at)
+                            date_str = dt.strftime("%m-%d %H:%M")
+                        except ValueError:
+                            date_str = started_at[:10]
+                    else:
+                        date_str = "未知日期"
+
+                    summary = session.get("summary", "无摘要")
+                    sid = session.get("session_id", "")
+                    lines.append(f"• [{date_str}] {summary}")
+
+                lines.append(f"\n共 {len(sessions)} 条对话记录")
+                lines.append("💡 可以直接问我「上次我们聊了什么」")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 搜索对话
+            if action_lower == "search":
+                # 从消息中提取关键词（AstrBot 只传第一个参数）
+                msg = event.message_str.strip()
+                import re
+                match = re.search(r'memory\s+search\s+(.+)$', msg, re.IGNORECASE)
+                if match:
+                    search_keyword = match.group(1).strip()
+                else:
+                    search_keyword = keyword
+
+                if not search_keyword:
+                    yield event.plain_result("用法: /memory search <关键词>")
+                    return
+
+                results = self.memory_manager.search_conversations(user_id, search_keyword, limit=10)
+                if not results:
+                    yield event.plain_result(f"未找到包含「{search_keyword}」的对话")
+                    return
+
+                lines = [f"🔍 搜索「{search_keyword}」的结果", "━━━━━━━━━━━━━━━━━━━━"]
+                for r in results:
+                    from datetime import datetime
+                    started_at = r.get("started_at", "")
+                    if started_at:
+                        try:
+                            dt = datetime.fromisoformat(started_at)
+                            date_str = dt.strftime("%m-%d %H:%M")
+                        except ValueError:
+                            date_str = started_at[:10]
+                    else:
+                        date_str = "未知日期"
+
+                    summary = r.get("summary", "")
+                    lines.append(f"• [{date_str}] {summary}")
+
+                lines.append(f"\n找到 {len(results)} 条相关对话")
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 清除记忆
+            if action_lower == "clear":
+                success = self.memory_manager.clear_user_memory(user_id)
+                if success:
+                    yield event.plain_result(f"✅ 已清除 {yuque_name} 的记忆")
+                else:
+                    yield event.plain_result("❌ 清除失败，请稍后重试")
+                return
+
+            # 未知操作
+            yield event.plain_result(
+                f"未知操作: {action}\n"
+                f"用法:\n"
+                f"  /memory - 概览\n"
+                f"  /memory recent - 最近对话\n"
+                f"  /memory search <关键词> - 搜索\n"
+                f"  /memory clear - 清除"
+            )
+
+        except Exception as e:
+            logger.error(f"[Memory] 操作失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 操作失败: {e}")
