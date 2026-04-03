@@ -188,6 +188,7 @@ class MemberTrajectory:
         description: str = "",
         related_id: str = "",
         metadata: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[str] = None,
     ) -> str:
         """记录成员事件
 
@@ -198,6 +199,7 @@ class MemberTrajectory:
             description: 事件描述
             related_id: 关联 ID（文档 ID、问题 ID 等）
             metadata: 附加元数据
+            timestamp: 事件时间戳（可选，默认当前时间）
 
         Returns:
             事件 ID
@@ -216,14 +218,15 @@ class MemberTrajectory:
 
         # 生成事件 ID
         event_id = str(uuid4())[:8]
-        timestamp = datetime.now().isoformat()
+        # 使用传入的时间戳或当前时间
+        event_timestamp = timestamp if timestamp else datetime.now().isoformat()
 
         # 创建事件记录
         event = {
             "event_id": event_id,
             "event_type": event_type,
             "event_name": self.EVENT_TYPES.get(event_type, "未知事件"),
-            "timestamp": timestamp,
+            "timestamp": event_timestamp,
             "title": title,
             "description": description,
             "related_id": related_id,
@@ -236,7 +239,7 @@ class MemberTrajectory:
         # 更新统计
         stats = trajectory["stats"]
         stats["total_events"] += 1
-        stats["last_active"] = timestamp
+        stats["last_active"] = event_timestamp
 
         # 更新类型统计
         if event_type in ["publish_doc", "update_doc"]:

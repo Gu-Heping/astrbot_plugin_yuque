@@ -1011,9 +1011,28 @@ class NovaBotPlugin(Star):
                 created_at = doc.get("created_at", "")
                 updated_at = doc.get("updated_at", "")
 
-                # 判断是发布还是更新（简单逻辑：如果是创建时间就是发布）
-                # 使用 updated_at 作为事件时间
-                event_type = "publish_doc"
+                # 判断是发布还是更新
+                # 如果创建时间和更新时间相同（或非常接近），则是发布
+                # 否则是更新
+                if created_at and updated_at:
+                    # 简单判断：如果创建时间和更新时间在同一个小时内，视为发布
+                    try:
+                        from datetime import datetime
+                        ct = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        ut = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                        # 时间差小于 1 小时视为发布
+                        if abs((ut - ct).total_seconds()) < 3600:
+                            event_type = "publish_doc"
+                            event_time = created_at
+                        else:
+                            event_type = "update_doc"
+                            event_time = updated_at
+                    except ValueError:
+                        event_type = "publish_doc"
+                        event_time = updated_at
+                else:
+                    event_type = "publish_doc"
+                    event_time = updated_at
 
                 self.trajectory_manager.record_event(
                     member_id=creator_id,
@@ -1021,6 +1040,7 @@ class NovaBotPlugin(Star):
                     title=title,
                     description=f"知识库: {book_name}",
                     related_id=str(doc.get("yuque_id", "")),
+                    timestamp=event_time,  # 传入实际事件时间
                 )
                 total_events += 1
 

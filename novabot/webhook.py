@@ -391,32 +391,47 @@ class WebhookHandler:
 
         Args:
             detail: 文档详情
-            action_type: 操作类型（publish/update）
+            action_type: 操作类型（publish/update/delete）
         """
         if not self.trajectory_manager:
             return
 
+        # 忽略删除事件（删除不记录轨迹）
+        if action_type == "delete":
+            return
+
         try:
-            # 获取创建者 ID
-            creator_id = detail.get("user_id") or (detail.get("creator") or {}).get("id")
-            if not creator_id:
+            # 获取成员 ID
+            # 对于更新事件，使用最后编辑者；对于发布事件，使用创建者
+            if action_type == "update":
+                # 优先使用 last_editor_id
+                member_id = detail.get("last_editor_id")
+                if not member_id:
+                    # 回退到 last_editor 对象
+                    member_id = (detail.get("last_editor") or {}).get("id")
+            else:
+                # 发布事件使用创建者
+                member_id = detail.get("user_id") or (detail.get("creator") or {}).get("id")
+
+            if not member_id:
                 return
 
-            creator_id = str(creator_id)
+            member_id = str(member_id)
 
             # 确定事件类型
             event_type = "publish_doc" if action_type == "publish" else "update_doc"
 
-            # 记录事件
+            # 记录事件（使用文档的实际更新时间）
             self.trajectory_manager.record_event(
-                member_id=creator_id,
+                member_id=member_id,
                 event_type=event_type,
                 title=detail.get("title", ""),
                 description=f"知识库: {detail.get('book', {}).get('name', '')}",
                 related_id=str(detail.get("id", "")),
+                timestamp=detail.get("updated_at"),  # 使用文档的更新时间
             )
 
-            logger.debug(f"[Webhook] 记录轨迹: {creator_id} - {event_type}")
+            logger.debug(f"[Webhook] 记录轨迹: {member_id} - {event_type}")
 
         except Exception as e:
             logger.warning(f"[Webhook] 记录轨迹失败: {e}")
