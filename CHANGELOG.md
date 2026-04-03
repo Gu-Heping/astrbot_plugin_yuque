@@ -4,6 +4,13 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.25.1] - 2026-04-03
+
+### 修复
+- **并发安全**：为 storage/ask_box/token_monitor 添加 threading.Lock 保护文件读写
+- **边界检查**：/bind 用户名长度限制、find_member_by_name 空值检查
+- **资源清理**：terminate() 添加 RAG 和 DocIndex 资源释放
+
 ## [v0.25.0] - 2026-04-03
 
 ### 新增
