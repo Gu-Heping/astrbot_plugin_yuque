@@ -2618,12 +2618,12 @@ class NovaBotPlugin(Star):
             if content:
                 # 尝试从成员缓存中查找
                 member_id = None
-                members = self.storage.get_all_members()
-                for member in members:
-                    name = member.get("name", "")
-                    login = member.get("login", "")
+                members = self.storage.load_members()
+                for uid, info in members.items():
+                    name = info.get("name", "")
+                    login = info.get("login", "")
                     if content in [name, login, name.lower(), login.lower()]:
-                        member_id = str(member.get("user_id") or member.get("login"))
+                        member_id = str(uid)
                         break
 
                 if not member_id:
@@ -2741,12 +2741,12 @@ class NovaBotPlugin(Star):
             # 查看指定成员的协作伙伴
             if content:
                 member_id = None
-                members = self.storage.get_all_members()
-                for member in members:
-                    name = member.get("name", "")
-                    login = member.get("login", "")
+                members = self.storage.load_members()
+                for uid, info in members.items():
+                    name = info.get("name", "")
+                    login = info.get("login", "")
                     if content in [name, login, name.lower(), login.lower()]:
-                        member_id = str(member.get("user_id") or member.get("login"))
+                        member_id = str(uid)
                         break
 
                 if not member_id:

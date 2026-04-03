@@ -132,12 +132,12 @@ class GetMemberTrajectoryTool(BaseTool):
         """解析成员姓名到成员 ID"""
         # 从团队成员缓存查找
         if hasattr(self.plugin, "storage") and self.plugin.storage:
-            members = self.plugin.storage.get_all_members()
-            for member in members:
-                name = member.get("name", "")
-                login = member.get("login", "")
+            members = self.plugin.storage.load_members()
+            for user_id, info in members.items():
+                name = info.get("name", "")
+                login = info.get("login", "")
                 if member_name in [name, login, name.lower(), login.lower()]:
-                    return str(member.get("user_id") or member.get("login"))
+                    return str(user_id)
 
         # 从绑定记录查找
         # TODO: 实现从绑定记录查找
