@@ -1682,10 +1682,14 @@ class NovaBotPlugin(Star):
         # 从消息直接解析，更可靠
         msg = event.message_str.strip()
         # AstrBot 已去掉 / 前缀，直接检查 kb 开头
-        if msg.startswith("kb "):
-            content = msg[3:].strip()
-        elif msg.startswith("kb"):
-            content = msg[2:].strip()
+        # 处理回复消息格式（可能包含 "回复 xxx:" 前缀）
+        import re
+        # 提取 kb 后面的内容（支持回复格式）
+        kb_match = re.search(r'\bkb\s+(.+)$', msg, re.IGNORECASE)
+        if kb_match:
+            content = kb_match.group(1).strip()
+        elif msg.lower() == "kb":
+            content = ""
         else:
             content = args.strip()
 
@@ -1826,12 +1830,14 @@ class NovaBotPlugin(Star):
             "  /kb <知识库> - 查看概览\n"
             "  /kb <知识库> <问题> - 范围检索\n"
             "  /kb guide <知识库> - 新人导航\n"
+            "  /kb updates <知识库> [天数] - 更新感知\n"
             "\n"
             "📖 同步（管理员）\n"
             "  /sync - 同步知识库\n"
             "  /sync members - 同步成员\n"
             "  /sync status - 同步状态\n"
             "  /rag search <关键词> - 语义搜索\n"
+            "  /webhook - Webhook 服务状态\n"
             "\n"
             "👤 账号\n"
             "  /bind <用户名> - 绑定账号\n"
@@ -1839,12 +1845,13 @@ class NovaBotPlugin(Star):
             "  /profile - 查看画像\n"
             "  /profile refresh - 刷新画像\n"
             "  /profile assess <领域> - 领域评估\n"
+            "  /persona - 人设偏好设置\n"
             "\n"
             "👥 伙伴与学习\n"
             "  /partner - 学习伙伴推荐\n"
             "  /partner <主题> - 按主题推荐\n"
             "  /path <领域> - 学习路径推荐\n"
-            "  知识卡片 - 直接说\"我想学xxx\"\n"
+            "  /card <主题> - 知识卡片\n"
             "\n"
             "🔔 订阅\n"
             "  /subscribe - 查看订阅\n"
@@ -1865,6 +1872,7 @@ class NovaBotPlugin(Star):
             "  /ask like <问题ID> <回答ID> - 点赞\n"
             "  /ask mine - 我的问题\n"
             "  /ask delete <ID> - 删除我的问题\n"
+            "  /askreset - 重置提问箱（管理员）\n"
             "\n"
             "  /novabot - 帮助"
         )
