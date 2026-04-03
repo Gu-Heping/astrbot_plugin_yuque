@@ -643,3 +643,13 @@ class RAGEngine:
                 "persist_directory": str(self.persist_directory),
                 "error": str(e),
             }
+
+    async def close(self):
+        """关闭资源（HTTP 客户端等）"""
+        try:
+            # 关闭 DashScopeEmbeddings 的 HTTP 客户端
+            if isinstance(self.embeddings, DashScopeEmbeddings):
+                await self.embeddings.close()
+                logger.debug("[RAG] Embeddings 客户端已关闭")
+        except Exception as e:
+            logger.warning(f"[RAG] 关闭资源失败: {e}")

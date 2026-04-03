@@ -4,6 +4,7 @@ NovaBot 知识问答模块
 """
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,7 @@ class AskBoxManager:
         self.questions_file = self.data_dir / "ask_box.json"
         self._data: dict = {}
         self._loaded = False
+        self._lock = threading.Lock()  # 并发锁保护
 
     # 内容长度限制
     MAX_QUESTION_LENGTH = 500
@@ -40,25 +42,30 @@ class AskBoxManager:
         if self._loaded:
             return
 
-        if self.questions_file.exists():
-            try:
-                with open(self.questions_file, "r", encoding="utf-8") as f:
-                    self._data = json.load(f)
-            except Exception as e:
-                logger.warning(f"[AskBox] 加载数据失败: {e}")
-                self._data = {"questions": [], "next_question_id": 1, "next_answer_id": 1}
-        else:
-            self._data = {"questions": [], "next_question_id": 1, "next_answer_id": 1}
+        with self._lock:
+            if self._loaded:  # 双重检查
+                return
 
-        self._loaded = True
+            if self.questions_file.exists():
+                try:
+                    with open(self.questions_file, "r", encoding="utf-8") as f:
+                        self._data = json.load(f)
+                except Exception as e:
+                    logger.warning(f"[AskBox] 加载数据失败: {e}")
+                    self._data = {"questions": [], "next_question_id": 1, "next_answer_id": 1}
+            else:
+                self._data = {"questions": [], "next_question_id": 1, "next_answer_id": 1}
+
+            self._loaded = True
 
     def _save(self):
         """保存数据到文件"""
-        try:
-            with open(self.questions_file, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"[AskBox] 保存数据失败: {e}")
+        with self._lock:
+            try:
+                with open(self.questions_file, "w", encoding="utf-8") as f:
+                    json.dump(self._data, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[AskBox] 保存数据失败: {e}")
 
     def submit_question(
         self,

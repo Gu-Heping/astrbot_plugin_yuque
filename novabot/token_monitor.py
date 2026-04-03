@@ -4,6 +4,7 @@ NovaBot Token 消耗监控
 """
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -25,28 +26,34 @@ class TokenMonitor:
         self.log_file = self.data_dir / "token_logs.json"
         self._logs: list[dict] = []
         self._loaded = False
+        self._lock = threading.Lock()  # 并发锁保护
 
     def _ensure_loaded(self):
         """确保日志已加载"""
         if self._loaded:
             return
 
-        if self.log_file.exists():
-            try:
-                with open(self.log_file, "r", encoding="utf-8") as f:
-                    self._logs = json.load(f)
-            except Exception as e:
-                logger.warning(f"[TokenMonitor] 加载日志失败: {e}")
-                self._logs = []
-        self._loaded = True
+        with self._lock:
+            if self._loaded:  # 双重检查
+                return
+
+            if self.log_file.exists():
+                try:
+                    with open(self.log_file, "r", encoding="utf-8") as f:
+                        self._logs = json.load(f)
+                except Exception as e:
+                    logger.warning(f"[TokenMonitor] 加载日志失败: {e}")
+                    self._logs = []
+            self._loaded = True
 
     def _save(self):
         """保存日志"""
-        try:
-            with open(self.log_file, "w", encoding="utf-8") as f:
-                json.dump(self._logs, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"[TokenMonitor] 保存日志失败: {e}")
+        with self._lock:
+            try:
+                with open(self.log_file, "w", encoding="utf-8") as f:
+                    json.dump(self._logs, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[TokenMonitor] 保存日志失败: {e}")
 
     def log_usage(
         self,
@@ -77,13 +84,18 @@ class TokenMonitor:
             "timestamp": datetime.now().isoformat(),
         }
 
-        self._logs.append(entry)
+        with self._lock:
+            self._logs.append(entry)
 
-        # 限制日志数量，保留最近 2000 条
-        if len(self._logs) > 2000:
-            self._logs = self._logs[-2000:]
+            # 限制日志数量，保留最近 2000 条
+            if len(self._logs) > 2000:
+                self._logs = self._logs[-2000:]
 
-        self._save()
+            try:
+                with open(self.log_file, "w", encoding="utf-8") as f:
+                    json.dump(self._logs, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                logger.error(f"[TokenMonitor] 保存日志失败: {e}")
 
     def get_stats(self, days: int = 30) -> dict:
         """获取统计信息

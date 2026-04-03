@@ -4,6 +4,7 @@ NovaBot 数据存储模块
 """
 
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -33,6 +34,10 @@ class Storage:
         self._bindings_cache: Optional[dict] = None
         self._members_cache: Optional[dict] = None
 
+        # 并发锁（保护文件写入）
+        self._bindings_lock = threading.Lock()
+        self._members_lock = threading.Lock()
+
     def invalidate_cache(self, cache_type: str = "all"):
         """清除缓存，下次读取时重新加载文件
 
@@ -47,25 +52,27 @@ class Storage:
     # ========== 绑定关系 ==========
 
     def load_bindings(self) -> dict:
-        if self._bindings_cache is not None:
-            return self._bindings_cache
-        if self.bindings_file.exists():
-            try:
-                self._bindings_cache = json.loads(self.bindings_file.read_text(encoding="utf-8"))
+        with self._bindings_lock:
+            if self._bindings_cache is not None:
                 return self._bindings_cache
-            except json.JSONDecodeError as e:
-                logger.warning(f"绑定文件损坏，已重置: {e}")
-                self._bindings_cache = {}
-                return {}
-        self._bindings_cache = {}
-        return {}
+            if self.bindings_file.exists():
+                try:
+                    self._bindings_cache = json.loads(self.bindings_file.read_text(encoding="utf-8"))
+                    return self._bindings_cache
+                except json.JSONDecodeError as e:
+                    logger.warning(f"绑定文件损坏，已重置: {e}")
+                    self._bindings_cache = {}
+                    return {}
+            self._bindings_cache = {}
+            return {}
 
     def save_bindings(self, bindings: dict):
-        self.bindings_file.write_text(
-            json.dumps(bindings, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        self._bindings_cache = bindings
+        with self._bindings_lock:
+            self.bindings_file.write_text(
+                json.dumps(bindings, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            self._bindings_cache = bindings
 
     def get_binding(self, platform_id: str) -> Optional[dict]:
         bindings = self.load_bindings()
@@ -104,25 +111,27 @@ class Storage:
     # ========== 团队成员 ==========
 
     def load_members(self) -> dict:
-        if self._members_cache is not None:
-            return self._members_cache
-        if self.members_file.exists():
-            try:
-                self._members_cache = json.loads(self.members_file.read_text(encoding="utf-8"))
+        with self._members_lock:
+            if self._members_cache is not None:
                 return self._members_cache
-            except json.JSONDecodeError as e:
-                logger.warning(f"成员文件损坏，已重置: {e}")
-                self._members_cache = {}
-                return {}
-        self._members_cache = {}
-        return {}
+            if self.members_file.exists():
+                try:
+                    self._members_cache = json.loads(self.members_file.read_text(encoding="utf-8"))
+                    return self._members_cache
+                except json.JSONDecodeError as e:
+                    logger.warning(f"成员文件损坏，已重置: {e}")
+                    self._members_cache = {}
+                    return {}
+            self._members_cache = {}
+            return {}
 
     def save_members(self, members: dict):
-        self.members_file.write_text(
-            json.dumps(members, ensure_ascii=False, indent=2),
-            encoding="utf-8"
-        )
-        self._members_cache = members
+        with self._members_lock:
+            self.members_file.write_text(
+                json.dumps(members, ensure_ascii=False, indent=2),
+                encoding="utf-8"
+            )
+            self._members_cache = members
 
     def find_member_by_id(self, user_id: str) -> Optional[dict]:
         """通过用户 ID 精确查找团队成员
@@ -140,6 +149,22 @@ class Storage:
         return None
 
     def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
+        """通过名称或 login 查找团队成员
+
+        Args:
+            name_or_login: 用户名或登录名
+
+        Returns:
+            成员信息字典，未找到返回 None
+        """
+        # 空值检查和长度限制
+        if not name_or_login or not name_or_login.strip():
+            return None
+
+        # 限制输入长度，防止过长字符串
+        if len(name_or_login) > 100:
+            name_or_login = name_or_login[:100]
+
         members = self.load_members()
         name_lower = name_or_login.lower()
 

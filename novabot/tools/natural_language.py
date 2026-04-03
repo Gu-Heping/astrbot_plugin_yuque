@@ -342,7 +342,12 @@ class UnsubscribeTool(BaseTool):
         umo = event.unified_msg_origin
 
         # 使用 SubscriptionManager 取消订阅
-        sub_id_int = int(sub_id) if sub_id else None
+        sub_id_int = None
+        if sub_id:
+            try:
+                sub_id_int = int(sub_id)
+            except ValueError:
+                return f"无效的订阅 ID：{sub_id}，请输入数字"
 
         success, msg = await self.plugin.subscribe_mgr.unsubscribe(
             platform_id=platform_id,

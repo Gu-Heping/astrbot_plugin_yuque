@@ -226,6 +226,22 @@ class NovaBotPlugin(Star):
 
         # 关闭语雀客户端
         await self._close_client()
+
+        # 关闭 RAG 引擎资源
+        if self.rag:
+            try:
+                await self.rag.close()
+                logger.info("[RAG] 引擎资源已释放")
+            except Exception as e:
+                logger.warning(f"[RAG] 关闭资源失败: {e}")
+
+        # 关闭 DocIndex 数据库连接
+        if self._doc_index:
+            try:
+                self._doc_index.close()
+            except Exception as e:
+                logger.debug(f"[DocIndex] 关闭连接: {e}")
+
         logger.info("NovaBot 插件已卸载")
 
     def _get_doc_index(self):
@@ -710,6 +726,12 @@ class NovaBotPlugin(Star):
                 "/bind <用户名>\n\n"
                 "例如: /bind 张三"
             )
+            return
+
+        # 输入长度限制
+        arg = arg.strip()
+        if len(arg) > 100:
+            yield event.plain_result("❌ 用户名过长（最多 100 字符）")
             return
 
         # 检查成员数据
