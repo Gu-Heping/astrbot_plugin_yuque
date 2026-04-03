@@ -4,6 +4,72 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.27.2] - 2026-04-03
+
+### 新增
+- **RAG 查询缓存**：热门查询缓存，减少 ChromaDB 压力
+  - 默认缓存 5 分钟（300 秒）
+  - 最多缓存 100 条查询
+  - 文档更新时自动清理过期缓存
+
+- **Token 限流器**：用户每日 Token 使用限额
+  - 默认每用户每日 50K tokens
+  - 超限后拒绝 LLM 调用
+  - 80% 时警告提醒
+
+- **Webhook 队列**：异步处理 Webhook 事件
+  - 减少响应延迟
+  - 支持事件统计
+  - 最多缓存 100 条事件
+
+- **配置项**：
+  - `token_daily_limit`：每用户每日 Token 限额
+  - `rag_cache_ttl`：RAG 缓存有效期
+  - `webhook_queue_enabled`：启用 Webhook 队列
+
+### 优化
+- RAG 搜索性能提升（缓存命中时无需向量化）
+- 高峰期 Token 消耗可控（用户级限流）
+- Webhook 处理不阻塞响应
+
+## [v0.27.0] - 2026-04-03
+
+### 新增
+- **成员轨迹系统**：追踪成员活动轨迹
+  - `MemberTrajectory` 管理器，记录成员事件
+  - 支持事件类型：发布文档、更新文档、回答问题、学习里程碑等
+  - 最多保留 200 条事件，90 天过期
+
+- **成员轨迹指令**：`/trajectory`
+  - `/trajectory` - 查看自己的活动轨迹
+  - `/trajectory <成员名>` - 查看指定成员轨迹
+  - `/trajectory topic <主题>` - 搜索某主题相关的活动
+
+- **协作网络系统**：追踪成员协作关系
+  - `CollaborationNetwork` 管理器，记录协作关系
+  - 支持来源：同一知识库贡献者、问答关系、同一兴趣组
+  - 协作强度计算（0-1）
+
+- **协作网络指令**：`/collab`
+  - `/collab` - 查看自己的协作伙伴
+  - `/collab <成员名>` - 查看指定成员的协作伙伴
+  - `/collab find <主题>` - 寻找某主题的协作伙伴
+
+- **社团层 Agent 工具**：自然语言访问社团数据
+  - `get_member_trajectory`：查看成员轨迹
+  - `find_collaborators`：寻找协作伙伴
+  - `get_collaborators`：获取协作伙伴列表
+
+- **主动关心机制**：自动关心不活跃用户
+  - 配置项：`proactive_care_enabled`、`care_interval_hours`、`inactive_threshold_days`
+  - 检测：用户不活跃、问题未解决
+  - 目前仅记录日志，实际发送消息需要后续扩展
+
+### 设计目标
+- 解决"不知道谁在做什么"的问题
+- 优化伙伴推荐质量
+- 为规模化使用（80-90 人）做准备
+
 ## [v0.26.2] - 2026-04-03
 
 ### 新增

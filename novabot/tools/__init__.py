@@ -32,6 +32,11 @@ from .memory_tools import (
     CheckQuestionHistoryTool,
     RecordQuestionTool,
 )
+from .community_tools import (
+    GetMemberTrajectoryTool,
+    FindCollaboratorsTool,
+    GetCollaboratorsTool,
+)
 
 __all__ = [
     "BaseTool",
@@ -67,6 +72,10 @@ __all__ = [
     "GetUnresolvedQuestionsTool",
     "CheckQuestionHistoryTool",
     "RecordQuestionTool",
+    # 社团层工具
+    "GetMemberTrajectoryTool",
+    "FindCollaboratorsTool",
+    "GetCollaboratorsTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -98,4 +107,8 @@ ALL_TOOLS = [
     GetUnresolvedQuestionsTool,
     CheckQuestionHistoryTool,
     RecordQuestionTool,
+    # 社团层工具
+    GetMemberTrajectoryTool,
+    FindCollaboratorsTool,
+    GetCollaboratorsTool,
 ]

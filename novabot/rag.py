@@ -5,7 +5,10 @@ NovaBot RAG 检索模块
 
 import asyncio
 import gc
+import hashlib
 import shutil
+import threading
+import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
@@ -148,6 +151,7 @@ class RAGEngine:
         embedding_base_url: Optional[str] = None,
         embedding_model: str = "text-embedding-3-small",
         token_usage_callback: Optional[Callable[[int], None]] = None,
+        cache_ttl: int = 300,  # 缓存有效期（秒）
     ):
         self.persist_directory = Path(persist_directory)
         self.embedding_api_key = embedding_api_key
@@ -155,6 +159,11 @@ class RAGEngine:
         self.embedding_model = embedding_model
         self.token_usage_callback = token_usage_callback
         self._total_embedding_tokens = 0  # 累计 embedding token 数
+
+        # 查询缓存（v0.27.2 性能优化）
+        self._query_cache: dict = {}  # {cache_key: {"results": [...], "timestamp": float}}
+        self._cache_ttl = cache_ttl
+        self._cache_lock = threading.Lock()
 
         # 初始化 embedding
         if embedding_base_url and "dashscope" in embedding_base_url.lower():
@@ -557,13 +566,14 @@ class RAGEngine:
         logger.info(f"[RAG] 读取到 {len(all_docs)} 篇文档")
         return self.index_docs(all_docs, progress_callback)
 
-    def search(self, query: str, k: int = 5, book_filter: str = None) -> list[dict]:
+    def search(self, query: str, k: int = 5, book_filter: str = None, use_cache: bool = True) -> list[dict]:
         """语义检索（按文档ID去重）
 
         Args:
             query: 搜索查询
             k: 返回数量
             book_filter: 知识库过滤（可选）
+            use_cache: 是否使用缓存（默认 True）
 
         Returns:
             搜索结果列表
@@ -574,6 +584,14 @@ class RAGEngine:
         query = query.strip()
         if not query:
             return []
+
+        # 检查缓存（v0.27.2）
+        if use_cache:
+            cache_key = self._make_cache_key(query, k, book_filter)
+            cached = self._get_from_cache(cache_key)
+            if cached is not None:
+                logger.debug(f"[RAG] 命中缓存: {query[:30]}")
+                return cached
 
         try:
             # 构建过滤条件
@@ -610,10 +628,70 @@ class RAGEngine:
                 if len(unique_results) >= k:
                     break
 
+            # 存入缓存
+            if use_cache:
+                self._set_cache(cache_key, unique_results)
+
             return unique_results
         except Exception as e:
             logger.error(f"[RAG] 搜索失败: {e}")
             return []
+
+    def _make_cache_key(self, query: str, k: int, book_filter: Optional[str]) -> str:
+        """生成缓存键"""
+        key_str = f"{query}:{k}:{book_filter or ''}"
+        return hashlib.md5(key_str.encode()).hexdigest()
+
+    def _get_from_cache(self, cache_key: str) -> Optional[list]:
+        """从缓存获取结果"""
+        with self._cache_lock:
+            cached = self._query_cache.get(cache_key)
+            if cached is None:
+                return None
+
+            # 检查是否过期
+            if time.time() - cached["timestamp"] > self._cache_ttl:
+                del self._query_cache[cache_key]
+                return None
+
+            return cached["results"]
+
+    def _set_cache(self, cache_key: str, results: list):
+        """存入缓存"""
+        with self._cache_lock:
+            self._query_cache[cache_key] = {
+                "results": results,
+                "timestamp": time.time(),
+            }
+
+            # 清理过期缓存
+            self._cleanup_cache()
+
+    def _cleanup_cache(self):
+        """清理过期缓存"""
+        now = time.time()
+        expired_keys = [
+            k for k, v in self._query_cache.items()
+            if now - v["timestamp"] > self._cache_ttl
+        ]
+        for k in expired_keys:
+            del self._query_cache[k]
+
+        # 限制缓存大小
+        if len(self._query_cache) > 100:
+            # 删除最旧的 20 个
+            sorted_items = sorted(
+                self._query_cache.items(),
+                key=lambda x: x[1]["timestamp"]
+            )
+            for k, _ in sorted_items[:20]:
+                del self._query_cache[k]
+
+    def clear_cache(self):
+        """清空查询缓存"""
+        with self._cache_lock:
+            self._query_cache.clear()
+        logger.info("[RAG] 查询缓存已清空")
 
     def clear(self) -> bool:
         """清空向量库"""

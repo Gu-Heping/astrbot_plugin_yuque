@@ -4,5 +4,7 @@ NovaBot 长期记忆模块
 """
 
 from .conversation_memory import ConversationMemory
+from .member_trajectory import MemberTrajectory
+from .collaboration_network import CollaborationNetwork
 
-__all__ = ["ConversationMemory"]
+__all__ = ["ConversationMemory", "MemberTrajectory", "CollaborationNetwork"]

@@ -89,5 +89,44 @@
     "type": "bool",
     "default": false,
     "hint": "需要 AstrBot 配置中启用 web_search 并配置搜索引擎"
+  },
+  "proactive_care_enabled": {
+    "description": "启用主动关心",
+    "type": "bool",
+    "default": true,
+    "hint": "NovaBot 会主动关心不活跃、问题未解决的用户"
+  },
+  "care_interval_hours": {
+    "description": "主动关心检查间隔（小时）",
+    "type": "int",
+    "default": 1
+  },
+  "inactive_threshold_days": {
+    "description": "不活跃判定天数",
+    "type": "int",
+    "default": 7
+  },
+  "unresolved_question_days": {
+    "description": "未解决问题提醒天数",
+    "type": "int",
+    "default": 7
+  },
+  "token_daily_limit": {
+    "description": "每用户每日 Token 限额",
+    "type": "int",
+    "default": 50000,
+    "hint": "超过限额后用户将无法使用 LLM 功能"
+  },
+  "rag_cache_ttl": {
+    "description": "RAG 查询缓存有效期（秒）",
+    "type": "int",
+    "default": 300,
+    "hint": "热门查询结果缓存时间，减少重复查询"
+  },
+  "webhook_queue_enabled": {
+    "description": "启用 Webhook 队列处理",
+    "type": "bool",
+    "default": true,
+    "hint": "异步处理 Webhook 事件，减少响应延迟"
   }
 }

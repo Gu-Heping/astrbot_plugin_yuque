@@ -23,18 +23,20 @@ from .novabot.weekly import WeeklyReporter
 from .novabot.search_log import SearchLogger
 from .novabot.knowledge_gap import LearningGapAnalyzer, format_gap_report
 from .novabot.token_monitor import TokenMonitor
+from .novabot.token_limiter import TokenLimiter
+from .novabot.webhook_queue import WebhookQueue
 from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
 from .novabot.tools import ALL_TOOLS
 from .novabot.knowledge_base import KnowledgeBaseManager
-from .novabot.memory import ConversationMemory
+from .novabot.memory import ConversationMemory, MemberTrajectory, CollaborationNetwork
 
 
 # ============================================================================
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.26.2")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.27.2")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -70,6 +72,10 @@ class NovaBotPlugin(Star):
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
         self.memory_manager = ConversationMemory(self.storage.data_dir)  # 长期记忆
+        self.trajectory_manager = MemberTrajectory(self.storage.data_dir)  # 成员轨迹
+        self.collaboration_manager = CollaborationNetwork(self.storage.data_dir)  # 协作网络
+        self.token_limiter = TokenLimiter(self.storage.data_dir)  # Token 限流
+        self.webhook_queue = WebhookQueue()  # Webhook 队列
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
         self.gap_analyzer: Optional[LearningGapAnalyzer] = None
@@ -146,6 +152,128 @@ class NovaBotPlugin(Star):
         else:
             logger.info(f"[Webhook] webhook_enabled={config.get('webhook_enabled', False)}，跳过初始化")
 
+        # 主动关心任务（v0.27.1）
+        self._care_task: Optional[asyncio.Task] = None
+        self._care_running = False
+        if config.get("proactive_care_enabled", True):
+            self._try_start_proactive_care()
+
+    def _try_start_proactive_care(self):
+        """尝试启动主动关心任务"""
+        try:
+            loop = asyncio.get_running_loop()
+            self._care_task = loop.create_task(self._proactive_care_loop())
+            self._care_running = True
+            logger.info("[Care] 主动关心任务已启动")
+        except RuntimeError:
+            # 事件循环未运行，等待 on_astrbot_loaded 触发
+            logger.info("[Care] 事件循环未运行，稍后启动主动关心任务")
+
+    async def _proactive_care_loop(self):
+        """主动关心循环"""
+        interval_hours = self.config.get("care_interval_hours", 1)
+        interval_seconds = interval_hours * 3600
+
+        logger.info(f"[Care] 主动关心循环启动，间隔 {interval_hours} 小时")
+
+        while self._care_running:
+            try:
+                await asyncio.sleep(interval_seconds)
+                await self._check_and_care()
+            except asyncio.CancelledError:
+                logger.info("[Care] 主动关心任务被取消")
+                break
+            except Exception as e:
+                logger.error(f"[Care] 主动关心任务出错: {e}", exc_info=True)
+                await asyncio.sleep(60)  # 出错后等待 1 分钟再重试
+
+    async def _check_and_care(self):
+        """检查需要关心的用户"""
+        if not self.memory_manager:
+            return
+
+        inactive_days = self.config.get("inactive_threshold_days", 7)
+        unresolved_days = self.config.get("unresolved_question_days", 7)
+
+        # 获取所有活跃用户
+        active_members = []
+        if self.trajectory_manager:
+            active_members = self.trajectory_manager.get_all_active_members(days=30)
+
+        # 如果没有轨迹数据，从绑定记录获取
+        if not active_members:
+            bindings = self.storage.get_all_bindings()
+            for binding in bindings:
+                yuque_id = binding.get("yuque_id")
+                if yuque_id:
+                    active_members.append({
+                        "member_id": str(yuque_id),
+                        "last_active": None,
+                    })
+
+        cared_count = 0
+        for member in active_members[:20]:  # 每次最多检查 20 个用户
+            member_id = member.get("member_id")
+            if not member_id:
+                continue
+
+            try:
+                # 检查不活跃
+                last_active = member.get("last_active")
+                if last_active:
+                    from datetime import datetime, timedelta
+                    try:
+                        last_date = datetime.fromisoformat(last_active)
+                        days_inactive = (datetime.now() - last_date).days
+                        if days_inactive >= inactive_days:
+                            await self._send_care_message(member_id, "inactive", {"days": days_inactive})
+                            cared_count += 1
+                            continue
+                    except ValueError:
+                        pass
+
+                # 检查未解决问题
+                unresolved = self.memory_manager.get_unresolved_questions(member_id)
+                for q in unresolved:
+                    first_asked = q.get("first_asked", "")
+                    if first_asked:
+                        from datetime import datetime, timedelta
+                        try:
+                            ask_date = datetime.fromisoformat(first_asked)
+                            days_since = (datetime.now() - ask_date).days
+                            if days_since >= unresolved_days:
+                                await self._send_care_message(member_id, "unresolved", {
+                                    "question": q.get("question", ""),
+                                    "days": days_since,
+                                })
+                                cared_count += 1
+                                break
+                        except ValueError:
+                            pass
+
+            except Exception as e:
+                logger.warning(f"[Care] 检查用户 {member_id} 时出错: {e}")
+
+        if cared_count > 0:
+            logger.info(f"[Care] 本次检查触发了 {cared_count} 次主动关心")
+
+    async def _send_care_message(self, member_id: str, care_type: str, data: dict):
+        """发送关心消息
+
+        注意：目前只记录日志，实际发送需要获取用户的平台 ID 并发送主动消息。
+        这需要扩展绑定系统来存储 platform_id -> yuque_id 的反向映射。
+        """
+        if care_type == "inactive":
+            days = data.get("days", 7)
+            logger.info(f"[Care] 用户 {member_id} 已 {days} 天未活跃，应该关心")
+            # TODO: 实现实际的主动消息发送
+            # 需要获取用户的平台 ID，然后使用 context.send_message() 发送
+
+        elif care_type == "unresolved":
+            question = data.get("question", "")
+            days = data.get("days", 7)
+            logger.info(f"[Care] 用户 {member_id} 的问题「{question[:20]}」已 {days} 天未解决")
+
     def _try_start_webhook(self):
         """尝试启动 Webhook 服务（延迟启动）"""
         try:
@@ -212,6 +340,18 @@ class NovaBotPlugin(Star):
 
     async def terminate(self):
         """插件卸载时的清理"""
+        # 停止主动关心任务
+        self._care_running = False
+        if self._care_task:
+            try:
+                self._care_task.cancel()
+                await self._care_task
+                logger.info("[Care] 主动关心任务已停止")
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"[Care] 停止任务失败: {e}")
+
         # 关闭 Webhook 服务
         if self._webhook_site:
             try:
@@ -424,7 +564,8 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions"
+            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions",
+            "trajectory", "collab"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
         if first_word in known_commands:
@@ -1915,6 +2056,16 @@ class NovaBotPlugin(Star):
             "  /questions frequent - 反复出现的问题\n"
             "  /questions resolve <ID> - 标记已解决\n"
             "\n"
+            "👣 成员轨迹\n"
+            "  /trajectory - 查看自己的活动轨迹\n"
+            "  /trajectory <成员名> - 查看指定成员轨迹\n"
+            "  /trajectory topic <主题> - 主题相关活动\n"
+            "\n"
+            "🤝 协作网络\n"
+            "  /collab - 查看自己的协作伙伴\n"
+            "  /collab <成员名> - 查看指定成员协作伙伴\n"
+            "  /collab find <主题> - 寻找协作伙伴\n"
+            "\n"
             "  /novabot - 帮助"
         )
 
@@ -2393,3 +2544,247 @@ class NovaBotPlugin(Star):
         except Exception as e:
             logger.error(f"[Questions] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")
+
+    # =========================================================================
+    # 成员轨迹指令（v0.27.0）
+    # =========================================================================
+
+    @filter.command("trajectory")
+    async def trajectory_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """成员轨迹查询
+
+        用法:
+        - /trajectory - 查看自己的活动轨迹
+        - /trajectory <成员名> - 查看指定成员的轨迹
+        - /trajectory topic <主题> - 查看某主题相关的活动
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+
+        if not yuque_id:
+            yield event.plain_result("绑定信息异常，请重新绑定")
+            return
+
+        # 检查轨迹管理器
+        if not self.trajectory_manager:
+            yield event.plain_result("成员轨迹系统未初始化")
+            return
+
+        # 从消息中解析参数
+        msg = event.message_str.strip()
+        import re
+        trajectory_match = re.search(r'trajectory\s+(.+)$', msg, re.IGNORECASE)
+        if trajectory_match:
+            content = trajectory_match.group(1).strip()
+        else:
+            content = args.strip()
+
+        try:
+            # 主题搜索
+            if content.lower().startswith("topic "):
+                topic = content[6:].strip()
+                if not topic:
+                    yield event.plain_result("用法: /trajectory topic <主题>")
+                    return
+
+                results = self.trajectory_manager.search_by_topic(topic, days=30)
+                if not results:
+                    yield event.plain_result(f"最近 30 天没有成员在做「{topic}」相关的事情")
+                    return
+
+                lines = [f"【与「{topic}」相关的成员活动】"]
+                for result in results[:5]:
+                    member_id = result.get("member_id", "")
+                    match_count = result.get("match_count", 0)
+                    events = result.get("matching_events", [])[:3]
+
+                    lines.append(f"\n{member_id}（{match_count} 次相关活动）")
+                    for evt in events:
+                        event_name = evt.get("event_name", "")
+                        title = evt.get("title", "")
+                        lines.append(f"  • {event_name}：{title[:30]}")
+
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 查看指定成员的轨迹
+            if content:
+                # 尝试从成员缓存中查找
+                member_id = None
+                members = self.storage.get_all_members()
+                for member in members:
+                    name = member.get("name", "")
+                    login = member.get("login", "")
+                    if content in [name, login, name.lower(), login.lower()]:
+                        member_id = str(member.get("user_id") or member.get("login"))
+                        break
+
+                if not member_id:
+                    yield event.plain_result(f"未找到成员「{content}」")
+                    return
+
+                trajectory = self.trajectory_manager.get_trajectory(member_id, days=30)
+                target_name = content
+            else:
+                # 查看自己的轨迹
+                user_id = str(yuque_id)
+                trajectory = self.trajectory_manager.get_trajectory(user_id, days=30)
+                target_name = yuque_name
+
+            if not trajectory:
+                yield event.plain_result(f"「{target_name}」最近 30 天暂无活动记录")
+                return
+
+            lines = [f"【{target_name} 最近活动】"]
+            for evt in trajectory[:10]:
+                timestamp = evt.get("timestamp", "")
+                if timestamp:
+                    try:
+                        dt = datetime.fromisoformat(timestamp)
+                        date_str = dt.strftime("%m-%d")
+                    except ValueError:
+                        date_str = timestamp[:10]
+                else:
+                    date_str = "未知"
+
+                event_name = evt.get("event_name", "活动")
+                title = evt.get("title", "")
+                lines.append(f"• {date_str} - {event_name}：{title[:30]}")
+
+            if len(trajectory) > 10:
+                lines.append(f"\n... 还有 {len(trajectory) - 10} 条记录")
+
+            yield event.plain_result("\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"[Trajectory] 查询失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 查询失败: {e}")
+
+    # =========================================================================
+    # 协作网络指令（v0.27.0）
+    # =========================================================================
+
+    @filter.command("collab")
+    async def collab_cmd(self, event: AstrMessageEvent, args: str = ""):
+        """协作网络查询
+
+        用法:
+        - /collab - 查看自己的协作伙伴
+        - /collab <成员名> - 查看指定成员的协作伙伴
+        - /collab find <主题> - 寻找某主题的协作伙伴
+        """
+        platform_id = event.get_sender_id()
+        binding = self.storage.get_binding(platform_id)
+
+        if not binding:
+            yield event.plain_result("请先绑定账号：/bind <用户名>")
+            return
+
+        yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
+
+        if not yuque_id:
+            yield event.plain_result("绑定信息异常，请重新绑定")
+            return
+
+        # 检查协作网络管理器
+        if not self.collaboration_manager:
+            yield event.plain_result("协作网络系统未初始化")
+            return
+
+        # 从消息中解析参数
+        msg = event.message_str.strip()
+        import re
+        collab_match = re.search(r'collab\s+(.+)$', msg, re.IGNORECASE)
+        if collab_match:
+            content = collab_match.group(1).strip()
+        else:
+            content = args.strip()
+
+        try:
+            # 寻找协作伙伴
+            if content.lower().startswith("find "):
+                topic = content[5:].strip()
+                if not topic:
+                    yield event.plain_result("用法: /collab find <主题>")
+                    return
+
+                user_id = str(yuque_id)
+                potential = self.collaboration_manager.find_potential_collaborators(
+                    user_id, topic=topic, exclude_existing=True
+                )
+
+                if not potential:
+                    yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
+                    return
+
+                lines = [f"【「{topic}」领域潜在协作伙伴】"]
+                for p in potential[:5]:
+                    partner_id = p.get("member_id", "")
+                    score = p.get("match_score", 0)
+                    reasons = p.get("match_reasons", [])
+
+                    lines.append(f"\n{partner_id}（匹配度 {score:.0%}）")
+                    for reason in reasons:
+                        lines.append(f"  • {reason}")
+
+                yield event.plain_result("\n".join(lines))
+                return
+
+            # 查看指定成员的协作伙伴
+            if content:
+                member_id = None
+                members = self.storage.get_all_members()
+                for member in members:
+                    name = member.get("name", "")
+                    login = member.get("login", "")
+                    if content in [name, login, name.lower(), login.lower()]:
+                        member_id = str(member.get("user_id") or member.get("login"))
+                        break
+
+                if not member_id:
+                    yield event.plain_result(f"未找到成员「{content}」")
+                    return
+
+                collaborators = self.collaboration_manager.get_collaborators(member_id)
+                target_name = content
+            else:
+                # 查看自己的协作伙伴
+                user_id = str(yuque_id)
+                collaborators = self.collaboration_manager.get_collaborators(user_id)
+                target_name = yuque_name
+
+            if not collaborators:
+                yield event.plain_result(f"「{target_name}」暂无协作记录")
+                return
+
+            lines = [f"【{target_name} 的协作伙伴】"]
+            for collab in collaborators[:10]:
+                partner_id = collab.get("member_id", "")
+                strength = collab.get("strength", 0)
+                source_name = collab.get("source_name", "")
+                context = collab.get("context", "")
+
+                line = f"• {partner_id}（强度 {strength:.0%}，{source_name}"
+                if context:
+                    line += f"：{context}"
+                line += "）"
+                lines.append(line)
+
+            stats = self.collaboration_manager.get_member_stats(
+                member_id if content else str(yuque_id)
+            )
+            lines.append(f"\n统计：{stats.get('collaborator_count', 0)} 位协作伙伴")
+
+            yield event.plain_result("\n".join(lines))
+
+        except Exception as e:
+            logger.error(f"[Collab] 查询失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ 查询失败: {e}")
