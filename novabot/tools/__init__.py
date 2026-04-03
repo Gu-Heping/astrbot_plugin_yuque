@@ -13,6 +13,15 @@ from .search import (
 from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool
 from .repo import ListKnowledgeBasesTool, ListRepoDocsTool
 from .persona import SetPreferenceTool
+from .natural_language import (
+    PartnerRecommendTool,
+    LearningPathTool,
+    WeeklyReportTool,
+    KnowledgeGapTool,
+    SubscribeTool,
+    UnsubscribeTool,
+    ProfileViewTool,
+)
 
 __all__ = [
     "BaseTool",
@@ -31,6 +40,14 @@ __all__ = [
     "ListRepoDocsTool",
     # 人格偏好工具
     "SetPreferenceTool",
+    # 自然语言交互工具
+    "PartnerRecommendTool",
+    "LearningPathTool",
+    "WeeklyReportTool",
+    "KnowledgeGapTool",
+    "SubscribeTool",
+    "UnsubscribeTool",
+    "ProfileViewTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -46,4 +63,11 @@ ALL_TOOLS = [
     ListKnowledgeBasesTool,
     ListRepoDocsTool,
     SetPreferenceTool,
+    PartnerRecommendTool,
+    LearningPathTool,
+    WeeklyReportTool,
+    KnowledgeGapTool,
+    SubscribeTool,
+    UnsubscribeTool,
+    ProfileViewTool,
 ]
