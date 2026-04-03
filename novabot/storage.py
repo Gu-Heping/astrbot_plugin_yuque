@@ -5,11 +5,16 @@ NovaBot 数据存储模块
 
 import json
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from astrbot.api import logger
+
+
+def _now_iso() -> str:
+    """获取当前时间的 ISO 格式字符串（使用 UTC 时区）"""
+    return datetime.now(timezone.utc).isoformat()
 
 
 class Storage:
@@ -113,7 +118,7 @@ class Storage:
         bindings = self.load_bindings()
         bindings[platform_id] = {
             **yuque_info,
-            "bind_time": datetime.now().isoformat(),
+            "bind_time": _now_iso(),
         }
         self.save_bindings(bindings)
 
@@ -255,7 +260,7 @@ class Storage:
 
     def save_profile(self, yuque_id: int, profile: dict):
         profile_file = self.profiles_dir / f"{yuque_id}.json"
-        profile["updated_at"] = datetime.now().isoformat()
+        profile["updated_at"] = _now_iso()
         profile_file.write_text(
             json.dumps(profile, ensure_ascii=False, indent=2),
             encoding="utf-8"
@@ -332,6 +337,16 @@ class Storage:
 
         if key != "name" and value not in valid_values.get(key, []):
             return False
+
+        # name 字段特殊处理：限制长度和特殊字符
+        if key == "name":
+            if not isinstance(value, str):
+                return False
+            # 限制长度（防止 Prompt Injection）
+            if len(value) > 50:
+                value = value[:50]
+            # 过滤可能导致问题的特殊字符
+            value = value.replace("\n", " ").replace("\r", " ").strip()
 
         # 更新偏好
         prefs = self.load_preferences(yuque_id)

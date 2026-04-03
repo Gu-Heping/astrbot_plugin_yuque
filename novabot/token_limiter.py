@@ -103,6 +103,67 @@ class TokenLimiter:
 
             return is_allowed, remaining, used
 
+    def check_and_reserve(self, user_id: str, tokens: int) -> tuple[bool, int, int]:
+        """原子操作：检查限额并预留 Token
+
+        解决 check_limit 和 record_usage 之间的竞态条件。
+
+        Args:
+            user_id: 用户标识
+            tokens: 需要预留的 Token 数
+
+        Returns:
+            (is_allowed, remaining, used)
+            - is_allowed: 是否允许使用
+            - remaining: 剩余额度
+            - used: 已使用额度（包括本次预留）
+        """
+        if not user_id:
+            return True, self.daily_limit, 0
+
+        if tokens <= 0:
+            return True, self.daily_limit, 0
+
+        today = date.today().isoformat()
+
+        with self._lock:
+            # 获取用户今日使用量
+            user_data = self._usage.get(user_id, {})
+            used_date = user_data.get("date", "")
+
+            # 如果是新的一天，重置计数
+            if used_date != today:
+                self._usage[user_id] = {"date": today, "used": 0}
+                current_used = 0
+            else:
+                current_used = user_data.get("used", 0)
+
+            # 检查是否超限
+            if current_used + tokens > self.daily_limit:
+                remaining = self.daily_limit - current_used
+                logger.warning(
+                    f"[TokenLimiter] 用户 {user_id} 超限: "
+                    f"current={current_used}, request={tokens}, limit={self.daily_limit}"
+                )
+                return False, remaining, current_used
+
+            # 预留 Token
+            new_used = current_used + tokens
+            self._usage[user_id]["used"] = new_used
+
+            # 保存
+            self._save()
+
+            # 检查警告阈值
+            if new_used >= self.daily_limit * self.warning_threshold:
+                logger.warning(
+                    f"[TokenLimiter] 用户 {user_id} 接近限额: "
+                    f"{new_used}/{self.daily_limit}"
+                )
+
+            remaining = self.daily_limit - new_used
+            return True, remaining, new_used
+
     def record_usage(self, user_id: str, tokens: int) -> bool:
         """记录用户 Token 使用
 

@@ -5,9 +5,10 @@
     "hint": "从语雀个人设置中获取"
   },
   "yuque_base_url": {
-    "description": "语雀 API 地址",
+    "description": "语雀 API 地址（私有化部署请修改）",
     "type": "string",
-    "default": "https://nova.yuque.com/api/v2"
+    "default": "https://www.yuque.com/api/v2",
+    "hint": "公有云使用默认值；私有化部署改为 your-org.yuque.com/api/v2"
   },
   "embedding_api_key": {
     "description": "Embedding API Key",

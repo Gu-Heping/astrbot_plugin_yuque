@@ -221,10 +221,13 @@ class NovaBotPlugin(Star):
                 # 检查不活跃
                 last_active = member.get("last_active")
                 if last_active:
-                    from datetime import datetime, timedelta
+                    from datetime import datetime, timezone
                     try:
                         last_date = datetime.fromisoformat(last_active)
-                        days_inactive = (datetime.now() - last_date).days
+                        # 确保 last_date 有时区信息
+                        if last_date.tzinfo is None:
+                            last_date = last_date.replace(tzinfo=timezone.utc)
+                        days_inactive = (datetime.now(timezone.utc) - last_date).days
                         if days_inactive >= inactive_days:
                             await self._send_care_message(member_id, "inactive", {"days": days_inactive})
                             cared_count += 1
@@ -237,10 +240,13 @@ class NovaBotPlugin(Star):
                 for q in unresolved:
                     first_asked = q.get("first_asked", "")
                     if first_asked:
-                        from datetime import datetime, timedelta
+                        from datetime import datetime, timezone
                         try:
                             ask_date = datetime.fromisoformat(first_asked)
-                            days_since = (datetime.now() - ask_date).days
+                            # 确保 ask_date 有时区信息
+                            if ask_date.tzinfo is None:
+                                ask_date = ask_date.replace(tzinfo=timezone.utc)
+                            days_since = (datetime.now(timezone.utc) - ask_date).days
                             if days_since >= unresolved_days:
                                 await self._send_care_message(member_id, "unresolved", {
                                     "question": q.get("question", ""),
@@ -293,6 +299,8 @@ class NovaBotPlugin(Star):
             return
 
         port = self.config.get("webhook_port", 8766)
+        ip_whitelist = self.config.get("webhook_ip_whitelist", [])
+
         try:
             self._webhook_runner = web.AppRunner(self._webhook_app)
             await self._webhook_runner.setup()
@@ -301,6 +309,15 @@ class NovaBotPlugin(Star):
             self._webhook_started = True
             logger.info(f"[Webhook] 服务已启动: http://0.0.0.0:{port}/yuque/webhook")
             logger.info(f"[Webhook] 健康检查: http://0.0.0.0:{port}/health")
+
+            # 安全警告
+            if not ip_whitelist:
+                logger.warning("=" * 60)
+                logger.warning("[安全警告] Webhook 服务绑定在 0.0.0.0 且未配置 IP 白名单！")
+                logger.warning("建议操作：")
+                logger.warning("1. 在配置中设置 webhook_ip_whitelist（语雀服务器 IP）")
+                logger.warning("2. 或通过防火墙/反向代理限制端口访问")
+                logger.warning("=" * 60)
         except Exception as e:
             logger.error(f"[Webhook] 服务启动失败: {e}", exc_info=True)
 
@@ -421,12 +438,16 @@ class NovaBotPlugin(Star):
                 )
 
         # User-Agent 验证（语雀官方请求特征）
-        # 语雀 Webhook User-Agent 格式: YUQUE_WEBHOOK
+        # 注意：User-Agent 可被伪造，仅作为辅助检查
         if "Yuque" not in user_agent and "YUQUE" not in user_agent.upper():
             logger.warning(f"[Webhook] 可疑请求 User-Agent: {user_agent}, 来源: {client_host}")
-            # 如果设置了 IP 白名单，则已通过验证；否则只警告不拒绝
+            # 如果未设置 IP 白名单，拒绝请求
             if not ip_whitelist:
-                logger.warning("[Webhook] 建议: 设置 webhook_ip_whitelist 配置项增强安全性")
+                logger.error("[Webhook] 安全警告: 未配置 IP 白名单且 User-Agent 异常，拒绝请求")
+                return web.json_response(
+                    {"status": "error", "message": "unauthorized"},
+                    status=403,
+                )
 
         # 解析 JSON
         try:
@@ -453,8 +474,9 @@ class NovaBotPlugin(Star):
 
         except Exception as e:
             logger.error(f"[Webhook] 处理异常: {e}", exc_info=True)
+            # 不向外部暴露内部错误详情
             return web.json_response(
-                {"status": "error", "message": str(e)},
+                {"status": "error", "message": "internal error"},
                 status=500,
             )
 
@@ -817,8 +839,9 @@ class NovaBotPlugin(Star):
                 )
 
                 # 更新同步状态
+                from datetime import timezone
                 state = {
-                    "last_sync": datetime.now().isoformat(),
+                    "last_sync": datetime.now(timezone.utc).isoformat(),
                     "repos_count": result.get("repos_count", 0) if result else 0,
                     "docs_count": result.get("docs", 0) if result else 0,
                     "token_type": result.get("token_type", "未知") if result else "未知",

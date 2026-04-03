@@ -26,14 +26,31 @@ if TYPE_CHECKING:
 
 
 # 文档级别的锁，防止同一文档并发处理
+# 使用有界字典避免内存泄漏
 _doc_locks: dict[int, asyncio.Lock] = {}
 _doc_locks_lock = asyncio.Lock()  # 保护 _doc_locks 字典本身
+_DOC_LOCKS_MAX_SIZE = 1000  # 最大锁数量
 
 
 async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
-    """获取文档级别的锁"""
+    """获取文档级别的锁
+
+    使用 LRU 策略限制锁数量，防止内存泄漏。
+    """
     async with _doc_locks_lock:
         if doc_id not in _doc_locks:
+            # 如果超过最大数量，删除最旧的锁（未被持有的）
+            if len(_doc_locks) >= _DOC_LOCKS_MAX_SIZE:
+                # 找到未被持有的锁并删除
+                for old_id, old_lock in list(_doc_locks.items()):
+                    if not old_lock.locked():
+                        del _doc_locks[old_id]
+                        break
+                else:
+                    # 所有锁都被持有，强制删除第一个（不太可能发生）
+                    if _doc_locks:
+                        _doc_locks.pop(next(iter(_doc_locks)))
+
             _doc_locks[doc_id] = asyncio.Lock()
         return _doc_locks[doc_id]
 
@@ -190,7 +207,10 @@ class WebhookHandler:
         return walk(None, "")
 
     def _resolve_doc_output(self, detail: dict, repo_name: str, namespace: Optional[str], toc_list: Optional[list]) -> tuple[Path, Path, str]:
-        """统一解析文档输出目录与相对路径"""
+        """统一解析文档输出目录与相对路径
+
+        包含路径穿越防护，确保输出文件在 docs_dir 内。
+        """
         self.docs_dir.mkdir(parents=True, exist_ok=True)
 
         if repo_name:
@@ -213,6 +233,18 @@ class WebhookHandler:
         target_dir.mkdir(parents=True, exist_ok=True)
 
         out_file = target_dir / f"{base}.md"
+
+        # 路径穿越防护：确保输出文件在 docs_dir 内
+        try:
+            resolved_out = out_file.resolve()
+            resolved_docs = self.docs_dir.resolve()
+            if not resolved_out.is_relative_to(resolved_docs):
+                logger.error(f"[Webhook] 路径穿越检测: {out_file} 不在 {self.docs_dir} 内")
+                raise ValueError(f"Path traversal detected: {out_file}")
+        except Exception as e:
+            logger.error(f"[Webhook] 路径检查失败: {e}")
+            raise
+
         rel_path = str(out_file.relative_to(self.docs_dir))
         return repo_dir, out_file, rel_path
 

@@ -124,11 +124,14 @@ class YuqueClient:
 
     async def _get(self, path: str, params: dict = None) -> dict:
         """GET 请求"""
+        from urllib.parse import urlencode
+
         url = f"{self.base_url}{path}"
         if params:
-            qs = "&".join(f"{k}={v}" for k, v in params.items() if v is not None)
-            if qs:
-                url += f"?{qs}"
+            # 过滤 None 值并进行 URL 编码
+            filtered_params = {k: v for k, v in params.items() if v is not None}
+            if filtered_params:
+                url += f"?{urlencode(filtered_params)}"
 
         r = await self._request_with_retry("GET", url)
         r.raise_for_status()
@@ -230,7 +233,13 @@ class YuqueClient:
 
     @staticmethod
     def slug_safe(s: str) -> str:
-        """安全文件名"""
+        """安全文件名，防止路径穿越
+
+        过滤危险字符包括 ..（路径穿越）、/（路径分隔符）等。
+        """
+        # 先过滤 .. 防止路径穿越
+        s = s.replace("..", "_")
+        # 过滤其他危险字符
         for c in r'/\:*?"<>|':
             s = s.replace(c, "_")
         return s.strip() or "untitled"
