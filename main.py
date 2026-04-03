@@ -2948,8 +2948,13 @@ class NovaBotPlugin(Star):
                     return
 
                 user_id = str(yuque_id)
+                # 传入轨迹管理器和文档索引以支持基于主题的推荐
                 potential = self.collaboration_manager.find_potential_collaborators(
-                    user_id, topic=topic, exclude_existing=True
+                    user_id,
+                    topic=topic,
+                    exclude_existing=True,
+                    trajectory_manager=self.trajectory_manager,
+                    doc_index=self._get_doc_index(),
                 )
 
                 if not potential:

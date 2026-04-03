@@ -234,8 +234,16 @@ class FindCollaboratorsTool(BaseTool):
                 if not member_id:
                     return f"未找到成员「{member_name}」。"
 
+                # 获取轨迹管理器和文档索引
+                trajectory_mgr = getattr(self.plugin, "trajectory_manager", None)
+                doc_idx = self.plugin._get_doc_index() if hasattr(self.plugin, "_get_doc_index") else None
+
                 potential = self.plugin.collaboration_manager.find_potential_collaborators(
-                    member_id, topic=topic, exclude_existing=True
+                    member_id,
+                    topic=topic,
+                    exclude_existing=True,
+                    trajectory_manager=trajectory_mgr,
+                    doc_index=doc_idx,
                 )
 
                 if not potential:

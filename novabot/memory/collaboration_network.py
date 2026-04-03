@@ -263,6 +263,8 @@ class CollaborationNetwork:
         member_id: str,
         topic: str = "",
         exclude_existing: bool = True,
+        trajectory_manager=None,
+        doc_index=None,
     ) -> List[dict]:
         """推荐潜在协作伙伴
 
@@ -270,6 +272,8 @@ class CollaborationNetwork:
             member_id: 成员标识
             topic: 匹配主题（可选）
             exclude_existing: 是否排除已有协作关系
+            trajectory_manager: 成员轨迹管理器（可选，用于主题搜索）
+            doc_index: 文档索引（可选，用于主题搜索）
 
         Returns:
             推荐列表 [{member_id, match_reason, match_score}]
@@ -296,40 +300,71 @@ class CollaborationNetwork:
         # 排除已有协作伙伴
         potential = all_members - existing_collaborators
 
+        # 如果有主题，优先从轨迹和文档索引搜索相关成员
+        topic_experts: Dict[str, float] = {}  # {member_id: relevance_score}
+        if topic:
+            # 1. 从轨迹搜索（在该领域有活动的成员）
+            if trajectory_manager:
+                try:
+                    topic_results = trajectory_manager.search_by_topic(topic, days=60)
+                    for result in topic_results:
+                        expert_id = result.get("member_id", "")
+                        if expert_id and expert_id != member_id:
+                            # 根据活动次数计算相关性
+                            match_count = result.get("match_count", 0)
+                            topic_experts[expert_id] = topic_experts.get(expert_id, 0) + match_count * 0.3
+                except Exception as e:
+                    logger.debug(f"[Collaboration] 轨迹搜索失败: {e}")
+
+            # 2. 从文档索引搜索（写过相关文档的成员）
+            if doc_index:
+                try:
+                    # 按标题搜索
+                    docs = doc_index.search(title=topic, limit=30)
+                    for doc in docs:
+                        author = doc.get("creator_id") or doc.get("author")
+                        if author:
+                            author_id = str(author)
+                            if author_id != member_id:
+                                topic_experts[author_id] = topic_experts.get(author_id, 0) + 0.5
+                except Exception as e:
+                    logger.debug(f"[Collaboration] 文档搜索失败: {e}")
+
         recommendations = []
         for potential_member in potential:
             # 计算推荐分数
             score = 0.0
             reasons = []
 
+            # 主题相关性（优先级最高）
+            if topic and potential_member in topic_experts:
+                topic_score = topic_experts[potential_member]
+                score += topic_score
+                if topic_score >= 0.5:
+                    reasons.append(f"在「{topic}」领域有贡献")
+                else:
+                    reasons.append(f"相关领域活动")
+
             # 间接连接（通过共同协作伙伴）
             common_collaborators = self._find_common_collaborators(
                 network, member_id, potential_member
             )
             if common_collaborators:
-                score += len(common_collaborators) * 0.2
-                reasons.append(f"与 {len(common_collaborators)} 个共同伙伴协作")
+                score += len(common_collaborators) * 0.15
+                if not reasons:  # 只有在没有主题原因时才显示
+                    reasons.append(f"与 {len(common_collaborators)} 个共同伙伴协作")
 
             # 同一兴趣组
             if self._in_same_group(network, member_id, potential_member):
-                score += 0.3
-                reasons.append("同一兴趣组")
+                score += 0.2
+                if not reasons:
+                    reasons.append("同一兴趣组")
 
             # 同一知识库贡献者
             if self._in_same_repo(network, member_id, potential_member):
-                score += 0.2
-                reasons.append("同一知识库贡献者")
-
-            # 主题匹配（如果有）
-            if topic:
-                stats = network["member_stats"].get(potential_member, {})
-                # 简单匹配：检查协作上下文是否包含主题
-                member_collabs = self.get_collaborators(potential_member)
-                for mc in member_collabs:
-                    if topic.lower() in mc.get("context", "").lower():
-                        score += 0.3
-                        reasons.append(f"相关领域: {topic}")
-                        break
+                score += 0.1
+                if not reasons:
+                    reasons.append("同一知识库贡献者")
 
             if score > 0:
                 recommendations.append({
