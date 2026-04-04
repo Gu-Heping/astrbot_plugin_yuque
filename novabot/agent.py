@@ -96,11 +96,15 @@ class NovaBotAgent:
         if not tools:
             return "工具未初始化，请检查插件配置。"
 
-        # 检查 Token 限额（v0.27.2）
+        # Token 限额预留（使用原子操作避免竞态条件）
+        estimated_tokens = 5000  # 预估每次 Agent 调用消耗的 Token
         if self.plugin.token_limiter and user_context.get("bound"):
             yuque_id = user_context.get("yuque_id")
             if yuque_id:
-                is_allowed, remaining, used = self.plugin.token_limiter.check_limit(str(yuque_id))
+                # 使用 check_and_reserve 原子操作
+                is_allowed, remaining, used = self.plugin.token_limiter.check_and_reserve(
+                    str(yuque_id), estimated_tokens
+                )
                 if not is_allowed:
                     return (
                         f"⚠️ 您的每日 Token 额度已用完。\n"
@@ -127,18 +131,26 @@ class NovaBotAgent:
                 tool_call_timeout=60,
             )
 
-            # 记录 Token 使用（如果可用）
+            # 记录实际 Token 使用（更新预估值）
             if self.plugin.token_limiter and user_context.get("bound"):
                 yuque_id = user_context.get("yuque_id")
                 if yuque_id and hasattr(llm_resp, "usage") and llm_resp.usage:
                     usage = llm_resp.usage
                     input_tokens = getattr(usage, "prompt_tokens", 0) or 0
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
-                    if input_tokens > 0 or output_tokens > 0:
-                        self.plugin.token_limiter.record_usage(
-                            str(yuque_id), input_tokens + output_tokens
-                        )
-                        logger.debug(f"[Agent] 记录 token: {input_tokens + output_tokens}")
+                    actual_tokens = input_tokens + output_tokens
+                    if actual_tokens > 0:
+                        # 更新实际使用量（减去预估量，加实际量）
+                        # 注意：如果实际 > 预估，可能导致超限，但这是可接受的
+                        diff = actual_tokens - estimated_tokens
+                        if diff != 0:
+                            # 记录差异（可能是正数或负数）
+                            try:
+                                self.plugin.token_limiter._usage[str(yuque_id)]["used"] += diff
+                                self.plugin.token_limiter._save()
+                            except Exception:
+                                pass
+                        logger.debug(f"[Agent] 实际 token: {actual_tokens}, 预估: {estimated_tokens}")
 
             # 记录对话到 conversation_manager
             await self._record_conversation(umo, user_message, llm_resp.completion_text)
