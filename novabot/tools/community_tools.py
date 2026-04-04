@@ -4,7 +4,7 @@ NovaBot 社团层 Agent 工具
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Optional, List, Dict
 
 from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
@@ -52,44 +52,24 @@ class GetMemberTrajectoryTool(BaseTool):
         topic: str = "",
         days: int = 30,
     ) -> str:
-        """获取成员轨迹
-
-        Args:
-            event: 消息事件
-            member_name: 成员姓名
-            topic: 筛选主题
-            days: 查询天数
-
-        Returns:
-            成员轨迹摘要
-        """
+        """获取成员轨迹"""
         try:
-            # 检查轨迹管理器
             if not hasattr(self.plugin, "trajectory_manager") or not self.plugin.trajectory_manager:
                 return "成员轨迹系统未初始化。"
 
-            # 尝试从成员缓存中查找成员 ID
             member_id = await self._resolve_member_id(member_name)
             if not member_id:
-                # 如果是主题搜索，返回相关成员
                 if topic:
                     return await self._search_by_topic(topic, days)
                 return f"未找到成员「{member_name}」。请确认姓名是否正确。"
 
-            # 获取轨迹
-            event_types = None
-            if topic:
-                # 根据主题推断事件类型
-                pass
-
             trajectory = self.plugin.trajectory_manager.get_trajectory(
-                member_id, days=days, event_types=event_types
+                member_id, days=days
             )
 
             if not trajectory:
                 return f"「{member_name}」最近 {days} 天暂无活动记录。"
 
-            # 筛选主题
             if topic:
                 filtered = []
                 for evt in trajectory:
@@ -101,9 +81,8 @@ class GetMemberTrajectoryTool(BaseTool):
                     return f"「{member_name}」最近 {days} 天没有与「{topic}」相关的活动。"
                 trajectory = filtered
 
-            # 格式化输出
             lines = [f"【{member_name} 最近活动】"]
-            for evt in trajectory[:10]:  # 最多显示 10 条
+            for evt in trajectory[:10]:
                 timestamp = evt.get("timestamp", "")
                 if timestamp:
                     from datetime import datetime
@@ -129,8 +108,6 @@ class GetMemberTrajectoryTool(BaseTool):
             return f"获取成员轨迹时出错：{str(e)}"
 
     async def _resolve_member_id(self, member_name: str) -> Optional[str]:
-        """解析成员姓名到成员 ID"""
-        # 从团队成员缓存查找
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             for user_id, info in members.items():
@@ -138,14 +115,9 @@ class GetMemberTrajectoryTool(BaseTool):
                 login = info.get("login", "")
                 if member_name in [name, login, name.lower(), login.lower()]:
                     return str(user_id)
-
-        # 从绑定记录查找
-        # TODO: 实现从绑定记录查找
-
         return None
 
     async def _search_by_topic(self, topic: str, days: int) -> str:
-        """根据主题搜索相关成员"""
         if not self.plugin.trajectory_manager:
             return "轨迹系统未初始化。"
 
@@ -155,7 +127,7 @@ class GetMemberTrajectoryTool(BaseTool):
             return f"最近 {days} 天没有成员在做「{topic}」相关的事情。"
 
         lines = [f"【与「{topic}」相关的成员活动】"]
-        for result in results[:5]:  # 最多显示 5 个成员
+        for result in results[:5]:
             member_id = result.get("member_id", "")
             member_name = self._resolve_member_name(member_id)
             match_count = result.get("match_count", 0)
@@ -170,7 +142,6 @@ class GetMemberTrajectoryTool(BaseTool):
         return "\n".join(lines)
 
     def _resolve_member_name(self, member_id: str) -> str:
-        """解析成员 ID 到姓名"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
@@ -181,10 +152,7 @@ class GetMemberTrajectoryTool(BaseTool):
 
 @dataclass
 class FindCollaboratorsTool(BaseTool):
-    """寻找协作伙伴工具
-
-    当用户问"我想找人一起做某事"、"谁可以帮我"时调用。
-    """
+    """寻找协作伙伴工具"""
 
     name: str = "find_collaborators"
     description: str = (
@@ -213,28 +181,15 @@ class FindCollaboratorsTool(BaseTool):
         topic: str = "",
         member_name: str = "",
     ) -> str:
-        """寻找协作伙伴
-
-        Args:
-            event: 消息事件
-            topic: 协作主题
-            member_name: 指定成员
-
-        Returns:
-            协作伙伴推荐
-        """
         try:
-            # 检查协作网络管理器
             if not hasattr(self.plugin, "collaboration_manager") or not self.plugin.collaboration_manager:
                 return "协作网络系统未初始化。"
 
-            # 如果指定了成员，查找其潜在协作伙伴
             if member_name:
                 member_id = await self._resolve_member_id(member_name)
                 if not member_id:
                     return f"未找到成员「{member_name}」。"
 
-                # 获取轨迹管理器和文档索引
                 trajectory_mgr = getattr(self.plugin, "trajectory_manager", None)
                 doc_idx = self.plugin._get_doc_index() if hasattr(self.plugin, "_get_doc_index") else None
 
@@ -262,11 +217,9 @@ class FindCollaboratorsTool(BaseTool):
 
                 return "\n".join(lines)
 
-            # 否则，根据主题搜索有相关经验的成员
             if topic:
                 return await self._find_experts_by_topic(topic)
 
-            # 默认：展示协作网络统计
             stats = self.plugin.collaboration_manager.get_network_stats()
             return (
                 f"【协作网络统计】\n"
@@ -281,7 +234,6 @@ class FindCollaboratorsTool(BaseTool):
             return f"寻找协作伙伴时出错：{str(e)}"
 
     async def _resolve_member_id(self, member_name: str) -> Optional[str]:
-        """解析成员姓名到成员 ID"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             for user_id, info in members.items():
@@ -292,7 +244,6 @@ class FindCollaboratorsTool(BaseTool):
         return None
 
     def _resolve_member_name(self, member_id: str) -> str:
-        """解析成员 ID 到姓名"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
@@ -301,8 +252,6 @@ class FindCollaboratorsTool(BaseTool):
         return member_id
 
     async def _find_experts_by_topic(self, topic: str) -> str:
-        """根据主题找有相关经验的成员"""
-        # 从轨迹系统搜索
         if hasattr(self.plugin, "trajectory_manager") and self.plugin.trajectory_manager:
             results = self.plugin.trajectory_manager.search_by_topic(topic, days=60)
 
@@ -323,11 +272,9 @@ class FindCollaboratorsTool(BaseTool):
                 lines.append("\n建议直接联系他们，或者在群里讨论相关话题。")
                 return "\n".join(lines)
 
-        # 从文档索引搜索相关作者
         if hasattr(self.plugin, "_get_doc_index"):
             doc_index = self.plugin._get_doc_index()
             if doc_index:
-                # 搜索相关文档并提取作者（按标题搜索）
                 docs = doc_index.search(title=topic, limit=20)
                 author_count: dict = {}
                 for doc in docs:
@@ -344,7 +291,8 @@ class FindCollaboratorsTool(BaseTool):
 
                     lines = [f"【写过「{topic}」相关文档的成员】"]
                     for author, count in sorted_authors:
-                        lines.append(f"• {author}（{count} 篇文档）")
+                        author_name = self._resolve_member_name(author)
+                        lines.append(f"• {author_name}（{count} 篇文档）")
 
                     lines.append("\n可以查看他们的文档学习，或者直接请教问题。")
                     return "\n".join(lines)
@@ -354,10 +302,7 @@ class FindCollaboratorsTool(BaseTool):
 
 @dataclass
 class GetCollaboratorsTool(BaseTool):
-    """获取协作伙伴工具
-
-    查看某成员已有的协作关系。
-    """
+    """获取协作伙伴工具"""
 
     name: str = "get_collaborators"
     description: str = (
@@ -387,16 +332,6 @@ class GetCollaboratorsTool(BaseTool):
         member_name: str,
         min_strength: float = 0,
     ) -> str:
-        """获取协作伙伴
-
-        Args:
-            event: 消息事件
-            member_name: 成员姓名
-            min_strength: 最小强度
-
-        Returns:
-            协作伙伴列表
-        """
         try:
             if not hasattr(self.plugin, "collaboration_manager") or not self.plugin.collaboration_manager:
                 return "协作网络系统未初始化。"
@@ -436,7 +371,6 @@ class GetCollaboratorsTool(BaseTool):
             return f"获取协作伙伴时出错：{str(e)}"
 
     async def _resolve_member_id(self, member_name: str) -> Optional[str]:
-        """解析成员姓名到成员 ID"""
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             for user_id, info in members.items():
@@ -447,7 +381,172 @@ class GetCollaboratorsTool(BaseTool):
         return None
 
     def _resolve_member_name(self, member_id: str) -> str:
-        """解析成员 ID 到姓名"""
+        if hasattr(self.plugin, "storage") and self.plugin.storage:
+            members = self.plugin.storage.load_members()
+            info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+            if info:
+                return info.get("name") or info.get("login") or member_id
+        return member_id
+
+
+@dataclass
+class SmartCollaborationTool(BaseTool):
+    """智能协作推荐工具
+
+    让 Agent 综合分析多个数据源，给出个性化的协作伙伴推荐。
+    返回结构化数据，由 Agent 进行推理和个性化回复。
+    """
+
+    name: str = "smart_collaboration"
+    description: str = (
+        "智能推荐协作伙伴。"
+        "当用户用自然语言描述协作需求时调用，如："
+        "'我想找个会爬虫的人一起做项目'、"
+        "'谁能帮我review代码'、"
+        "'找个擅长前端的搭档'。"
+        "工具会综合分析成员活动轨迹、文档贡献、协作网络，返回结构化数据供你分析。"
+        "你需要根据返回的数据，理解用户需求，给出个性化的推荐理由。"
+    )
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "need_description": {
+                "type": "string",
+                "description": "用户的协作需求描述，如：会爬虫、擅长前端、能帮我review代码"
+            },
+            "skills": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "需要的技能列表（可选），如：['Python', '爬虫']"
+            },
+            "exclude_members": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "排除的成员姓名列表（可选）"
+            }
+        },
+        "required": ["need_description"]
+    })
+    plugin: Any = None
+
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        need_description: str,
+        skills: Optional[List[str]] = None,
+        exclude_members: Optional[List[str]] = None,
+    ) -> str:
+        """智能推荐协作伙伴
+
+        返回结构化数据供 Agent 分析。
+        """
+        try:
+            import json
+
+            # 收集数据供 Agent 分析
+            data = {
+                "need_description": need_description,
+                "skills": skills or [],
+                "exclude_members": exclude_members or [],
+                "candidates": [],
+                "context": {
+                    "search_keywords": skills or [need_description],
+                    "hint": "请根据候选数据，结合用户需求，给出个性化的推荐理由"
+                }
+            }
+
+            # 1. 从轨迹搜索相关成员
+            if hasattr(self.plugin, "trajectory_manager") and self.plugin.trajectory_manager:
+                keywords = skills or [need_description]
+                for kw in keywords[:3]:
+                    try:
+                        results = self.plugin.trajectory_manager.search_by_topic(kw, days=60)
+                        for r in results[:10]:
+                            member_id = r.get("member_id", "")
+                            member_name = self._resolve_member_name(member_id)
+                            if member_name not in (exclude_members or []) and member_id:
+                                data["candidates"].append({
+                                    "member_id": member_id,
+                                    "member_name": member_name,
+                                    "source": "trajectory",
+                                    "keyword": kw,
+                                    "match_count": r.get("match_count", 0),
+                                    "matching_events": [
+                                        {"title": e.get("title", ""), "type": e.get("event_name", "")}
+                                        for e in r.get("matching_events", [])[:3]
+                                    ],
+                                    "stats": r.get("stats", {})
+                                })
+                    except Exception as e:
+                        logger.debug(f"[SmartCollaboration] 轨迹搜索失败: {e}")
+
+            # 2. 从文档索引搜索
+            if hasattr(self.plugin, "_get_doc_index"):
+                doc_index = self.plugin._get_doc_index()
+                if doc_index:
+                    keywords = skills or [need_description]
+                    for kw in keywords[:3]:
+                        try:
+                            docs = doc_index.search(title=kw, limit=20)
+                            for doc in docs:
+                                author = doc.get("creator_id") or doc.get("author")
+                                if author:
+                                    author_str = str(author)
+                                    author_name = self._resolve_member_name(author_str)
+                                    if author_name not in (exclude_members or []):
+                                        data["candidates"].append({
+                                            "member_id": author_str,
+                                            "member_name": author_name,
+                                            "source": "document",
+                                            "keyword": kw,
+                                            "doc_title": doc.get("title", ""),
+                                            "book_name": doc.get("book_name", "")
+                                        })
+                        except Exception as e:
+                            logger.debug(f"[SmartCollaboration] 文档搜索失败: {e}")
+
+            # 3. 去重并合并候选
+            unique_candidates: Dict[str, dict] = {}
+            for c in data["candidates"]:
+                mid = c.get("member_id", "")
+                if not mid:
+                    continue
+                if mid not in unique_candidates:
+                    unique_candidates[mid] = c.copy()
+                else:
+                    existing = unique_candidates[mid]
+                    existing["match_count"] = existing.get("match_count", 0) + c.get("match_count", 1)
+                    if "keywords" not in existing:
+                        existing["keywords"] = []
+                    if c.get("keyword") and c.get("keyword") not in existing["keywords"]:
+                        existing["keywords"].append(c.get("keyword"))
+
+            # 4. 添加协作网络信息
+            for mid, candidate in unique_candidates.items():
+                if hasattr(self.plugin, "collaboration_manager") and self.plugin.collaboration_manager:
+                    try:
+                        stats = self.plugin.collaboration_manager.get_member_stats(mid)
+                        candidate["collab_stats"] = stats
+                    except Exception:
+                        pass
+
+            # 5. 按匹配度排序
+            sorted_candidates = sorted(
+                unique_candidates.values(),
+                key=lambda x: x.get("match_count", 0),
+                reverse=True
+            )[:10]
+
+            data["candidates"] = sorted_candidates
+            data["context"]["total_candidates"] = len(sorted_candidates)
+
+            return json.dumps(data, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            logger.error(f"[SmartCollaboration] 执行失败: {e}", exc_info=True)
+            return f'{{"error": "{str(e)}"}}'
+
+    def _resolve_member_name(self, member_id: str) -> str:
         if hasattr(self.plugin, "storage") and self.plugin.storage:
             members = self.plugin.storage.load_members()
             info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)

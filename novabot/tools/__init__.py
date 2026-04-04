@@ -36,6 +36,7 @@ from .community_tools import (
     GetMemberTrajectoryTool,
     FindCollaboratorsTool,
     GetCollaboratorsTool,
+    SmartCollaborationTool,
 )
 
 __all__ = [
@@ -76,6 +77,7 @@ __all__ = [
     "GetMemberTrajectoryTool",
     "FindCollaboratorsTool",
     "GetCollaboratorsTool",
+    "SmartCollaborationTool",
 ]
 
 # 所有工具类列表，用于批量注册
@@ -111,4 +113,5 @@ ALL_TOOLS = [
     GetMemberTrajectoryTool,
     FindCollaboratorsTool,
     GetCollaboratorsTool,
+    SmartCollaborationTool,
 ]
