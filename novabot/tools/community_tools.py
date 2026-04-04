@@ -463,20 +463,25 @@ class SmartCollaborationTool(BaseTool):
                         results = self.plugin.trajectory_manager.search_by_topic(kw, days=60)
                         for r in results[:10]:
                             member_id = r.get("member_id", "")
+                            if not member_id:
+                                continue
                             member_name = self._resolve_member_name(member_id)
-                            if member_name not in (exclude_members or []) and member_id:
-                                data["candidates"].append({
-                                    "member_id": member_id,
-                                    "member_name": member_name,
-                                    "source": "trajectory",
-                                    "keyword": kw,
-                                    "match_count": r.get("match_count", 0),
-                                    "matching_events": [
-                                        {"title": e.get("title", ""), "type": e.get("event_name", "")}
-                                        for e in r.get("matching_events", [])[:3]
-                                    ],
-                                    "stats": r.get("stats", {})
-                                })
+                            # 排除时比较 ID 和姓名
+                            if (member_id in (exclude_members or []) or
+                                member_name in (exclude_members or [])):
+                                continue
+                            data["candidates"].append({
+                                "member_id": member_id,
+                                "member_name": member_name,
+                                "source": "trajectory",
+                                "keyword": kw,
+                                "match_count": r.get("match_count", 0),
+                                "matching_events": [
+                                    {"title": e.get("title", ""), "type": e.get("event_name", "")}
+                                    for e in r.get("matching_events", [])[:3]
+                                ],
+                                "stats": r.get("stats", {})
+                            })
                     except Exception as e:
                         logger.debug(f"[SmartCollaboration] 轨迹搜索失败: {e}")
 
@@ -490,18 +495,22 @@ class SmartCollaborationTool(BaseTool):
                             docs = doc_index.search(title=kw, limit=20)
                             for doc in docs:
                                 author = doc.get("creator_id") or doc.get("author")
-                                if author:
-                                    author_str = str(author)
-                                    author_name = self._resolve_member_name(author_str)
-                                    if author_name not in (exclude_members or []):
-                                        data["candidates"].append({
-                                            "member_id": author_str,
-                                            "member_name": author_name,
-                                            "source": "document",
-                                            "keyword": kw,
-                                            "doc_title": doc.get("title", ""),
-                                            "book_name": doc.get("book_name", "")
-                                        })
+                                if not author:
+                                    continue
+                                author_str = str(author)
+                                author_name = self._resolve_member_name(author_str)
+                                # 排除时比较 ID 和姓名
+                                if (author_str in (exclude_members or []) or
+                                    author_name in (exclude_members or [])):
+                                    continue
+                                data["candidates"].append({
+                                    "member_id": author_str,
+                                    "member_name": author_name,
+                                    "source": "document",
+                                    "keyword": kw,
+                                    "doc_title": doc.get("title", ""),
+                                    "book_name": doc.get("book_name", "")
+                                })
                         except Exception as e:
                             logger.debug(f"[SmartCollaboration] 文档搜索失败: {e}")
 

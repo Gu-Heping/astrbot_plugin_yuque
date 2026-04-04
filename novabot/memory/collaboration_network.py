@@ -313,6 +313,9 @@ class CollaborationNetwork:
                             # 根据活动次数计算相关性
                             match_count = result.get("match_count", 0)
                             topic_experts[expert_id] = topic_experts.get(expert_id, 0) + match_count * 0.3
+                            # 将专家添加到候选池（即使不在协作网络中）
+                            if expert_id not in existing_collaborators:
+                                potential.add(expert_id)
                 except Exception as e:
                     logger.debug(f"[Collaboration] 轨迹搜索失败: {e}")
 
@@ -327,6 +330,9 @@ class CollaborationNetwork:
                             author_id = str(author)
                             if author_id != member_id:
                                 topic_experts[author_id] = topic_experts.get(author_id, 0) + 0.5
+                                # 将作者添加到候选池（即使不在协作网络中）
+                                if author_id not in existing_collaborators:
+                                    potential.add(author_id)
                 except Exception as e:
                     logger.debug(f"[Collaboration] 文档搜索失败: {e}")
 
