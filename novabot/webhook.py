@@ -28,8 +28,16 @@ if TYPE_CHECKING:
 # 文档级别的锁，防止同一文档并发处理
 # 使用有界字典避免内存泄漏
 _doc_locks: dict[int, asyncio.Lock] = {}
-_doc_locks_lock = asyncio.Lock()  # 保护 _doc_locks 字典本身
+_doc_locks_lock: Optional[asyncio.Lock] = None  # 懒加载，避免模块级创建
 _DOC_LOCKS_MAX_SIZE = 1000  # 最大锁数量
+
+
+def _get_lock() -> asyncio.Lock:
+    """获取保护 _doc_locks 的锁（懒加载）"""
+    global _doc_locks_lock
+    if _doc_locks_lock is None:
+        _doc_locks_lock = asyncio.Lock()
+    return _doc_locks_lock
 
 
 async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
@@ -37,7 +45,7 @@ async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
 
     使用 LRU 策略限制锁数量，防止内存泄漏。
     """
-    async with _doc_locks_lock:
+    async with _get_lock():
         if doc_id not in _doc_locks:
             # 如果超过最大数量，删除最旧的锁（未被持有的）
             if len(_doc_locks) >= _DOC_LOCKS_MAX_SIZE:
