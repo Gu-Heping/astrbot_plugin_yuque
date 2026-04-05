@@ -284,6 +284,9 @@ class MemberTrajectory:
             if timestamp:
                 try:
                     event_date = datetime.fromisoformat(timestamp)
+                    # 处理时区：将带时区的时间转换为本地不带时区的时间
+                    if event_date.tzinfo is not None:
+                        event_date = event_date.astimezone().replace(tzinfo=None)
                     if event_date > cutoff_date:
                         valid_events.append(event)
                 except ValueError:
@@ -323,6 +326,9 @@ class MemberTrajectory:
             if timestamp:
                 try:
                     event_date = datetime.fromisoformat(timestamp)
+                    # 处理时区：将带时区的时间转换为本地不带时区的时间
+                    if event_date.tzinfo is not None:
+                        event_date = event_date.astimezone().replace(tzinfo=None)
                     if event_date < cutoff_date:
                         continue
                 except ValueError:
@@ -366,6 +372,9 @@ class MemberTrajectory:
             if last_active:
                 try:
                     last_date = datetime.fromisoformat(last_active)
+                    # 处理时区：将带时区的时间转换为本地不带时区的时间
+                    if last_date.tzinfo is not None:
+                        last_date = last_date.astimezone().replace(tzinfo=None)
                     if last_date > cutoff_date:
                         active_members.append({
                             "member_id": member_id,
