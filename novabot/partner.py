@@ -324,13 +324,14 @@ class PartnerMatcher:
         }
 
 
-def format_partner_result(partners: list[dict], mentors: list[dict], topic: Optional[str] = None) -> str:
+def format_partner_result(partners: list[dict], mentors: list[dict], topic: Optional[str] = None, storage=None) -> str:
     """格式化伙伴推荐结果
 
     Args:
         partners: 学习伙伴列表
         mentors: 导师列表
         topic: 搜索主题
+        storage: Storage 实例（可选，用于获取更多信息）
 
     Returns:
         格式化的文本结果
@@ -351,10 +352,27 @@ def format_partner_result(partners: list[dict], mentors: list[dict], topic: Opti
         lines.append("")
 
         for p in partners:
-            lines.append(f"• {p['name']} (@{p['login']})")
+            name = p.get("name", "")
+            login = p.get("login", "")
+            lines.append(f"👤 {name}" + (f" (@{login})" if login else ""))
+
             if p.get("common_interests"):
-                lines.append(f"  共同兴趣：{', '.join(p['common_interests'][:3])}")
-            lines.append(f"  水平：{level_map.get(p['level'], p['level'])}")
+                lines.append(f"   💡 共同兴趣：{', '.join(p['common_interests'][:3])}")
+            lines.append(f"   📊 水平：{level_map.get(p['level'], p['level'])}")
+
+            # 获取对方相关文档
+            if storage and login:
+                try:
+                    docs = storage.get_docs_by_author(name, None)
+                    if docs:
+                        lines.append(f"   📄 已写 {len(docs)} 篇文档")
+                except Exception:
+                    pass
+
+            # 语雀链接
+            if login:
+                lines.append(f"   🔗 https://www.yuque.com/{login}")
+
             lines.append("")
     else:
         lines.append("暂无匹配的学习伙伴")
@@ -367,10 +385,21 @@ def format_partner_result(partners: list[dict], mentors: list[dict], topic: Opti
         lines.append("")
 
         for m in mentors:
-            lines.append(f"• {m['name']} (@{m['login']})")
-            lines.append(f"  水平：{level_map.get(m['topic_level'], m['topic_level'])}")
+            name = m.get("name", "")
+            login = m.get("login", "")
+            lines.append(f"👤 {name}" + (f" (@{login})" if login else ""))
+
+            lines.append(f"   📊 水平：{level_map.get(m['topic_level'], m['topic_level'])}")
+
             if m.get("related_docs"):
-                lines.append(f"  相关文档：{m['related_docs'][0]}")
+                lines.append(f"   📄 相关文档：{m['related_docs'][0][:25]}...")
+                if len(m['related_docs']) > 1:
+                    lines.append(f"      （共 {len(m['related_docs'])} 篇）")
+
+            # 语雀链接
+            if login:
+                lines.append(f"   🔗 https://www.yuque.com/{login}")
+
             lines.append("")
 
     else:
@@ -378,4 +407,5 @@ def format_partner_result(partners: list[dict], mentors: list[dict], topic: Opti
             lines.append("暂无匹配的导师")
             lines.append("")
 
+    lines.append("💡 提示：可以通过语雀主页私信联系，或在群里 @对方 讨论")
     return "\n".join(lines)

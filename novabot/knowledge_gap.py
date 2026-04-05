@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 
-from .llm_utils import call_llm, format_resources_for_path
+from .llm_utils import call_llm, format_resources_for_path, sanitize_user_input
 from .prompts import GAP_PROMPT, GAP_NO_BINDING_PROMPT, GAP_NO_PROFILE_PROMPT, GAP_NO_TARGET_PROMPT
 from .token_monitor import FEATURE_LEARNING_PATH
 
@@ -84,9 +84,10 @@ class LearningGapAnalyzer:
 
             # 让 LLM 推断最值得分析的目标领域
             try:
+                safe_interests = ", ".join([sanitize_user_input(i, max_length=50) for i in interests[:5]])
                 suggest_result = await call_llm(
                     provider=provider,
-                    prompt=GAP_NO_TARGET_PROMPT.format(interests=", ".join(interests)),
+                    prompt=GAP_NO_TARGET_PROMPT.format(interests=safe_interests),
                     require_json=True,
                 )
                 target_domain = suggest_result.get("suggested_target", interests[0])
@@ -95,8 +96,11 @@ class LearningGapAnalyzer:
                 logger.warning(f"[GapAnalyzer] 推断目标失败: {e}, 使用第一个兴趣")
                 target_domain = interests[0]
 
+        # 清理目标领域
+        safe_target_domain = sanitize_user_input(target_domain, max_length=100) if target_domain else ""
+
         # 4. 获取用户在目标领域的水平
-        current_level = self._get_domain_level(skills, target_domain, level)
+        current_level = self._get_domain_level(skills, safe_target_domain, level)
 
         # 5. 获取已掌握技能
         mastered_skills = [
@@ -111,10 +115,10 @@ class LearningGapAnalyzer:
         # 绑定信息中存的是 yuque_id，不是 yuque_user_id
         creator_id = binding.get("yuque_id") if binding else None
 
-        logger.debug(f"[GapAnalyzer] 用户: {author_name}, 目标领域: {target_domain}, 用户文档数: {len(user_docs)}")
+        logger.debug(f"[GapAnalyzer] 用户: {author_name}, 目标领域: {safe_target_domain}, 用户文档数: {len(user_docs)}")
 
         community_resources = self._search_resources(
-            target_domain,
+            safe_target_domain,
             exclude_author_id=creator_id,
             exclude_author_name=author_name,
             exclude_titles=[d["title"] for d in user_docs],
@@ -122,13 +126,16 @@ class LearningGapAnalyzer:
         logger.debug(f"[GapAnalyzer] 社团资源（排除用户文档后）: {len(community_resources)} 篇")
         community_resources_text = format_resources_for_path(community_resources)
 
+        # 清理用户名
+        safe_author_name = sanitize_user_input(author_name or "未知用户", max_length=50)
+
         # 7. 调用 LLM 分析缺口
         prompt = GAP_PROMPT.format(
-            user_name=author_name or "未知用户",
-            target_domain=target_domain,
+            user_name=safe_author_name,
+            target_domain=safe_target_domain,
             current_level=current_level,
-            interests=", ".join(interests) if interests else "暂无",
-            mastered_skills=", ".join(mastered_skills) if mastered_skills else "暂无",
+            interests=", ".join([sanitize_user_input(i, max_length=30) for i in interests[:5]]) if interests else "暂无",
+            mastered_skills=", ".join([sanitize_user_input(s, max_length=30) for s in mastered_skills[:10]]) if mastered_skills else "暂无",
             user_docs=user_docs_text,
             community_resources=community_resources_text,
         )
@@ -142,14 +149,14 @@ class LearningGapAnalyzer:
                 token_monitor=self.token_monitor,
                 feature=FEATURE_LEARNING_PATH,
             )
-            result["target_domain"] = target_domain
+            result["target_domain"] = safe_target_domain
             result["current_level"] = current_level
             return result
 
         except Exception as e:
             logger.error(f"[GapAnalyzer] 分析失败: {e}")
             return {
-                "target_domain": target_domain,
+                "target_domain": safe_target_domain,
                 "error": f"分析失败: {e}"
             }
 

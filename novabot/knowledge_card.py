@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 
-from .llm_utils import call_llm
+from .llm_utils import call_llm, sanitize_user_input
 from .prompts import CARD_PROMPT
 from .token_monitor import FEATURE_KNOWLEDGE_CARD
 
@@ -78,23 +78,26 @@ class KnowledgeCardGenerator:
         if not self.rag:
             return {"error": "RAG 引擎未初始化"}
 
+        # 清理用户输入
+        safe_topic = sanitize_user_input(topic, max_length=100)
+
         # 1. 检索相关文档
         try:
-            docs = self.rag.search(topic, k=max_docs * 2)  # 多取一些用于筛选
+            docs = self.rag.search(safe_topic, k=max_docs * 2)  # 多取一些用于筛选
             if not docs:
                 return {
-                    "topic": topic,
-                    "error": f"未找到与「{topic}」相关的文档"
+                    "topic": safe_topic,
+                    "error": f"未找到与「{safe_topic}」相关的文档"
                 }
         except Exception as e:
             logger.error(f"RAG 检索失败: {e}")
-            return {"topic": topic, "error": f"检索失败: {e}"}
+            return {"topic": safe_topic, "error": f"检索失败: {e}"}
 
         # 2. 构建文档内容
         docs_content = self.build_docs_content(docs[:max_docs], max_docs)
 
         # 3. 调用 LLM 生成卡片
-        prompt = CARD_PROMPT.format(topic=topic, docs_content=docs_content)
+        prompt = CARD_PROMPT.format(topic=safe_topic, docs_content=docs_content)
 
         try:
             card_data = await call_llm(

@@ -13,6 +13,42 @@ if TYPE_CHECKING:
     from .token_monitor import TokenMonitor
 
 
+def sanitize_user_input(text: str, max_length: int = 500) -> str:
+    """清理用户输入，防止 prompt 注入
+
+    Args:
+        text: 用户输入文本
+        max_length: 最大长度限制
+
+    Returns:
+        清理后的文本
+    """
+    if not text:
+        return ""
+
+    # 截断过长输入
+    if len(text) > max_length:
+        text = text[:max_length]
+
+    # 移除可能的 JSON 分隔符（防止伪造输出）
+    text = text.replace("---JSON---", "")
+    text = text.replace("```json", "``'")
+    text = text.replace("```", "`")
+
+    # 移除可能的指令注入模式
+    injection_patterns = [
+        r"忽略.*指令",
+        r"ignore.*instruction",
+        r"system\s*:",
+        r"assistant\s*:",
+        r"user\s*:",
+    ]
+    for pattern in injection_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+    return text.strip()
+
+
 async def call_llm(
     provider,
     prompt: str,

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 
-from .llm_utils import call_llm, extract_json, format_docs_for_profile
+from .llm_utils import call_llm, extract_json, format_docs_for_profile, sanitize_user_input
 from .prompts import PROFILE_PROMPT, DOMAIN_ASSESS_PROMPT
 from .token_monitor import FEATURE_PROFILE, FEATURE_ASSESS
 
@@ -170,17 +170,21 @@ class ProfileGenerator:
         Returns:
             领域评估结果
         """
+        # 清理用户输入
+        safe_domain = sanitize_user_input(domain, max_length=50)
+        safe_username = sanitize_user_input(username, max_length=50)
+
         # 筛选相关文档
-        domain_docs = self.filter_docs_by_domain(docs, domain)
+        domain_docs = self.filter_docs_by_domain(docs, safe_domain)
 
         if not domain_docs:
             return {
-                "domain": domain,
+                "domain": safe_domain,
                 "level": "未接触",
                 "mastered": [],
                 "learning": [],
                 "gaps": [],
-                "next_steps": [f"建议先了解 {domain} 的基础知识"],
+                "next_steps": [f"建议先了解 {safe_domain} 的基础知识"],
                 "recommend_resources": [],
             }
 
@@ -189,8 +193,8 @@ class ProfileGenerator:
 
         # 调用 LLM 评估
         prompt = DOMAIN_ASSESS_PROMPT.format(
-            username=username,
-            domain=domain,
+            username=safe_username,
+            domain=safe_domain,
             domain_docs=docs_info
         )
 
@@ -206,7 +210,7 @@ class ProfileGenerator:
 
             # 标准化水平值
             result["level"] = self._normalize_level(result.get("level", "beginner"))
-            result["domain"] = domain
+            result["domain"] = safe_domain
             result["docs_count"] = len(domain_docs)
 
             return result
@@ -214,7 +218,7 @@ class ProfileGenerator:
         except Exception as e:
             logger.error(f"领域评估失败: {e}")
             return {
-                "domain": domain,
+                "domain": safe_domain,
                 "level": "未知",
                 "mastered": [],
                 "learning": [],

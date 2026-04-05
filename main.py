@@ -1334,6 +1334,7 @@ class NovaBotPlugin(Star):
             return
 
         yuque_id = binding.get("yuque_id")
+        yuque_name = binding.get("yuque_name", "未知")
 
         # 检查画像
         profile = self.storage.load_profile(yuque_id)
@@ -1362,12 +1363,312 @@ class NovaBotPlugin(Star):
                     )
                 return
 
-            result = format_partner_result(partners, mentors, topic if topic else None)
-            yield event.plain_result(result)
+            # 尝试使用 LLM 增强推荐
+            provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+            if provider:
+                yield event.plain_result("🔍 正在分析推荐...")
+                enhanced_result = await self._enhance_partner_with_llm(
+                    provider=provider,
+                    user_name=yuque_name,
+                    user_profile=profile,
+                    topic=topic,
+                    partners=partners,
+                    mentors=mentors,
+                )
+                yield event.plain_result(enhanced_result)
+            else:
+                # 无 LLM 时回退到基础输出
+                result = format_partner_result(partners, mentors, topic if topic else None, storage=self.storage)
+                yield event.plain_result(result)
 
         except Exception as e:
             logger.error(f"伙伴推荐失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 推荐失败: {e}")
+
+    async def _enhance_partner_with_llm(
+        self,
+        provider,
+        user_name: str,
+        user_profile: dict,
+        topic: str,
+        partners: list[dict],
+        mentors: list[dict],
+    ) -> str:
+        """使用 LLM 增强伙伴推荐输出
+
+        Args:
+            provider: LLM Provider
+            user_name: 用户名
+            user_profile: 用户画像
+            topic: 主题
+            partners: 学习伙伴列表
+            mentors: 导师列表
+
+        Returns:
+            增强的推荐文本
+        """
+        from .novabot.llm_utils import call_llm, sanitize_user_input
+
+        # 构建用户画像摘要
+        p = user_profile.get("profile", {})
+        user_interests = ", ".join(p.get("interests", []))
+        user_level = p.get("level", "beginner")
+
+        level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
+
+        # 清理用户输入，防止 prompt 注入
+        safe_user_name = sanitize_user_input(user_name, max_length=50)
+        safe_user_interests = sanitize_user_input(user_interests, max_length=200)
+        safe_topic = sanitize_user_input(topic, max_length=100) if topic else ""
+
+        # 构建候选信息
+        partners_info = []
+        for i, partner in enumerate(partners[:3], 1):
+            name = partner.get("name", "未知")
+            common = ", ".join(partner.get("common_interests", []))
+            level = level_map.get(partner.get("level", ""), "入门")
+            partners_info.append(f"{i}. {name} - 水平：{level}，共同兴趣：{common or '无'}")
+
+        mentors_info = []
+        for i, mentor in enumerate(mentors[:2], 1):
+            name = mentor.get("name", "未知")
+            level = level_map.get(mentor.get("topic_level", ""), "入门")
+            docs = mentor.get("related_docs", [])
+            mentors_info.append(f"{i}. {name} - 水平：{level}，相关文档：{docs[0] if docs else '无'}")
+
+        prompt = f"""你是一个学习伙伴推荐助手。请根据以下信息，为用户生成个性化的推荐报告。
+
+## 用户信息
+- 姓名：{safe_user_name}
+- 兴趣领域：{safe_user_interests}
+- 整体水平：{level_map.get(user_level, user_level)}
+{"- 查找主题：" + safe_topic if safe_topic else ""}
+
+## 推荐的学习伙伴（水平相近，可以互相学习）
+{chr(10).join(partners_info) if partners_info else "暂无"}
+
+## 推荐的导师（经验更丰富，可以请教问题）
+{chr(10).join(mentors_info) if mentors_info else "暂无"}
+
+## 输出要求
+
+请生成一份友好的推荐报告，包含：
+
+1. **开篇**：简要说明为用户找到了什么（1句话）
+
+2. **学习伙伴推荐**：
+   - 每个伙伴用 2-3 句话介绍
+   - 说明为什么推荐（共同兴趣、水平匹配等）
+   - 给出互动建议（可以一起做什么）
+
+3. **导师推荐**（如有）：
+   - 简要介绍导师优势
+   - 建议请教什么问题
+
+4. **行动建议**：1-2 句话鼓励用户主动联系
+
+注意：
+- 语气温暖友好，像学长/学姐在介绍朋友
+- 推荐理由要具体，不要空泛
+- 如果有共同兴趣，特别强调
+- 输出用中文，不要用 emoji"""
+
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个学习伙伴推荐助手，善于给出个性化、有温度的推荐。",
+                require_json=False,  # 不需要 JSON，直接返回文本
+                token_monitor=self.token_monitor,
+                feature="partner",
+            )
+
+            return result
+
+        except Exception as e:
+            logger.warning(f"[Partner] LLM 增强失败，回退到基础输出: {e}")
+            return format_partner_result(partners, mentors, topic, storage=self.storage)
+
+    async def _analyze_progress_with_llm(
+        self,
+        provider,
+        user_name: str,
+        progress: dict,
+    ) -> str:
+        """使用 LLM 分析学习进度趋势
+
+        Args:
+            provider: LLM Provider
+            user_name: 用户名
+            progress: 学习进度数据
+
+        Returns:
+            分析报告文本
+        """
+        from .novabot.llm_utils import call_llm, sanitize_user_input
+
+        # 清理用户输入
+        safe_user_name = sanitize_user_input(user_name, max_length=50)
+
+        level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
+
+        # 构建进度摘要（清理领域名称）
+        domains_info = []
+        for domain, data in list(progress.items())[:10]:  # 限制领域数量
+            safe_domain = sanitize_user_input(domain, max_length=50)
+            level = level_map.get(data.get("level", ""), "入门")
+            milestones = data.get("milestones", [])
+            last_active = sanitize_user_input(data.get("last_active", "未知"), max_length=20)
+            domains_info.append(
+                f"- {safe_domain}: {level}，{len(milestones)} 个里程碑，最近活跃：{last_active}"
+            )
+
+        prompt = f"""你是一个学习进度分析师。请根据以下学习数据，分析用户的学习状态并给出建议。
+
+## 用户
+{safe_user_name}
+
+## 学习进度数据
+{chr(10).join(domains_info)}
+
+## 分析任务
+
+请输出一份简洁的分析报告，包含：
+
+1. **学习画像总结**（2-3 句话）
+   - 用户主要在学习哪些领域？
+   - 整体学习进度如何？
+
+2. **趋势分析**
+   - 哪些领域学得比较好？
+   - 哪些领域可能需要更多关注？
+
+3. **下一步建议**（2-3 条）
+   - 具体的学习建议
+   - 可以尝试的新方向
+
+注意：
+- 语气友好，像学长/学姐在给建议
+- 建议要具体，不要太笼统
+- 如果用户学习领域较少，鼓励探索新领域
+- 输出用中文，简洁明了"""
+
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个学习进度分析师，善于发现学习模式并给出实用建议。",
+                require_json=False,
+                token_monitor=self.token_monitor,
+                feature="progress",
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Progress] LLM 分析失败: {e}")
+            # 回退到基础输出
+            lines = [f"📊 {user_name} 的学习进度", "━━━━━━━━━━━━━━━━━━━━"]
+            for domain_name, data in progress.items():
+                level = level_map.get(data.get("level", "beginner"), "入门")
+                milestones_count = len(data.get("milestones", []))
+                lines.append(f"• {domain_name}: {level} ({milestones_count} 个里程碑)")
+            lines.append("\n使用 /progress <领域> 查看详情")
+            return "\n".join(lines)
+
+    async def _analyze_trajectory_with_llm(
+        self,
+        provider,
+        user_name: str,
+        trajectory: list[dict],
+    ) -> str:
+        """使用 LLM 分析活动轨迹
+
+        Args:
+            provider: LLM Provider
+            user_name: 用户名
+            trajectory: 活动轨迹数据
+
+        Returns:
+            分析报告文本
+        """
+        from .novabot.llm_utils import call_llm, sanitize_user_input
+
+        # 清理用户输入
+        safe_user_name = sanitize_user_input(user_name, max_length=50)
+
+        # 构建活动摘要（清理活动信息）
+        events_info = []
+        event_types: dict[str, int] = {}
+        for evt in trajectory[:15]:
+            event_name = sanitize_user_input(evt.get("event_name", "活动"), max_length=30)
+            title = sanitize_user_input(evt.get("title", ""), max_length=50)
+            timestamp = evt.get("timestamp", "")[:10] if evt.get("timestamp") else ""
+            events_info.append(f"- [{timestamp}] {event_name}：{title[:40]}")
+            event_types[event_name] = event_types.get(event_name, 0) + 1
+
+        # 统计活动类型
+        type_summary = ", ".join([f"{k}×{v}" for k, v in list(event_types.items())[:5]])
+
+        prompt = f"""你是一个学习活动分析师。请根据用户的活动轨迹，分析他们的学习状态。
+
+## 用户
+{safe_user_name}
+
+## 最近活动记录（共 {len(trajectory)} 条）
+{chr(10).join(events_info)}
+
+## 活动类型统计
+{type_summary}
+
+## 分析任务
+
+请输出一份简洁的活动分析，包含：
+
+1. **活动画像**（2-3 句话）
+   - 用户主要在做什么类型的事情？
+   - 活动频率如何？
+
+2. **兴趣领域**
+   - 从活动标题中识别用户关注的技术/知识领域
+   - 列出 2-3 个主要领域
+
+3. **学习建议**（1-2 条）
+   - 基于活动模式，给出下一步学习建议
+   - 或建议探索的新方向
+
+注意：
+- 语气友好，像学长/学姐在分析
+- 从活动标题中推断技术领域时要合理
+- 如果活动较少，鼓励用户多记录学习过程
+- 输出用中文，简洁明了"""
+
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个学习活动分析师，善于从活动记录中发现学习模式。",
+                require_json=False,
+                token_monitor=self.token_monitor,
+                feature="trajectory",
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Trajectory] LLM 分析失败: {e}")
+            # 回退到基础输出
+            lines = [f"【{user_name} 最近活动】"]
+            for evt in trajectory[:10]:
+                timestamp = evt.get("timestamp", "")
+                if timestamp:
+                    try:
+                        dt = datetime.fromisoformat(timestamp)
+                        date_str = dt.strftime("%m-%d")
+                    except ValueError:
+                        date_str = timestamp[:10]
+                else:
+                    date_str = "未知"
+                event_name = evt.get("event_name", "活动")
+                title = evt.get("title", "")
+                lines.append(f"• {date_str} - {event_name}：{title[:30]}")
+            return "\n".join(lines)
 
     @filter.command("path")
     async def path_cmd(self, event: AstrMessageEvent, domain: str = ""):
@@ -2099,6 +2400,7 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /kb guide <知识库>")
                     return
 
+                yield event.plain_result(f"🔍 正在生成「{kb_name}」新人导航...")
                 guide = await self.kb_manager.get_kb_guide(
                     kb_name, self.context, event, self.token_monitor
                 )
@@ -2512,8 +2814,21 @@ class NovaBotPlugin(Star):
                         f"({milestones_count} 个里程碑)"
                     )
 
-                lines.append("\n使用 /progress <领域> 查看详情")
-                yield event.plain_result("\n".join(lines))
+                # 尝试使用 LLM 分析学习趋势
+                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                if provider and len(progress) > 0:
+                    lines.append("\n🔍 正在分析学习趋势...")
+                    yield event.plain_result("\n".join(lines))
+
+                    analysis = await self._analyze_progress_with_llm(
+                        provider=provider,
+                        user_name=yuque_name,
+                        progress=progress,
+                    )
+                    yield event.plain_result(analysis)
+                else:
+                    lines.append("\n使用 /progress <领域> 查看详情")
+                    yield event.plain_result("\n".join(lines))
                 return
 
             parts = content.split(maxsplit=2)
@@ -2821,27 +3136,52 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /trajectory topic <主题>")
                     return
 
+                yield event.plain_result(f"🔍 正在搜索「{topic}」相关的成员活动...")
                 results = self.trajectory_manager.search_by_topic(topic, days=30)
                 if not results:
                     yield event.plain_result(f"最近 30 天没有成员在做「{topic}」相关的事情")
                     return
 
-                lines = [f"【与「{topic}」相关的成员活动】"]
+                lines = [f"【与「{topic}」相关的成员活动】\n"]
                 members = self.storage.load_members()
                 for result in results[:5]:
                     member_id = result.get("member_id", "")
                     # 解析成员姓名
                     member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
                     member_name = (member_info.get("name") or member_info.get("login") or member_id) if member_info else member_id
+                    member_login = member_info.get("login", "") if member_info else ""
                     match_count = result.get("match_count", 0)
                     events = result.get("matching_events", [])[:3]
+                    stats = result.get("stats", {})
 
-                    lines.append(f"\n{member_name}（{match_count} 次相关活动）")
+                    lines.append(f"👤 {member_name}（{match_count} 次相关活动）")
+
+                    # 显示具体活动
                     for evt in events:
                         event_name = evt.get("event_name", "")
                         title = evt.get("title", "")
-                        lines.append(f"  • {event_name}：{title[:30]}")
+                        timestamp = evt.get("timestamp", "")
+                        date_str = ""
+                        if timestamp:
+                            try:
+                                dt = datetime.fromisoformat(timestamp)
+                                date_str = dt.strftime("%m-%d ")
+                            except ValueError:
+                                pass
+                        lines.append(f"   • {date_str}{event_name}：{title[:25]}...")
 
+                    # 显示统计
+                    doc_count = stats.get("doc_count", 0)
+                    if doc_count:
+                        lines.append(f"   📄 共 {doc_count} 篇相关文档")
+
+                    # 语雀主页链接
+                    if member_login:
+                        lines.append(f"   🔗 https://www.yuque.com/{member_login}")
+
+                    lines.append("")
+
+                lines.append("💡 提示：可以主动联系他们请教问题，或邀请一起学习")
                 yield event.plain_result("\n".join(lines))
                 return
 
@@ -2891,6 +3231,22 @@ class NovaBotPlugin(Star):
 
             if len(trajectory) > 10:
                 lines.append(f"\n... 还有 {len(trajectory) - 10} 条记录")
+
+            # 如果是查看自己的轨迹，尝试用 LLM 分析活动模式
+            is_self = not content or str(yuque_id) == member_id
+            if is_self and len(trajectory) >= 3:
+                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                if provider:
+                    lines.append("\n🔍 正在分析活动模式...")
+                    yield event.plain_result("\n".join(lines))
+
+                    analysis = await self._analyze_trajectory_with_llm(
+                        provider=provider,
+                        user_name=target_name,
+                        trajectory=trajectory,
+                    )
+                    yield event.plain_result(analysis)
+                    return
 
             yield event.plain_result("\n".join(lines))
 
@@ -2947,6 +3303,7 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /collab find <主题>")
                     return
 
+                yield event.plain_result(f"🔍 正在寻找「{topic}」领域的协作伙伴...")
                 user_id = str(yuque_id)
                 # 传入轨迹管理器和文档索引以支持基于主题的推荐
                 potential = self.collaboration_manager.find_potential_collaborators(
@@ -2961,20 +3318,59 @@ class NovaBotPlugin(Star):
                     yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
                     return
 
-                lines = [f"【「{topic}」领域潜在协作伙伴】"]
+                lines = [f"【「{topic}」领域潜在协作伙伴】\n"]
                 members = self.storage.load_members()
+
                 for p in potential[:5]:
                     partner_id = p.get("member_id", "")
                     # 解析成员姓名
                     member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
                     partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
+                    partner_login = member_info.get("login", "") if member_info else ""
                     score = p.get("match_score", 0)
                     reasons = p.get("match_reasons", [])
 
-                    lines.append(f"\n{partner_name}（匹配度 {score:.0%}）")
-                    for reason in reasons:
-                        lines.append(f"  • {reason}")
+                    lines.append(f"👤 {partner_name}（匹配度 {score:.0%}）")
 
+                    # 匹配原因
+                    for reason in reasons:
+                        lines.append(f"   ✓ {reason}")
+
+                    # 查找对方关于主题的文档
+                    if self._get_doc_index():
+                        try:
+                            docs = self._get_doc_index().search(title=topic, limit=5)
+                            partner_docs = []
+                            for doc in docs:
+                                doc_author = str(doc.get("creator_id") or doc.get("author", ""))
+                                if doc_author == partner_id or doc.get("author") == partner_name:
+                                    partner_docs.append(doc.get("title", ""))
+                            if partner_docs:
+                                lines.append(f"   📄 相关文档：{partner_docs[0][:25]}...")
+                                if len(partner_docs) > 1:
+                                    lines.append(f"      （共 {len(partner_docs)} 篇相关）")
+                        except Exception:
+                            pass
+
+                    # 查找对方最近活动
+                    if self.trajectory_manager:
+                        try:
+                            trajectory = self.trajectory_manager.get_trajectory(partner_id, days=30)
+                            if trajectory:
+                                latest = trajectory[0]
+                                evt_name = latest.get("event_name", "")
+                                evt_title = latest.get("title", "")[:20]
+                                lines.append(f"   🕐 最近：{evt_name}《{evt_title}...》")
+                        except Exception:
+                            pass
+
+                    # 语雀主页链接
+                    if partner_login:
+                        lines.append(f"   🔗 https://www.yuque.com/{partner_login}")
+
+                    lines.append("")
+
+                lines.append("💡 提示：可以在群里 @对方 讨论，或通过语雀主页私信联系")
                 yield event.plain_result("\n".join(lines))
                 return
 

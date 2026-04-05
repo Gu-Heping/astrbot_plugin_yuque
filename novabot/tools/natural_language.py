@@ -69,7 +69,7 @@ class PartnerRecommendTool(BaseTool):
                 return f"暂无在「{topic}」领域的学习伙伴或导师"
             return "暂无匹配的学习伙伴或导师，可能是社团成员画像数据不足"
 
-        result = format_partner_result(partners, mentors, topic if topic else None)
+        result = format_partner_result(partners, mentors, topic if topic else None, storage=self.plugin.storage)
         return result
 
 
