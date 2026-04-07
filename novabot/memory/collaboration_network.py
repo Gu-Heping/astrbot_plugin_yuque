@@ -301,87 +301,139 @@ class CollaborationNetwork:
         potential = all_members - existing_collaborators
 
         # 如果有主题，优先从轨迹和文档索引搜索相关成员
-        topic_experts: Dict[str, float] = {}  # {member_id: relevance_score}
+        topic_experts: Dict[str, dict] = {}  # {member_id: {score, reasons, docs}}
         if topic:
+            # 分词，支持多关键词搜索
+            import re
+            keywords = re.findall(r'[\u4e00-\u9fa5]+|[a-zA-Z]+', topic)
+            keywords = [k for k in keywords if len(k) >= 2][:5]  # 最多5个关键词
+
             # 1. 从轨迹搜索（在该领域有活动的成员）
             if trajectory_manager:
-                try:
-                    topic_results = trajectory_manager.search_by_topic(topic, days=60)
-                    for result in topic_results:
-                        expert_id = result.get("member_id", "")
-                        if expert_id and expert_id != member_id:
-                            # 根据活动次数计算相关性
-                            match_count = result.get("match_count", 0)
-                            topic_experts[expert_id] = topic_experts.get(expert_id, 0) + match_count * 0.3
-                            # 将专家添加到候选池（即使不在协作网络中）
-                            if expert_id not in existing_collaborators:
+                for kw in keywords:
+                    try:
+                        topic_results = trajectory_manager.search_by_topic(kw, days=90)
+                        for result in topic_results:
+                            expert_id = result.get("member_id", "")
+                            if expert_id and expert_id != member_id and expert_id not in existing_collaborators:
+                                match_count = result.get("match_count", 0)
+                                events = result.get("matching_events", [])
+
+                                if expert_id not in topic_experts:
+                                    topic_experts[expert_id] = {
+                                        "score": 0,
+                                        "reasons": [],
+                                        "docs": [],
+                                        "activities": 0,
+                                    }
+
+                                # 每次匹配 +0.4 分（高权重）
+                                topic_experts[expert_id]["score"] += match_count * 0.4
+                                topic_experts[expert_id]["activities"] += match_count
+
+                                # 记录具体活动
+                                for evt in events[:2]:
+                                    evt_title = evt.get("title", "")[:20]
+                                    if evt_title and evt_title not in topic_experts[expert_id]["reasons"]:
+                                        topic_experts[expert_id]["reasons"].append(evt_title)
+
                                 potential.add(expert_id)
-                except Exception as e:
-                    logger.debug(f"[Collaboration] 轨迹搜索失败: {e}")
+                    except Exception as e:
+                        logger.debug(f"[Collaboration] 轨迹搜索失败: {e}")
 
             # 2. 从文档索引搜索（写过相关文档的成员）
             if doc_index:
-                try:
-                    # 按标题搜索
-                    docs = doc_index.search(title=topic, limit=30)
-                    for doc in docs:
-                        author = doc.get("creator_id") or doc.get("author")
-                        if author:
-                            author_id = str(author)
-                            if author_id != member_id:
-                                topic_experts[author_id] = topic_experts.get(author_id, 0) + 0.5
-                                # 将作者添加到候选池（即使不在协作网络中）
-                                if author_id not in existing_collaborators:
+                for kw in keywords:
+                    try:
+                        # 按标题搜索
+                        docs = doc_index.search(title=kw, limit=20)
+                        for doc in docs:
+                            author = doc.get("creator_id") or doc.get("author")
+                            doc_title = doc.get("title", "")
+                            if author:
+                                author_id = str(author)
+                                if author_id != member_id and author_id not in existing_collaborators:
+                                    if author_id not in topic_experts:
+                                        topic_experts[author_id] = {
+                                            "score": 0,
+                                            "reasons": [],
+                                            "docs": [],
+                                            "activities": 0,
+                                        }
+
+                                    # 每篇文档 +0.5 分（高权重）
+                                    topic_experts[author_id]["score"] += 0.5
+                                    if doc_title and doc_title not in topic_experts[author_id]["docs"]:
+                                        topic_experts[author_id]["docs"].append(doc_title[:30])
+
                                     potential.add(author_id)
-                except Exception as e:
-                    logger.debug(f"[Collaboration] 文档搜索失败: {e}")
+                    except Exception as e:
+                        logger.debug(f"[Collaboration] 文档搜索失败: {e}")
 
         recommendations = []
         for potential_member in potential:
             # 计算推荐分数
             score = 0.0
             reasons = []
+            is_topic_match = False
 
-            # 主题相关性（优先级最高）
+            # 主题相关性（优先级最高，权重最大）
             if topic and potential_member in topic_experts:
-                topic_score = topic_experts[potential_member]
-                score += topic_score
-                if topic_score >= 0.5:
-                    reasons.append(f"在「{topic}」领域有贡献")
-                else:
-                    reasons.append(f"相关领域活动")
+                expert_info = topic_experts[potential_member]
+                topic_score = expert_info["score"]
 
-            # 间接连接（通过共同协作伙伴）
+                if topic_score > 0:
+                    score = topic_score  # 直接使用主题分数作为主要分数
+                    is_topic_match = True
+
+                    # 生成原因
+                    docs = expert_info.get("docs", [])
+                    activities = expert_info.get("activities", 0)
+
+                    if docs:
+                        reasons.append(f"写过「{docs[0]}」等相关文档")
+                        if len(docs) > 1:
+                            reasons.append(f"共 {len(docs)} 篇相关文档")
+                    if activities > 0:
+                        reasons.append(f"{activities} 次相关活动")
+
+            # 间接连接（通过共同协作伙伴）- 权重降低
             common_collaborators = self._find_common_collaborators(
                 network, member_id, potential_member
             )
             if common_collaborators:
-                score += len(common_collaborators) * 0.15
-                if not reasons:  # 只有在没有主题原因时才显示
+                # 只有在没有主题匹配时，才把共同伙伴作为主要推荐原因
+                if not is_topic_match:
+                    score += len(common_collaborators) * 0.1  # 降低权重
                     reasons.append(f"与 {len(common_collaborators)} 个共同伙伴协作")
 
             # 同一兴趣组
             if self._in_same_group(network, member_id, potential_member):
-                score += 0.2
-                if not reasons:
-                    reasons.append("同一兴趣组")
+                if not is_topic_match:
+                    score += 0.1
+                    if not reasons:
+                        reasons.append("同一兴趣组")
 
             # 同一知识库贡献者
             if self._in_same_repo(network, member_id, potential_member):
-                score += 0.1
-                if not reasons:
-                    reasons.append("同一知识库贡献者")
+                if not is_topic_match:
+                    score += 0.05
+                    if not reasons:
+                        reasons.append("同一知识库贡献者")
 
             if score > 0:
                 recommendations.append({
                     "member_id": potential_member,
                     "match_score": min(score, 1.0),
                     "match_reasons": reasons,
-                    "existing_collaborator_count": len(existing_collaborators),
+                    "is_topic_match": is_topic_match,
                 })
 
-        # 按分数排序
-        recommendations.sort(key=lambda x: x.get("match_score", 0), reverse=True)
+        # 排序：主题匹配优先，然后按分数
+        recommendations.sort(
+            key=lambda x: (x.get("is_topic_match", False), x.get("match_score", 0)),
+            reverse=True
+        )
         return recommendations[:10]  # 返回前 10 个推荐
 
     def _find_common_collaborators(

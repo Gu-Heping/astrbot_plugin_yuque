@@ -3655,7 +3655,7 @@ class NovaBotPlugin(Star):
             content = args.strip()
 
         try:
-            # 寻找协作伙伴
+            # 寻找协作伙伴（使用 Agent 智能推荐）
             if content.lower().startswith("find "):
                 topic = content[5:].strip()
                 if not topic:
@@ -3663,34 +3663,31 @@ class NovaBotPlugin(Star):
                     return
 
                 yield event.plain_result(f"🔍 正在寻找「{topic}」领域的协作伙伴...")
-                user_id = str(yuque_id)
-                # 传入轨迹管理器和文档索引以支持基于主题的推荐
-                potential = self.collaboration_manager.find_potential_collaborators(
-                    user_id,
-                    topic=topic,
-                    exclude_existing=True,
-                    trajectory_manager=self.trajectory_manager,
-                    doc_index=self._get_doc_index(),
-                )
 
-                if not potential:
-                    yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
-                    return
-
-                # 尝试用 LLM 增强推荐
-                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
-                if provider and len(potential) >= 2:
-                    enhanced_result = await self._enhance_collab_with_llm(
-                        provider=provider,
-                        user_name=yuque_name,
+                # 调用 Agent 智能推荐（使用 SmartCollaborationTool 工具）
+                # Agent 会自动调用工具获取数据并分析，给出个性化推荐
+                try:
+                    # 构建请求，让 Agent 理解用户需求
+                    from .novabot.llm_utils import sanitize_user_input
+                    safe_topic = sanitize_user_input(topic, max_length=100)
+                    agent_query = f"我想找一个在「{safe_topic}」领域有经验的协作伙伴，能帮我一起做项目或请教问题"
+                    response = await self.agent.handle_message(event, agent_query)
+                    yield event.plain_result(response)
+                except Exception as e:
+                    logger.error(f"[Collab] Agent 处理失败: {e}", exc_info=True)
+                    # 回退到基础规则匹配输出
+                    user_id = str(yuque_id)
+                    potential = self.collaboration_manager.find_potential_collaborators(
+                        user_id,
                         topic=topic,
-                        potential=potential,
+                        exclude_existing=True,
+                        trajectory_manager=self.trajectory_manager,
+                        doc_index=self._get_doc_index(),
                     )
-                    yield event.plain_result(enhanced_result)
-                else:
-                    # 回退到基础输出
-                    result = self._format_collab_result(topic, potential)
-                    yield event.plain_result(result)
+                    if potential:
+                        yield event.plain_result(self._format_collab_result(topic, potential))
+                    else:
+                        yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
                 return
 
             # 查看指定成员的协作伙伴
