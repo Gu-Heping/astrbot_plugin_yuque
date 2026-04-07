@@ -1385,6 +1385,230 @@ class NovaBotPlugin(Star):
             logger.error(f"伙伴推荐失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 推荐失败: {e}")
 
+    async def _recommend_answerers(self, question: str) -> str:
+        """根据问题推荐潜在回答者
+
+        Args:
+            question: 问题内容
+
+        Returns:
+            推荐提示文本（可能为空）
+        """
+        if not self.trajectory_manager and not self._get_doc_index():
+            return ""
+
+        try:
+            # 从问题中提取关键词（简单分词）
+            import re
+            # 提取中文词组和英文单词
+            keywords = re.findall(r'[\u4e00-\u9fa5]+|[a-zA-Z]+', question)
+            keywords = [k for k in keywords if len(k) >= 2][:3]  # 最多3个关键词
+
+            if not keywords:
+                return ""
+
+            candidates: dict[str, dict] = {}
+
+            # 1. 从轨迹搜索活跃成员
+            if self.trajectory_manager:
+                for kw in keywords:
+                    try:
+                        results = self.trajectory_manager.search_by_topic(kw, days=60)
+                        for r in results[:5]:
+                            member_id = r.get("member_id", "")
+                            if not member_id:
+                                continue
+                            if member_id not in candidates:
+                                candidates[member_id] = {
+                                    "match_count": 0,
+                                    "keywords": [],
+                                }
+                            candidates[member_id]["match_count"] += r.get("match_count", 1)
+                            if kw not in candidates[member_id]["keywords"]:
+                                candidates[member_id]["keywords"].append(kw)
+                    except Exception:
+                        pass
+
+            # 2. 从文档索引搜索作者
+            doc_index = self._get_doc_index()
+            if doc_index:
+                for kw in keywords:
+                    try:
+                        docs = doc_index.search(title=kw, limit=10)
+                        for doc in docs:
+                            author = doc.get("creator_id") or doc.get("author")
+                            if not author:
+                                continue
+                            author_str = str(author)
+                            if author_str not in candidates:
+                                candidates[author_str] = {
+                                    "match_count": 0,
+                                    "keywords": [],
+                                }
+                            candidates[author_str]["match_count"] += 1
+                            if kw not in candidates[author_str]["keywords"]:
+                                candidates[author_str]["keywords"].append(kw)
+                    except Exception:
+                        pass
+
+            if not candidates:
+                return ""
+
+            # 排序取前3
+            sorted_candidates = sorted(
+                candidates.items(),
+                key=lambda x: x[1]["match_count"],
+                reverse=True
+            )[:3]
+
+            # 解析成员姓名
+            members = self.storage.load_members()
+            names = []
+            for member_id, info in sorted_candidates:
+                member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+                if member_info:
+                    name = member_info.get("name") or member_info.get("login")
+                    if name:
+                        names.append(name)
+
+            if not names:
+                return ""
+
+            return f"\n\n💡 建议邀请：{', '.join(names)}（他们在相关问题领域较活跃）"
+
+        except Exception as e:
+            logger.debug(f"[Ask] 推荐回答者失败: {e}")
+            return ""
+
+    def _format_collab_result(self, topic: str, potential: list[dict]) -> str:
+        """格式化协作伙伴推荐结果（基础版）
+
+        Args:
+            topic: 主题
+            potential: 潜在协作伙伴列表
+
+        Returns:
+            格式化的文本
+        """
+        lines = [f"【「{topic}」领域潜在协作伙伴】\n"]
+        members = self.storage.load_members()
+
+        for p in potential[:5]:
+            partner_id = p.get("member_id", "")
+            member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
+            partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
+            partner_login = member_info.get("login", "") if member_info else ""
+            score = p.get("match_score", 0)
+            reasons = p.get("match_reasons", [])
+
+            lines.append(f"👤 {partner_name}（匹配度 {score:.0%}）")
+
+            for reason in reasons:
+                lines.append(f"   ✓ {reason}")
+
+            # 相关文档
+            if self._get_doc_index():
+                try:
+                    docs = self._get_doc_index().search(title=topic, limit=5)
+                    partner_docs = []
+                    for doc in docs:
+                        doc_author = str(doc.get("creator_id") or doc.get("author", ""))
+                        if doc_author == partner_id or doc.get("author") == partner_name:
+                            partner_docs.append(doc.get("title", ""))
+                    if partner_docs:
+                        lines.append(f"   📄 相关文档：{partner_docs[0][:25]}...")
+                except Exception:
+                    pass
+
+            if partner_login:
+                lines.append(f"   🔗 https://www.yuque.com/{partner_login}")
+
+            lines.append("")
+
+        lines.append("💡 提示：可以在群里 @对方 讨论，或通过语雀主页私信联系")
+        return "\n".join(lines)
+
+    async def _enhance_collab_with_llm(
+        self,
+        provider,
+        user_name: str,
+        topic: str,
+        potential: list[dict],
+    ) -> str:
+        """使用 LLM 增强协作伙伴推荐
+
+        Args:
+            provider: LLM Provider
+            user_name: 用户名
+            topic: 主题
+            potential: 潜在协作伙伴列表
+
+        Returns:
+            增强的推荐文本
+        """
+        from .novabot.llm_utils import call_llm, sanitize_user_input
+
+        safe_topic = sanitize_user_input(topic, max_length=100)
+        safe_user_name = sanitize_user_input(user_name, max_length=50)
+
+        members = self.storage.load_members()
+
+        # 构建候选信息
+        candidates_info = []
+        for i, p in enumerate(potential[:5], 1):
+            partner_id = p.get("member_id", "")
+            member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
+            partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
+            score = p.get("match_score", 0)
+            reasons = p.get("match_reasons", [])
+
+            safe_name = sanitize_user_input(partner_name, max_length=50)
+            candidates_info.append(
+                f"{i}. {safe_name}（匹配度 {score:.0%}）\n"
+                f"   原因：{', '.join(reasons[:2]) if reasons else '相关领域活跃'}"
+            )
+
+        prompt = f"""你是一个协作伙伴推荐助手。请根据以下信息，为用户生成个性化的协作伙伴推荐报告。
+
+## 用户信息
+- 姓名：{safe_user_name}
+- 查找主题：{safe_topic}
+
+## 推荐的协作伙伴
+{chr(10).join(candidates_info)}
+
+## 输出要求
+
+请生成一份简洁的推荐报告，包含：
+
+1. **开篇**：一句话说明找到了什么
+
+2. **伙伴推荐**：
+   - 每个伙伴用 1-2 句话介绍
+   - 说明为什么推荐（匹配原因）
+   - 建议如何合作（一起做什么）
+
+3. **行动建议**：1-2 句话鼓励用户主动联系
+
+注意：
+- 语气简洁专业
+- 推荐理由要具体
+- 输出用中文，不要用 emoji"""
+
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个协作伙伴推荐助手，善于给出简洁、有价值的推荐。",
+                require_json=False,
+                token_monitor=self.token_monitor,
+                feature="collab",
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Collab] LLM 增强失败，回退到基础输出: {e}")
+            return self._format_collab_result(topic, potential)
+
     async def _enhance_partner_with_llm(
         self,
         provider,
@@ -1669,6 +1893,83 @@ class NovaBotPlugin(Star):
                 title = evt.get("title", "")
                 lines.append(f"• {date_str} - {event_name}：{title[:30]}")
             return "\n".join(lines)
+
+    async def _analyze_memory_with_llm(
+        self,
+        provider,
+        user_name: str,
+        sessions: list[dict],
+    ) -> str:
+        """使用 LLM 分析对话模式
+
+        Args:
+            provider: LLM Provider
+            user_name: 用户名
+            sessions: 会话列表
+
+        Returns:
+            分析报告文本
+        """
+        from .novabot.llm_utils import call_llm, sanitize_user_input
+
+        safe_user_name = sanitize_user_input(user_name, max_length=50)
+
+        # 构建会话摘要
+        sessions_info = []
+        for session in sessions[:5]:
+            summary = sanitize_user_input(session.get("summary", "无摘要"), max_length=100)
+            started_at = session.get("started_at", "")[:10] if session.get("started_at") else ""
+            sessions_info.append(f"- [{started_at}] {summary}")
+
+        prompt = f"""你是一个对话分析师。请根据用户的对话历史，分析他们的学习模式和兴趣。
+
+## 用户
+{safe_user_name}
+
+## 最近对话记录（共 {len(sessions)} 条）
+{chr(10).join(sessions_info)}
+
+## 分析任务
+
+请输出一份简洁的分析，包含：
+
+1. **对话画像**（1-2 句话）
+   - 用户主要关心什么？
+   - 提问频率如何？
+
+2. **兴趣领域**
+   - 从对话摘要中识别用户关注的技术/知识领域
+   - 列出 2-3 个主要领域
+
+3. **建议**（1-2 条）
+   - 基于对话内容，给出学习或探索建议
+
+注意：
+- 语气友好
+- 输出用中文，简洁明了"""
+
+        try:
+            result = await call_llm(
+                provider=provider,
+                prompt=prompt,
+                system_prompt="你是一个对话分析师，善于从对话记录中发现用户兴趣。",
+                require_json=False,
+                token_monitor=self.token_monitor,
+                feature="memory",
+            )
+            return result
+        except Exception as e:
+            logger.warning(f"[Memory] LLM 分析失败: {e}")
+            # 回退到基础输出
+            return (
+                f"🧠 {safe_user_name} 的记忆概览\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"• 总会话数: {len(sessions)}\n\n"
+                f"指令:\n"
+                f"  /memory recent - 最近对话\n"
+                f"  /memory search <关键词> - 搜索\n"
+                f"  /memory clear - 清除记忆"
+            )
 
     @filter.command("path")
     async def path_cmd(self, event: AstrMessageEvent, domain: str = ""):
@@ -2186,9 +2487,14 @@ class NovaBotPlugin(Star):
 
                 try:
                     qid, msg = self.ask_box.submit_question(content, umo, sender_id, sender_name)
+
+                    # 推荐潜在回答者
+                    answerer_hint = await self._recommend_answerers(content)
+
                     yield event.plain_result(
                         f"✅ 提问成功 (ID: {qid})\n\n"
                         f"使用 /ask view {qid} 查看回答"
+                        f"{answerer_hint}"
                     )
                 except ValueError as e:
                     yield event.plain_result(f"❌ {e}")
@@ -2633,18 +2939,40 @@ class NovaBotPlugin(Star):
             # 无参数：显示概览
             if not action:
                 stats = self.memory_manager.get_user_stats(user_id)
-                yield event.plain_result(
-                    f"🧠 {yuque_name} 的记忆概览\n"
-                    f"━━━━━━━━━━━━━━━━━━━━\n"
-                    f"• 总会话数: {stats.get('total_sessions', 0)}\n"
-                    f"• 总消息数: {stats.get('total_messages', 0)}\n"
-                    f"• 近7天活跃: {stats.get('recent_7_days', 0)} 次\n"
-                    f"\n"
-                    f"指令:\n"
-                    f"  /memory recent - 最近对话\n"
-                    f"  /memory search <关键词> - 搜索\n"
-                    f"  /memory clear - 清除记忆"
-                )
+                total_sessions = stats.get('total_sessions', 0)
+                total_messages = stats.get('total_messages', 0)
+                recent_7_days = stats.get('recent_7_days', 0)
+
+                lines = [
+                    f"🧠 {yuque_name} 的记忆概览",
+                    "━━━━━━━━━━━━━━━━━━━━",
+                    f"• 总会话数: {total_sessions}",
+                    f"• 总消息数: {total_messages}",
+                    f"• 近7天活跃: {recent_7_days} 次",
+                ]
+
+                # 如果有足够的会话，尝试用 LLM 分析兴趣模式
+                if total_sessions >= 3:
+                    provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                    if provider:
+                        sessions = self.memory_manager.get_recent_sessions(user_id, limit=5)
+                        if sessions:
+                            lines.append("\n🔍 正在分析对话模式...")
+                            yield event.plain_result("\n".join(lines))
+
+                            analysis = await self._analyze_memory_with_llm(
+                                provider=provider,
+                                user_name=yuque_name,
+                                sessions=sessions,
+                            )
+                            yield event.plain_result(analysis)
+                            return
+
+                lines.append("\n指令:")
+                lines.append("  /memory recent - 最近对话")
+                lines.append("  /memory search <关键词> - 搜索")
+                lines.append("  /memory clear - 清除记忆")
+                yield event.plain_result("\n".join(lines))
                 return
 
             action_lower = action.lower()
@@ -3051,7 +3379,38 @@ class NovaBotPlugin(Star):
                     status = "✅" if resolved else "❓"
                     lines.append(f"{status} [{qid}] {question_text} (问过 {ask_count} 次)")
 
-                lines.append("\n这些问题可能需要找导师帮忙")
+                # 智能建议
+                lines.append("")
+                lines.append("💡 建议：")
+                lines.append("• 这些反复出现的问题可能需要找导师帮忙")
+                lines.append("• 可以用 /partner 找相关领域的学习伙伴")
+                lines.append("• 或在群里 @相关成员 讨论")
+
+                # 尝试推荐相关文档
+                if self._get_doc_index() and questions:
+                    try:
+                        # 从问题中提取关键词
+                        import re
+                        all_keywords = set()
+                        for q in questions[:5]:
+                            kws = re.findall(r'[\u4e00-\u9fa5]+|[a-zA-Z]+', q.get("question", ""))
+                            all_keywords.update(k for k in kws if len(k) >= 2)
+
+                        if all_keywords:
+                            # 搜索相关文档
+                            docs = self._get_doc_index().search(
+                                title=" ".join(list(all_keywords)[:3]),
+                                limit=3
+                            )
+                            if docs:
+                                lines.append("\n📚 相关文档：")
+                                for doc in docs:
+                                    title = doc.get("title", "")
+                                    author = doc.get("author", "")
+                                    lines.append(f"• 《{title}》- {author}")
+                    except Exception:
+                        pass
+
                 yield event.plain_result("\n".join(lines))
                 return
 
@@ -3318,60 +3677,20 @@ class NovaBotPlugin(Star):
                     yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
                     return
 
-                lines = [f"【「{topic}」领域潜在协作伙伴】\n"]
-                members = self.storage.load_members()
-
-                for p in potential[:5]:
-                    partner_id = p.get("member_id", "")
-                    # 解析成员姓名
-                    member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
-                    partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
-                    partner_login = member_info.get("login", "") if member_info else ""
-                    score = p.get("match_score", 0)
-                    reasons = p.get("match_reasons", [])
-
-                    lines.append(f"👤 {partner_name}（匹配度 {score:.0%}）")
-
-                    # 匹配原因
-                    for reason in reasons:
-                        lines.append(f"   ✓ {reason}")
-
-                    # 查找对方关于主题的文档
-                    if self._get_doc_index():
-                        try:
-                            docs = self._get_doc_index().search(title=topic, limit=5)
-                            partner_docs = []
-                            for doc in docs:
-                                doc_author = str(doc.get("creator_id") or doc.get("author", ""))
-                                if doc_author == partner_id or doc.get("author") == partner_name:
-                                    partner_docs.append(doc.get("title", ""))
-                            if partner_docs:
-                                lines.append(f"   📄 相关文档：{partner_docs[0][:25]}...")
-                                if len(partner_docs) > 1:
-                                    lines.append(f"      （共 {len(partner_docs)} 篇相关）")
-                        except Exception:
-                            pass
-
-                    # 查找对方最近活动
-                    if self.trajectory_manager:
-                        try:
-                            trajectory = self.trajectory_manager.get_trajectory(partner_id, days=30)
-                            if trajectory:
-                                latest = trajectory[0]
-                                evt_name = latest.get("event_name", "")
-                                evt_title = latest.get("title", "")[:20]
-                                lines.append(f"   🕐 最近：{evt_name}《{evt_title}...》")
-                        except Exception:
-                            pass
-
-                    # 语雀主页链接
-                    if partner_login:
-                        lines.append(f"   🔗 https://www.yuque.com/{partner_login}")
-
-                    lines.append("")
-
-                lines.append("💡 提示：可以在群里 @对方 讨论，或通过语雀主页私信联系")
-                yield event.plain_result("\n".join(lines))
+                # 尝试用 LLM 增强推荐
+                provider = self.context.get_using_provider(umo=event.unified_msg_origin)
+                if provider and len(potential) >= 2:
+                    enhanced_result = await self._enhance_collab_with_llm(
+                        provider=provider,
+                        user_name=yuque_name,
+                        topic=topic,
+                        potential=potential,
+                    )
+                    yield event.plain_result(enhanced_result)
+                else:
+                    # 回退到基础输出
+                    result = self._format_collab_result(topic, potential)
+                    yield event.plain_result(result)
                 return
 
             # 查看指定成员的协作伙伴
