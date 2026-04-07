@@ -1345,45 +1345,35 @@ class NovaBotPlugin(Star):
             )
             return
 
-        # 查找伙伴和导师
+        # 使用 Agent 智能推荐（调用 PartnerRecommendTool 工具）
         try:
-            partners = self.partner_matcher.find_partners(yuque_id, topic if topic else None)
-            mentors = self.partner_matcher.find_mentors(yuque_id, topic if topic else None)
+            yield event.plain_result("🔍 正在分析推荐...")
 
-            if not partners and not mentors:
-                if topic:
-                    yield event.plain_result(
-                        f"未找到「{topic}」相关的学习伙伴\n"
-                        f"试试其他主题，或使用 /partner 查看所有推荐"
-                    )
-                else:
-                    yield event.plain_result(
-                        "暂无匹配的学习伙伴\n"
-                        "可能是因为社团成员画像数据不足"
-                    )
-                return
+            from .novabot.llm_utils import sanitize_user_input
+            safe_topic = sanitize_user_input(topic, max_length=100) if topic else ""
 
-            # 尝试使用 LLM 增强推荐
-            provider = self.context.get_using_provider(umo=event.unified_msg_origin)
-            if provider:
-                yield event.plain_result("🔍 正在分析推荐...")
-                enhanced_result = await self._enhance_partner_with_llm(
-                    provider=provider,
-                    user_name=yuque_name,
-                    user_profile=profile,
-                    topic=topic,
-                    partners=partners,
-                    mentors=mentors,
-                )
-                yield event.plain_result(enhanced_result)
+            # 构建请求，让 Agent 理解用户需求
+            if safe_topic:
+                agent_query = f"我想找一个在「{safe_topic}」领域的学习伙伴或导师"
             else:
-                # 无 LLM 时回退到基础输出
-                result = format_partner_result(partners, mentors, topic if topic else None, storage=self.storage)
-                yield event.plain_result(result)
+                agent_query = "请根据我的兴趣推荐学习伙伴或导师"
+
+            response = await self.agent.handle_message(event, agent_query)
+            yield event.plain_result(response)
 
         except Exception as e:
-            logger.error(f"伙伴推荐失败: {e}", exc_info=True)
-            yield event.plain_result(f"❌ 推荐失败: {e}")
+            logger.error(f"[Partner] Agent 处理失败: {e}", exc_info=True)
+            # 回退到基础规则匹配输出
+            partners = self.partner_matcher.find_partners(yuque_id, topic if topic else None)
+            mentors = self.partner_matcher.find_mentors(yuque_id, topic if topic else None)
+            if partners or mentors:
+                result = format_partner_result(partners, mentors, topic if topic else None, storage=self.storage)
+                yield event.plain_result(result)
+            else:
+                if topic:
+                    yield event.plain_result(f"未找到「{topic}」相关的学习伙伴")
+                else:
+                    yield event.plain_result("暂无匹配的学习伙伴")
 
     async def _recommend_answerers(self, question: str) -> str:
         """根据问题推荐潜在回答者
@@ -3488,7 +3478,7 @@ class NovaBotPlugin(Star):
             content = args.strip()
 
         try:
-            # 主题搜索
+            # 主题搜索（使用 Agent 智能分析）
             if content.lower().startswith("topic "):
                 topic = content[6:].strip()
                 if not topic:
@@ -3496,52 +3486,46 @@ class NovaBotPlugin(Star):
                     return
 
                 yield event.plain_result(f"🔍 正在搜索「{topic}」相关的成员活动...")
-                results = self.trajectory_manager.search_by_topic(topic, days=30)
-                if not results:
-                    yield event.plain_result(f"最近 30 天没有成员在做「{topic}」相关的事情")
-                    return
 
-                lines = [f"【与「{topic}」相关的成员活动】\n"]
-                members = self.storage.load_members()
-                for result in results[:5]:
-                    member_id = result.get("member_id", "")
-                    # 解析成员姓名
-                    member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
-                    member_name = (member_info.get("name") or member_info.get("login") or member_id) if member_info else member_id
-                    member_login = member_info.get("login", "") if member_info else ""
-                    match_count = result.get("match_count", 0)
-                    events = result.get("matching_events", [])[:3]
-                    stats = result.get("stats", {})
+                # 调用 Agent 智能分析（使用 GetMemberTrajectoryTool 工具）
+                try:
+                    from .novabot.llm_utils import sanitize_user_input
+                    safe_topic = sanitize_user_input(topic, max_length=100)
+                    agent_query = f"查看最近谁在做与「{safe_topic}」相关的事情"
+                    response = await self.agent.handle_message(event, agent_query)
+                    yield event.plain_result(response)
+                except Exception as e:
+                    logger.error(f"[Trajectory] Agent 处理失败: {e}", exc_info=True)
+                    # 回退到基础输出
+                    results = self.trajectory_manager.search_by_topic(topic, days=30)
+                    if not results:
+                        yield event.plain_result(f"最近 30 天没有成员在做「{topic}」相关的事情")
+                        return
 
-                    lines.append(f"👤 {member_name}（{match_count} 次相关活动）")
+                    lines = [f"【与「{topic}」相关的成员活动】\n"]
+                    members = self.storage.load_members()
+                    for result in results[:5]:
+                        member_id = result.get("member_id", "")
+                        member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
+                        member_name = (member_info.get("name") or member_info.get("login") or member_id) if member_info else member_id
+                        match_count = result.get("match_count", 0)
+                        events = result.get("matching_events", [])[:3]
+                        stats = result.get("stats", {})
 
-                    # 显示具体活动
-                    for evt in events:
-                        event_name = evt.get("event_name", "")
-                        title = evt.get("title", "")
-                        timestamp = evt.get("timestamp", "")
-                        date_str = ""
-                        if timestamp:
-                            try:
-                                dt = datetime.fromisoformat(timestamp)
-                                date_str = dt.strftime("%m-%d ")
-                            except ValueError:
-                                pass
-                        lines.append(f"   • {date_str}{event_name}：{title[:25]}...")
+                        lines.append(f"👤 {member_name}（{match_count} 次相关活动）")
+                        for evt in events:
+                            event_name = evt.get("event_name", "")
+                            title = evt.get("title", "")
+                            lines.append(f"   • {event_name}：{title[:25]}...")
 
-                    # 显示统计
-                    doc_count = stats.get("doc_count", 0)
-                    if doc_count:
-                        lines.append(f"   📄 共 {doc_count} 篇相关文档")
+                        doc_count = stats.get("doc_count", 0)
+                        if doc_count:
+                            lines.append(f"   📄 共 {doc_count} 篇相关文档")
 
-                    # 语雀主页链接
-                    if member_login:
-                        lines.append(f"   🔗 https://www.yuque.com/{member_login}")
+                        lines.append("")
 
-                    lines.append("")
-
-                lines.append("💡 提示：可以主动联系他们请教问题，或邀请一起学习")
-                yield event.plain_result("\n".join(lines))
+                    lines.append("💡 提示：可以主动联系他们请教问题")
+                    yield event.plain_result("\n".join(lines))
                 return
 
             # 查看指定成员的轨迹
