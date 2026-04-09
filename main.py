@@ -74,7 +74,10 @@ class NovaBotPlugin(Star):
         self.memory_manager = ConversationMemory(self.storage.data_dir)  # 长期记忆
         self.trajectory_manager = MemberTrajectory(self.storage.data_dir)  # 成员轨迹
         self.collaboration_manager = CollaborationNetwork(self.storage.data_dir)  # 协作网络
-        self.token_limiter = TokenLimiter(self.storage.data_dir)  # Token 限流
+        self.token_limiter = TokenLimiter(
+            self.storage.data_dir,
+            daily_limit=config.get("token_daily_limit", 50000),
+        )  # Token 限流
         self.webhook_queue = WebhookQueue()  # Webhook 队列
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
