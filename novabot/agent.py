@@ -91,13 +91,17 @@ class NovaBotAgent:
         # 获取用户画像（如果已绑定）
         user_context = await self._get_user_context(event)
 
+        # 获取当前发送者名称（用于群聊区分用户）
+        sender_name = event.get_sender_name() or "用户"
+        user_context["sender_name"] = sender_name
+
         # 获取对话历史（群聊中减少历史轮数，避免混淆上下文）
         is_group = event.get_group_id() is not None
         max_history_rounds = 1 if is_group else 5  # 群聊只保留1轮，私聊5轮
         conversation_history = await self._get_conversation_history(umo, max_rounds=max_history_rounds)
 
-        # 构建系统提示词（包含历史）
-        system_prompt = self._build_system_prompt(user_context, conversation_history)
+        # 构建系统提示词（包含历史和当前用户信息）
+        system_prompt = self._build_system_prompt(user_context, conversation_history, is_group)
 
         # 获取工具
         tools = self._get_tools()
@@ -326,36 +330,67 @@ class NovaBotAgent:
         except Exception as e:
             logger.warning(f"[Agent] 长期记忆记录失败: {e}")
 
-    def _build_system_prompt(self, user_context: dict, conversation_history: list = None) -> str:
+    def _build_system_prompt(self, user_context: dict, conversation_history: list = None, is_group: bool = False) -> str:
         """构建系统提示词
 
         Args:
             user_context: 用户上下文
             conversation_history: 对话历史
+            is_group: 是否群聊
 
         Returns:
             完整的系统提示词
         """
         prompt = DEFAULT_SYSTEM_PROMPT
 
+        # 获取当前发送者名称
+        sender_name = user_context.get("sender_name", "用户")
+
+        # 群聊模式：明确标注当前用户
+        if is_group:
+            prompt += f"""
+
+【当前对话场景】
+- 这是在群聊中
+- 当前与你对话的用户是：「{sender_name}」
+- 请只回复「{sender_name}」的问题，不要混淆群内其他人的话题
+- 如果消息与「{sender_name}」之前的问题无关，说明可能是新话题，正常回答即可"""
+
         # 添加对话历史（群聊中减少历史轮数避免混淆）
         if conversation_history:
-            # 警告：对话历史可能来自群聊中的不同用户
-            history_text = "\n".join([
-                f"{'用户' if msg['role'] == 'user' else 'NovaBot'}: {msg.get('content', '')}"
-                for msg in conversation_history
-                if msg.get('role') and msg.get('content')
-            ])
-            if history_text:
-                prompt += f"""
+            # 群聊历史需要特别标注来源
+            if is_group:
+                history_text = "\n".join([
+                    f"[群友] {msg.get('content', '')}" if msg['role'] == 'user' else f"[NovaBot] {msg.get('content', '')}"
+                    for msg in conversation_history
+                    if msg.get('role') and msg.get('content')
+                ])
+            else:
+                history_text = "\n".join([
+                    f"{'用户' if msg['role'] == 'user' else 'NovaBot'}: {msg.get('content', '')}"
+                    for msg in conversation_history
+                    if msg.get('role') and msg.get('content')
+                ])
 
-【最近的对话记录】
-⚠️ 注意：以下可能包含群聊中其他用户的发言，请重点关注与你当前对话的用户的问题。
+            if history_text:
+                if is_group:
+                    prompt += f"""
+
+【最近的群聊记录】
+⚠️ 注意：以下记录可能来自群内不同用户，请重点关注当前用户「{sender_name}」的问题。
 
 {history_text}
 
-【当前用户的新消息】
-（你需要回复这条新消息，请根据用户实际需求回答，不要混淆历史记录中其他人的话题）"""
+【{sender_name} 的新消息】
+（你需要回复「{sender_name}」的这条消息）"""
+                else:
+                    prompt += f"""
+
+【最近的对话记录】
+{history_text}
+
+【用户的新消息】
+（你需要回复这条消息）"""
 
         # 如果用户已绑定且有画像，添加个性化信息
         if user_context.get("bound") and user_context.get("profile"):
@@ -370,9 +405,12 @@ class NovaBotAgent:
             interests_str = ", ".join(interests) if interests else "暂无"
             tags_str = ", ".join(tags) if tags else "暂无"
 
+            # 群聊中标注发送者名称
+            user_label = f"{sender_name}（{yuque_name}）" if is_group else yuque_name
             prompt += f"""
 
 【当前用户信息】
+- 发送者: {user_label}
 - 已绑定账号: {yuque_name}
 - 兴趣领域: {interests_str}
 - 整体水平: {level}
@@ -383,17 +421,21 @@ class NovaBotAgent:
 
         elif user_context.get("bound"):
             # 已绑定但无画像
+            user_label = f"{sender_name}（{user_context.get('yuque_name', '未知')}）" if is_group else user_context.get('yuque_name', '未知')
             prompt += f"""
 
 【当前用户信息】
+- 发送者: {user_label}
 - 已绑定账号: {user_context.get('yuque_name', '未知')}
 - 暂无画像数据，建议用户使用 /profile refresh 生成画像"""
 
         else:
             # 未绑定
-            prompt += """
+            user_label = sender_name if is_group else "用户"
+            prompt += f"""
 
 【当前用户信息】
+- 发送者: {user_label}
 - 未绑定语雀账号
 - 如果用户需要个性化服务，引导使用 /bind 绑定账号"""
 
