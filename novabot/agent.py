@@ -29,6 +29,13 @@ DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
 - 记得用户说过的话
 - 主动关心用户的学习状态
 
+【重要原则：基于事实回答】
+1. 你只知道知识库中存在的文档内容，不要编造或推测信息
+2. 当知识库中没有相关信息时，明确告知用户，不要凭空回答
+3. 引用文档内容时，标注来源：「根据《文档名》by 作者...」
+4. 如果搜索结果与问题不相关，说明"知识库中暂时没有找到相关内容"
+5. 对于你不确定的信息，说"我不确定"而不是猜测
+
 【工具使用原则】
 在调用工具前，先思考：
 1. 用户的核心需求是什么？
@@ -52,7 +59,7 @@ DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
 【回答风格】
 - 有温度，像学习伙伴
 - 回答后追问「还想了解什么？」
-- 标注来源：「根据《文档名》by 作者...」
+- 始终标注来源
 """
 
 
@@ -84,8 +91,10 @@ class NovaBotAgent:
         # 获取用户画像（如果已绑定）
         user_context = await self._get_user_context(event)
 
-        # 获取对话历史
-        conversation_history = await self._get_conversation_history(umo)
+        # 获取对话历史（群聊中减少历史轮数，避免混淆上下文）
+        is_group = event.get_group_id() is not None
+        max_history_rounds = 1 if is_group else 5  # 群聊只保留1轮，私聊5轮
+        conversation_history = await self._get_conversation_history(umo, max_rounds=max_history_rounds)
 
         # 构建系统提示词（包含历史）
         system_prompt = self._build_system_prompt(user_context, conversation_history)
@@ -329,8 +338,9 @@ class NovaBotAgent:
         """
         prompt = DEFAULT_SYSTEM_PROMPT
 
-        # 添加对话历史
+        # 添加对话历史（群聊中减少历史轮数避免混淆）
         if conversation_history:
+            # 警告：对话历史可能来自群聊中的不同用户
             history_text = "\n".join([
                 f"{'用户' if msg['role'] == 'user' else 'NovaBot'}: {msg.get('content', '')}"
                 for msg in conversation_history
@@ -339,11 +349,13 @@ class NovaBotAgent:
             if history_text:
                 prompt += f"""
 
-【最近的对话】（请继续这段对话，不要重复回答）
+【最近的对话记录】
+⚠️ 注意：以下可能包含群聊中其他用户的发言，请重点关注与你当前对话的用户的问题。
+
 {history_text}
 
 【当前用户的新消息】
-（你需要回复这条新消息）"""
+（你需要回复这条新消息，请根据用户实际需求回答，不要混淆历史记录中其他人的话题）"""
 
         # 如果用户已绑定且有画像，添加个性化信息
         if user_context.get("bound") and user_context.get("profile"):

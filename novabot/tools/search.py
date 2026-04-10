@@ -171,20 +171,22 @@ class SearchKnowledgeBaseTool(BaseTool):
         try:
             results = self.plugin.rag.search(query, k=top_k)
             if not results:
-                return f"未找到与「{query}」相关的内容"
+                return f"【搜索结果】知识库中未找到与「{query}」相关的内容。请尝试其他关键词，或告知用户知识库中暂无相关信息。"
 
-            output = [f"🔍 语义搜索结果（可能不精确，建议用 grep 精确搜索）:\n"]
+            output = [f"🔍 语义搜索结果（共 {len(results)} 条）：\n"]
+            output.append("⚠️ 注意：以下内容来自知识库搜索，请根据实际相关性判断是否使用，不要编造不存在的文档。\n")
             for i, r in enumerate(results, 1):
                 title = r.get("title", "未知")
                 author = r.get("author", "")
                 book = r.get("book_name", "")
-                content = r.get("content", "")[:300]
+                content = r.get("content", "")[:500]  # 增加到 500 字符
                 output.append(f"【{i}】{title}" + (f" (by {author})" if author else ""))
                 if book:
                     output.append(f"    📚 知识库: {book}")
-                output.append(f"    {content}...")
+                output.append(f"    内容片段: {content}...")
                 output.append("")
 
+            output.append("💡 提示：如果以上结果与问题不相关，请告知用户'知识库中暂未找到相关内容'，不要编造答案。")
             return "\n".join(output)
         except Exception as e:
             return f"搜索失败: {e}"
@@ -274,13 +276,13 @@ class GrepLocalDocsTool(BaseTool):
 
         if not results:
             filter_hint = f"（在「{repo_filter}」中）" if repo_filter else ""
-            return f"未找到包含「{keyword}」的文档{filter_hint}"
+            return f"【关键词搜索】未找到包含「{keyword}」的文档{filter_hint}。请告知用户知识库中暂无相关内容，不要编造答案。"
 
         # 按匹配数排序
         results.sort(key=lambda x: x["count"], reverse=True)
         results = results[:max_results]
 
-        output = [f"找到 {len(results)} 个文档包含「{keyword}」（按匹配数排序）:\n"]
+        output = [f"【关键词搜索】找到 {len(results)} 个文档包含「{keyword}」（按匹配数排序）:\n"]
         for r in results:
             output.append(f"📄 {r['title']} ({r['count']} 处匹配)" + (f" - {r['repo']}" if r.get('repo') else ""))
             output.append(f"   📁 {r['path']}")
@@ -288,7 +290,7 @@ class GrepLocalDocsTool(BaseTool):
                 output.append(f"   {ctx}")
             output.append("")
 
-        output.append("💡 提示: 使用 read_doc(path) 读取完整文档内容")
+        output.append("💡 提示: 使用 read_doc(path) 读取完整文档内容。回答时请基于实际搜索结果，不要编造不存在的文档。")
         return "\n".join(output)
 
 
