@@ -435,6 +435,29 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取周报统计失败: {e}")
             return result
 
+    def get_weekly_publish_stats_all(self) -> List[Dict]:
+        """获取全部文档按周发布的原始统计数据。"""
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT
+                    date(created_at, '-' || ((CAST(strftime('%w', created_at) AS INTEGER) + 6) % 7) || ' days') AS week_start,
+                    date(created_at, '-' || ((CAST(strftime('%w', created_at) AS INTEGER) + 6) % 7) || ' days', '+6 days') AS week_end,
+                    COUNT(*) AS published_docs,
+                    COUNT(DISTINCT CASE WHEN TRIM(author) != '' THEN author END) AS authors_count,
+                    COALESCE(SUM(word_count), 0) AS total_words
+                FROM docs
+                WHERE created_at IS NOT NULL AND TRIM(created_at) != ''
+                GROUP BY week_start, week_end
+                ORDER BY week_start ASC
+                """
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取按周发布统计失败: {e}")
+            return []
+
     def get_all_docs(self, limit: int = 10000) -> List[Dict]:
         """获取所有文档（用于分析）
 

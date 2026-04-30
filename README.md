@@ -115,7 +115,8 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
 | `/webhook` | Webhook 服务状态 |
-| `/weekly` | 本周知识周报 |
+| `/weekly` | 本周知识周报（管理员） |
+| `/weekly raw` | 导出“全部文档按周原始统计”CSV（管理员） |
 | `/tokens` | Token 消耗统计 |
 | `/askreset` | 重置问答数据 |
 
@@ -268,7 +269,7 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
-| v0.29.1 | 修复 Token 重复计费、0 文档同步残留与默认地址不一致，收敛同步链路分层 |
+| v0.29.1 | 修复计费/同步一致性，新增 `/weekly raw` 导出按周原始 CSV（管理员） |
 | v0.29.0 | 群聊发送者识别、群聊幻觉修复、Token 限额可配置 |
 | v0.28.0 | Agent 智能化升级：指令改用 Agent 处理、智能推荐权重优化 |
 | v0.27.0 | 成员轨迹、协作网络、主动关心机制 |

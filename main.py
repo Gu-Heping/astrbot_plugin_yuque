@@ -2170,8 +2170,9 @@ class NovaBotPlugin(Star):
             )
 
     @filter.command("weekly")
-    async def weekly_cmd(self, event: AstrMessageEvent):
-        """生成本周知识周报"""
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def weekly_cmd(self, event: AstrMessageEvent, action: str = ""):
+        """生成本周知识周报或导出按周原始数据。"""
         try:
             docs_dir = self.storage.docs_dir
 
@@ -2179,6 +2180,27 @@ class NovaBotPlugin(Star):
             doc_index = self._get_doc_index()
 
             reporter = WeeklyReporter(docs_dir, doc_index=doc_index)
+
+            # 导出全部文档按周原始统计 CSV
+            if action.lower() in ("raw", "export"):
+                export_dir = self.storage.data_dir / "exports"
+                csv_path, row_count = reporter.export_weekly_raw_csv(export_dir)
+
+                # 优先尝试直接发送文件；不支持时回退为返回本地路径
+                sent = await self._try_send_file(event, csv_path)
+                if sent:
+                    yield event.plain_result(
+                        f"✅ 已导出按周原始数据\n"
+                        f"记录周数: {row_count}\n"
+                        f"文件名: {csv_path.name}"
+                    )
+                else:
+                    yield event.plain_result(
+                        f"✅ 已导出按周原始数据（当前平台不支持直接发文件）\n"
+                        f"记录周数: {row_count}\n"
+                        f"文件路径: {csv_path}"
+                    )
+                return
 
             # 尝试获取 LLM Provider
             umo = event.unified_msg_origin
@@ -2198,6 +2220,28 @@ class NovaBotPlugin(Star):
         except Exception as e:
             logger.error(f"生成周报失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 生成周报失败: {e}")
+
+    async def _try_send_file(self, event: AstrMessageEvent, file_path: PathlibPath) -> bool:
+        """尝试发送文件到会话，不支持则返回 False。"""
+        try:
+            if hasattr(event, "file_result"):
+                yield_result = event.file_result(str(file_path))
+                if yield_result:
+                    await event.send(yield_result)
+                    return True
+        except Exception as e:
+            logger.debug(f"[weekly] file_result 发送失败: {e}")
+
+        try:
+            if hasattr(event, "document_result"):
+                yield_result = event.document_result(str(file_path))
+                if yield_result:
+                    await event.send(yield_result)
+                    return True
+        except Exception as e:
+            logger.debug(f"[weekly] document_result 发送失败: {e}")
+
+        return False
 
     @filter.command("gap")
     async def gap_cmd(self, event: AstrMessageEvent, target_domain: str = ""):
@@ -2817,7 +2861,8 @@ class NovaBotPlugin(Star):
             "  /unsubscribe <ID> - 取消订阅\n"
             "\n"
             "📊 分析\n"
-            "  /weekly - 本周知识周报\n"
+            "  /weekly - 本周知识周报（管理员）\n"
+            "  /weekly raw - 导出按周原始统计 CSV（管理员）\n"
             "  /gap - 知识缺口分析\n"
             "  /tokens - Token 消耗统计\n"
             "\n"

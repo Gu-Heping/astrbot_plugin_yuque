@@ -3,6 +3,7 @@ NovaBot 周报生成器
 基于 Git 历史 + 文档元数据生成本周活跃度报告
 """
 
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -40,6 +41,40 @@ class WeeklyReporter:
         since = monday.strftime("%Y-%m-%d")
         until = today.strftime("%Y-%m-%d")
         return since, until
+
+    def export_weekly_raw_csv(self, output_dir: Path) -> tuple[Path, int]:
+        """导出全部文档按周原始统计 CSV。
+
+        Returns:
+            (csv_file_path, row_count)
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        rows = []
+        if self.doc_index:
+            rows = self.doc_index.get_weekly_publish_stats_all()
+
+        filename = f"weekly_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        csv_path = output_dir / filename
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=["week_start", "week_end", "published_docs", "authors_count", "total_words"],
+            )
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(
+                    {
+                        "week_start": row.get("week_start", ""),
+                        "week_end": row.get("week_end", ""),
+                        "published_docs": row.get("published_docs", 0),
+                        "authors_count": row.get("authors_count", 0),
+                        "total_words": row.get("total_words", 0),
+                    }
+                )
+
+        return csv_path, len(rows)
 
     def generate_weekly_report(self) -> str:
         """生成周报
