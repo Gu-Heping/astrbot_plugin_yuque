@@ -213,6 +213,38 @@ class TokenLimiter:
 
             return True
 
+    def adjust_reserved_usage(self, user_id: str, reserved_tokens: int, actual_tokens: int) -> bool:
+        """按实际消耗修正已预留的 Token。
+
+        用于「先预留再结算」场景，避免重复记账或直接操作私有字段。
+        """
+        if not user_id:
+            return True
+
+        reserved_tokens = max(0, int(reserved_tokens or 0))
+        actual_tokens = max(0, int(actual_tokens or 0))
+        diff = actual_tokens - reserved_tokens
+        if diff == 0:
+            return True
+
+        today = date.today().isoformat()
+        with self._lock:
+            user_data = self._usage.get(user_id, {})
+            used_date = user_data.get("date", "")
+            if used_date != today:
+                self._usage[user_id] = {"date": today, "used": 0}
+
+            current_used = self._usage[user_id]["used"]
+            new_used = max(0, current_used + diff)
+            self._usage[user_id]["used"] = new_used
+            self._save()
+
+            if new_used >= self.daily_limit * self.warning_threshold:
+                logger.warning(
+                    f"[TokenLimiter] 用户 {user_id} 接近限额: {new_used}/{self.daily_limit}"
+                )
+            return True
+
     def get_usage(self, user_id: str) -> dict:
         """获取用户使用情况
 

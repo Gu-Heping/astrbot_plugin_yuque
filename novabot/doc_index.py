@@ -458,6 +458,182 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取所有文档失败: {e}")
             return []
 
+    def find_docs_by_slug(self, slug: str, limit: int = 5) -> List[Dict]:
+        """按 slug 查询文档（用于链接解析）"""
+        if not slug:
+            return []
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT title, author, book_name, book_namespace, file_path
+                FROM docs
+                WHERE slug = ?
+                LIMIT ?
+                """,
+                (slug, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 按 slug 查询失败: {e}")
+            return []
+
+    def get_docs_by_creator_or_author(
+        self,
+        creator_id: Optional[int] = None,
+        author_name: str = "",
+        limit: int = 20,
+    ) -> List[Dict]:
+        """按 creator_id（优先）或作者名获取文档列表"""
+        try:
+            conn = self._get_conn()
+            if creator_id:
+                rows = conn.execute(
+                    """
+                    SELECT title, book_name, word_count
+                    FROM docs
+                    WHERE creator_id = ?
+                    ORDER BY word_count DESC
+                    LIMIT ?
+                    """,
+                    (creator_id, limit),
+                ).fetchall()
+            elif author_name:
+                rows = conn.execute(
+                    """
+                    SELECT title, book_name, word_count
+                    FROM docs
+                    WHERE author = ?
+                    ORDER BY word_count DESC
+                    LIMIT ?
+                    """,
+                    (author_name, limit),
+                ).fetchall()
+            else:
+                return []
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 按作者查询文档失败: {e}")
+            return []
+
+    def get_kb_contributors(self, book_name: str, limit: int = 10) -> List[Dict]:
+        """获取知识库贡献者统计"""
+        if not book_name:
+            return []
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
+                FROM docs
+                WHERE book_name = ? AND author != ''
+                GROUP BY author
+                ORDER BY doc_count DESC
+                LIMIT ?
+                """,
+                (book_name, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取知识库贡献者失败: {e}")
+            return []
+
+    def get_kb_recent_updates(self, book_name: str, limit: int = 10) -> List[Dict]:
+        """获取知识库最近更新"""
+        if not book_name:
+            return []
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT title, author, updated_at
+                FROM docs
+                WHERE book_name = ?
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (book_name, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取知识库最近更新失败: {e}")
+            return []
+
+    def find_doc_for_book_by_title(self, book_name: str, title_keyword: str) -> Optional[Dict]:
+        """在知识库中按标题模糊匹配单篇文档"""
+        if not book_name or not title_keyword:
+            return None
+        try:
+            conn = self._get_conn()
+            row = conn.execute(
+                """
+                SELECT title, author, book_name, file_path
+                FROM docs
+                WHERE book_name = ? AND title LIKE ?
+                ORDER BY word_count DESC
+                LIMIT 1
+                """,
+                (book_name, f"%{title_keyword}%"),
+            ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 按标题匹配文档失败: {e}")
+            return None
+
+    def get_book_activity(self, book_name: str, since_date: str, limit: int = 10) -> Dict:
+        """获取指定知识库在时间区间内的活跃统计"""
+        result = {"docs_updated": 0, "active_contributors": []}
+        if not book_name or not since_date:
+            return result
+        try:
+            conn = self._get_conn()
+            docs_updated_row = conn.execute(
+                """
+                SELECT COUNT(*) as count
+                FROM docs
+                WHERE book_name = ? AND date(updated_at) >= date(?)
+                """,
+                (book_name, since_date),
+            ).fetchone()
+            active_rows = conn.execute(
+                """
+                SELECT author, COUNT(*) as doc_count
+                FROM docs
+                WHERE book_name = ? AND date(updated_at) >= date(?) AND author != ''
+                GROUP BY author
+                ORDER BY doc_count DESC
+                LIMIT ?
+                """,
+                (book_name, since_date, limit),
+            ).fetchall()
+            result["docs_updated"] = int(dict(docs_updated_row)["count"]) if docs_updated_row else 0
+            result["active_contributors"] = [dict(row) for row in active_rows]
+            return result
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取知识库活跃度失败: {e}")
+            return result
+
+    def get_top_docs_by_word_count(self, book_name: str, limit: int = 5, min_words: int = 100) -> List[Dict]:
+        """获取知识库内字数最多的文档"""
+        if not book_name:
+            return []
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT title, author, word_count
+                FROM docs
+                WHERE book_name = ? AND word_count > ?
+                ORDER BY word_count DESC
+                LIMIT ?
+                """,
+                (book_name, min_words, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 获取知识库长文档失败: {e}")
+            return []
+
     def close(self):
         """关闭连接"""
         if self._conn:

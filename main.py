@@ -24,9 +24,9 @@ from .novabot.search_log import SearchLogger
 from .novabot.knowledge_gap import LearningGapAnalyzer, format_gap_report
 from .novabot.token_monitor import TokenMonitor
 from .novabot.token_limiter import TokenLimiter
-from .novabot.webhook_queue import WebhookQueue
 from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
+from .novabot.sync_workflow import run_post_sync_workflow
 from .novabot.tools import ALL_TOOLS
 from .novabot.knowledge_base import KnowledgeBaseManager
 from .novabot.memory import ConversationMemory, MemberTrajectory, CollaborationNetwork
@@ -46,10 +46,11 @@ class NovaBotPlugin(Star):
 
         # 配置
         self.yuque_token = config.get("yuque_token", "")
-        self.yuque_base_url = config.get("yuque_base_url", "https://nova.yuque.com/api/v2")
+        self.yuque_base_url = config.get("yuque_base_url", "https://www.yuque.com/api/v2")
         self.embedding_api_key = config.get("embedding_api_key", "")
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
+        logger.info(f"[Config] Yuque API Base URL: {self.yuque_base_url}")
 
         # 消息路由配置
         wake_words_str = config.get("wake_words", "novabot,nova,诺瓦")
@@ -78,7 +79,6 @@ class NovaBotPlugin(Star):
             self.storage.data_dir,
             daily_limit=config.get("token_daily_limit", 50000),
         )  # Token 限流
-        self.webhook_queue = WebhookQueue()  # Webhook 队列
         self.client: Optional[YuqueClient] = None
         self.path_recommender: Optional[LearningPathRecommender] = None
         self.gap_analyzer: Optional[LearningGapAnalyzer] = None
@@ -547,13 +547,8 @@ class NovaBotPlugin(Star):
                     output_tokens=output_tokens,
                 )
 
-                # 记录到用户限流器（v0.27.2）
-                if self.token_limiter:
-                    platform_id = event.get_sender_id()
-                    binding = self.storage.get_binding(platform_id)
-                    if binding and binding.get("yuque_id"):
-                        yuque_id = str(binding["yuque_id"])
-                        self.token_limiter.record_usage(yuque_id, total_tokens)
+                # 用户限流由 NovaBotAgent 的“预留+校正”路径统一处理，
+                # 避免在 on_llm_response 再次记账导致重复扣减。
 
                 logger.info(f"[LLM] 记录聊天 token: 入 {input_tokens}, 出 {output_tokens}")
         except Exception as e:
@@ -853,47 +848,16 @@ class NovaBotPlugin(Star):
                 }
                 self.storage.save_sync_state(state)
 
-                # RAG 索引
-                if self.rag and result and result.get("docs", 0) > 0:
-                    try:
-                        # RAG 索引进度回调
-                        def rag_progress(current, total):
-                            state = self.storage.load_sync_state()
-                            state["status"] = "rag_indexing"
-                            state["rag_progress"] = {"current": current, "total": total}
-                            self.storage.save_sync_state(state)
-
-                        # 初始化状态
-                        rag_progress(0, result.get("docs", 0))
-
-                        indexed = await asyncio.to_thread(
-                            self.rag.index_from_sync,
-                            str(self.storage.docs_dir),
-                            rag_progress
-                        )
-                        logger.info(f"RAG 索引完成: {indexed} 篇")
-                    except Exception as e:
-                        logger.error(f"RAG 索引失败: {e}")
-
-                # 清除 RAG 索引状态
-                state = self.storage.load_sync_state()
-                state.pop("status", None)
-                state.pop("rag_progress", None)
-                self.storage.save_sync_state(state)
-
-                # 更新协作网络（从文档元数据提取知识库贡献者）
-                if self.collaboration_manager and result and result.get("docs", 0) > 0:
-                    try:
-                        self._update_collaboration_network()
-                    except Exception as e:
-                        logger.error(f"[Collaboration] 更新协作网络失败: {e}", exc_info=True)
-
-                # 初始化成员轨迹（从文档元数据提取发布记录）
-                if self.trajectory_manager and result and result.get("docs", 0) > 0:
-                    try:
-                        self._init_member_trajectories()
-                    except Exception as e:
-                        logger.error(f"[Trajectory] 初始化轨迹失败: {e}", exc_info=True)
+                await run_post_sync_workflow(
+                    result=result or {},
+                    rag=self.rag,
+                    docs_dir=self.storage.docs_dir,
+                    storage=self.storage,
+                    collaboration_manager=self.collaboration_manager,
+                    trajectory_manager=self.trajectory_manager,
+                    update_collaboration=self._update_collaboration_network,
+                    init_trajectories=self._init_member_trajectories,
+                )
 
                 docs_count = result.get("docs", 0) if result else 0
                 removed_count = result.get("removed", 0) if result else 0

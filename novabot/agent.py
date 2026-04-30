@@ -157,12 +157,10 @@ class NovaBotAgent:
                         # 注意：如果实际 > 预估，可能导致超限，但这是可接受的
                         diff = actual_tokens - estimated_tokens
                         if diff != 0:
-                            # 记录差异（可能是正数或负数）
-                            try:
-                                self.plugin.token_limiter._usage[str(yuque_id)]["used"] += diff
-                                self.plugin.token_limiter._save()
-                            except Exception:
-                                pass
+                            # 使用公开接口修正预留值，避免直接访问私有字段
+                            self.plugin.token_limiter.adjust_reserved_usage(
+                                str(yuque_id), estimated_tokens, actual_tokens
+                            )
                         logger.debug(f"[Agent] 实际 token: {actual_tokens}, 预估: {estimated_tokens}")
 
             # 记录对话到 conversation_manager

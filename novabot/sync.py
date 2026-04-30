@@ -13,6 +13,7 @@ import yaml
 
 from astrbot.api import logger
 
+from .doc_projection import build_doc_metadata, build_markdown, count_chinese_words
 from .yuque_client import YuqueClient
 
 
@@ -66,42 +67,8 @@ def toc_list_children(parent_uuid: Optional[str], toc_by_uuid: Dict[str, Dict]) 
 
 
 def _count_chinese_words(text: str) -> int:
-    """统计中文字数（过滤空白字符和 Markdown 语法字符）
-
-    对于中文文档，去掉空白字符和 Markdown 语法符号后的字符数
-    更接近真实的"字数"
-    """
-    if not text:
-        return 0
-    import re
-
-    # 1. 移除代码块（```...```）
-    cleaned = re.sub(r'```[\s\S]*?```', '', text)
-    # 2. 移除行内代码（`...`）
-    cleaned = re.sub(r'`[^`]+`', '', cleaned)
-    # 3. 移除图片链接（![alt](url)）
-    cleaned = re.sub(r'!\[.*?\]\(.*?\)', '', cleaned)
-    # 4. 移除链接（[text](url)），保留文本
-    cleaned = re.sub(r'\[([^\]]+)\]\(.*?\)', r'\1', cleaned)
-    # 5. 移除粗体/斜体标记（**text**、*text*、__text__、_text_）
-    cleaned = re.sub(r'\*\*|\*|__|_(?=\w)', '', cleaned)
-    # 6. 移除标题标记（#、##、### 等）
-    cleaned = re.sub(r'^#{1,6}\s*', '', cleaned, flags=re.MULTILINE)
-    # 7. 移除引用标记（>）
-    cleaned = re.sub(r'^>\s*', '', cleaned, flags=re.MULTILINE)
-    # 8. 移除列表标记（-、*、+、1. 等）
-    cleaned = re.sub(r'^[\-\*\+]\s*', '', cleaned, flags=re.MULTILINE)
-    cleaned = re.sub(r'^\d+\.\s*', '', cleaned, flags=re.MULTILINE)
-    # 9. 移除删除线（~~text~~）
-    cleaned = re.sub(r'~~', '', cleaned)
-    # 10. 移除表格分隔符（|）
-    cleaned = re.sub(r'\|', '', cleaned)
-    # 11. 移除分隔线（---、***）
-    cleaned = re.sub(r'^[-\*]{3,}\s*$', '', cleaned, flags=re.MULTILINE)
-    # 12. 移除所有空白字符
-    cleaned = re.sub(r'\s+', '', cleaned)
-
-    return len(cleaned)
+    """兼容旧调用，转发到统一投影模块。"""
+    return count_chinese_words(text)
 
 
 def _yuque_id_from_md(file_path: Path) -> Optional[int]:
@@ -425,27 +392,16 @@ class DocSyncer:
                     repo_index[str(yuque_id)] = rel_path
 
                 # 收集元数据（用于构建搜索索引）
-                book = detail.get("book", {})
-                body = detail.get("body", "") or detail.get("content", "") or ""
-                # 获取创建者 ID：user_id -> creator.id -> user.id
-                doc_creator_id = (
-                    detail.get("user_id") or
-                    (detail.get("creator") or {}).get("id") or
-                    (detail.get("user") or {}).get("id")
+                self.doc_metadata.append(
+                    build_doc_metadata(
+                        detail,
+                        rel_path=rel_path,
+                        author=author,
+                        fallback_title=title,
+                        fallback_slug=slug,
+                        fallback_namespace=namespace,
+                    )
                 )
-                self.doc_metadata.append({
-                    "yuque_id": yuque_id,
-                    "title": detail.get("title", title),
-                    "slug": detail.get("slug", slug),
-                    "author": author,
-                    "book_name": book.get("name", "") if book else "",
-                    "book_namespace": namespace,
-                    "creator_id": doc_creator_id,  # 添加创建者 ID
-                    "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-                    "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-                    "word_count": _count_chinese_words(body),  # 中文字数统计
-                    "file_path": rel_path,
-                })
 
                 stats["docs"] += 1
                 logger.debug(f"[Sync] 写入文档: {title}")
@@ -524,37 +480,7 @@ class DocSyncer:
 
     def _build_markdown(self, detail: Dict, author: str = "") -> str:
         """构建 Markdown 文件"""
-        book = detail.get("book", {})
-
-        # YAML frontmatter
-        fm = {
-            "id": detail.get("id"),
-            "title": detail.get("title", ""),
-            "slug": detail.get("slug", ""),
-            "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-            "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-        }
-        if author:
-            fm["author"] = author
-        if book.get("name"):
-            fm["book_name"] = book["name"]
-        if detail.get("description"):
-            fm["description"] = detail["description"]
-
-        # 存储 user_id 作为创建者 ID（creator_id 字段通常为 None）
-        creator_id = detail.get("user_id")
-        if creator_id:
-            fm["creator_id"] = creator_id
-
-        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-
-        # 正文
-        body = detail.get("body", "") or detail.get("content", "") or ""
-
-        # 元信息表格
-        meta_table = f"| 作者 | 创建时间 | 更新时间 |\n|------|----------|----------|\n| {author or '未知'} | {fm['created_at']} | {fm['updated_at']} |\n\n"
-
-        return f"---\n{yaml_block}\n---\n\n{meta_table}{body}"
+        return build_markdown(detail, author)
 
 
 async def sync_all_repos(
@@ -634,13 +560,13 @@ async def sync_all_repos(
     _write_global_index(output_dir, syncer.global_index)
 
     # 构建元数据索引（SQLite）
+    from .doc_index import DocIndex
+    db_path = output_dir.parent / "doc_index.db"
+    doc_index = DocIndex(str(db_path))
+    doc_index.clear()
     if syncer.doc_metadata:
-        from .doc_index import DocIndex
-        db_path = output_dir.parent / "doc_index.db"
-        doc_index = DocIndex(str(db_path))
-        doc_index.clear()
         doc_index.add_docs(syncer.doc_metadata)
-        logger.info(f"[Sync] 元数据索引完成: {len(syncer.doc_metadata)} 篇文档")
+    logger.info(f"[Sync] 元数据索引完成: {len(syncer.doc_metadata)} 篇文档")
 
     # 保存知识库列表（同时保存两份：一份在 docs 目录，一份在 data 根目录供工具读取）
     repos_file = output_dir / ".repos.json"

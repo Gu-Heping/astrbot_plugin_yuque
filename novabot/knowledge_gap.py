@@ -178,32 +178,16 @@ class LearningGapAnalyzer:
                 # 绑定信息中存的是 yuque_id，SQLite 中存的也是 yuque_id (creator_id)
                 creator_id = binding.get("yuque_id") if binding else None
 
-                conn = self.doc_index._get_conn()
-
-                # 优先用 creator_id 精确匹配
-                if creator_id:
-                    rows = conn.execute("""
-                        SELECT title, book_name, word_count
-                        FROM docs
-                        WHERE creator_id = ?
-                        ORDER BY word_count DESC
-                        LIMIT 20
-                    """, (creator_id,)).fetchall()
-                else:
-                    # 回退到精确名称匹配
-                    rows = conn.execute("""
-                        SELECT title, book_name, word_count
-                        FROM docs
-                        WHERE author = ?
-                        ORDER BY word_count DESC
-                        LIMIT 20
-                    """, (author_name,)).fetchall()
-
+                rows = self.doc_index.get_docs_by_creator_or_author(
+                    creator_id=creator_id,
+                    author_name=author_name,
+                    limit=20,
+                )
                 for row in rows:
                     docs.append({
-                        "title": row["title"] or "",
-                        "book_name": row["book_name"] or "",
-                        "word_count": row["word_count"] or 0,
+                        "title": row.get("title", "") or "",
+                        "book_name": row.get("book_name", "") or "",
+                        "word_count": row.get("word_count", 0) or 0,
                     })
 
             except Exception as e:

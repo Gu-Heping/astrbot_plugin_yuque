@@ -126,14 +126,12 @@ class LearningPathTool(BaseTool):
                 doc_index = self.get_doc_index()
                 if doc_index:
                     try:
-                        conn = doc_index._get_conn()
-                        rows = conn.execute("""
-                            SELECT title FROM docs
-                            WHERE creator_id = ?
-                            ORDER BY word_count DESC
-                            LIMIT 20
-                        """, (yuque_id,)).fetchall()
-                        user_docs = [{"title": r["title"]} for r in rows]
+                        rows = doc_index.get_docs_by_creator_or_author(
+                            creator_id=yuque_id,
+                            author_name="",
+                            limit=20,
+                        )
+                        user_docs = [{"title": r.get("title", "")} for r in rows]
                     except Exception:
                         pass
 

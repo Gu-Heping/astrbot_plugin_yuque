@@ -70,22 +70,13 @@ class ParseYuqueUrlTool(BaseTool):
             db_path = self.plugin.storage.data_dir / "doc_index.db"
 
             with DocIndex(str(db_path)) as doc_index:
-                conn = doc_index._get_conn()
-                # 通过 slug 精确匹配
-                rows = conn.execute("""
-                    SELECT title, author, book_name, book_namespace, file_path
-                    FROM docs
-                    WHERE slug = ?
-                    LIMIT 5
-                """, (doc_slug,)).fetchall()
-
+                rows = doc_index.find_docs_by_slug(doc_slug, limit=5)
                 if not rows:
                     return f"未找到 slug 为「{doc_slug}」的文档"
 
                 # 尝试匹配 namespace
                 matched_row = None
-                for row in rows:
-                    row_dict = dict(row)
+                for row_dict in rows:
                     book_ns = row_dict.get("book_namespace", "")
                     if namespace in book_ns or book_ns in namespace:
                         matched_row = row_dict
@@ -93,7 +84,7 @@ class ParseYuqueUrlTool(BaseTool):
 
                 # 没有精确匹配则用第一个
                 if not matched_row:
-                    matched_row = dict(rows[0])
+                    matched_row = rows[0]
 
                 file_path = matched_row.get("file_path")
                 title = matched_row.get("title", "未知")

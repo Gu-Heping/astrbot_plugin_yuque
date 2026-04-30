@@ -100,21 +100,7 @@ class KnowledgeBaseManager:
         Returns:
             [{author, doc_count, total_words}, ...]
         """
-        try:
-            from .doc_index import sqlite3
-            conn = self.doc_index._get_conn()
-            rows = conn.execute("""
-                SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
-                FROM docs
-                WHERE book_name = ? AND author != ''
-                GROUP BY author
-                ORDER BY doc_count DESC
-                LIMIT ?
-            """, (book_name, limit)).fetchall()
-            return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"[KB] 获取贡献者失败: {e}")
-            return []
+        return self.doc_index.get_kb_contributors(book_name, limit)
 
     def get_kb_recent_updates(self, book_name: str, limit: int = 10) -> list[dict]:
         """获取知识库最近更新
@@ -126,19 +112,7 @@ class KnowledgeBaseManager:
         Returns:
             [{title, author, updated_at}, ...]
         """
-        try:
-            conn = self.doc_index._get_conn()
-            rows = conn.execute("""
-                SELECT title, author, updated_at
-                FROM docs
-                WHERE book_name = ?
-                ORDER BY updated_at DESC
-                LIMIT ?
-            """, (book_name, limit)).fetchall()
-            return [dict(row) for row in rows]
-        except Exception as e:
-            logger.error(f"[KB] 获取最近更新失败: {e}")
-            return []
+        return self.doc_index.get_kb_recent_updates(book_name, limit)
 
     def get_kb_structure(self, book_name: str) -> Optional[dict]:
         """获取知识库目录结构
@@ -254,7 +228,6 @@ class KnowledgeBaseManager:
             return None
 
         try:
-            conn = self.doc_index._get_conn()
 
             # 模糊匹配知识库
             books = self.doc_index.list_books()
@@ -268,18 +241,9 @@ class KnowledgeBaseManager:
                 return None
 
             # 模糊匹配标题
-            rows = conn.execute("""
-                SELECT title, author, book_name, file_path
-                FROM docs
-                WHERE book_name = ? AND title LIKE ?
-                ORDER BY word_count DESC
-                LIMIT 1
-            """, (matched_book, f"%{title}%")).fetchall()
-
-            if not rows:
+            row = self.doc_index.find_doc_for_book_by_title(matched_book, title)
+            if not row:
                 return None
-
-            row = dict(rows[0])  # 转换为 dict 以支持 .get()
             file_path = row.get("file_path")
 
             if not file_path:
@@ -447,46 +411,14 @@ class KnowledgeBaseManager:
                 "total_updates": int,
             }
         """
-        try:
-            conn = self.doc_index._get_conn()
-
-            # 计算起始日期
-            since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-
-            # 本周更新的文档数
-            docs_updated = conn.execute("""
-                SELECT COUNT(*) as count
-                FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?)
-            """, (book_name, since)).fetchone()
-
-            # 本周活跃贡献者
-            active_rows = conn.execute("""
-                SELECT author, COUNT(*) as doc_count
-                FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?) AND author != ''
-                GROUP BY author
-                ORDER BY doc_count DESC
-                LIMIT 10
-            """, (book_name, since)).fetchall()
-
-            docs_count = dict(docs_updated)["count"] if docs_updated else 0
-
-            return {
-                "period_days": days,
-                "docs_updated": docs_count,
-                "active_contributors": [dict(row) for row in active_rows],
-                "since_date": since,
-            }
-
-        except Exception as e:
-            logger.error(f"[KB] 获取活跃度失败: {e}")
-            return {
-                "period_days": days,
-                "docs_updated": 0,
-                "active_contributors": [],
-                "since_date": "",
-            }
+        since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        activity = self.doc_index.get_book_activity(book_name, since_date=since, limit=10)
+        return {
+            "period_days": days,
+            "docs_updated": activity.get("docs_updated", 0),
+            "active_contributors": activity.get("active_contributors", []),
+            "since_date": since,
+        }
 
     def get_kb_sample_docs(self, book_name: str, limit: int = 5) -> list[dict]:
         """获取知识库代表性文档（用于 Agent 分析）
@@ -521,15 +453,9 @@ class KnowledgeBaseManager:
         # 如果不够，补充字数最多的文档
         if len(sample_docs) < limit:
             try:
-                conn = self.doc_index._get_conn()
-                rows = conn.execute("""
-                    SELECT title, author, word_count
-                    FROM docs
-                    WHERE book_name = ? AND word_count > 100
-                    ORDER BY word_count DESC
-                    LIMIT ?
-                """, (book_name, limit - len(sample_docs))).fetchall()
-
+                rows = self.doc_index.get_top_docs_by_word_count(
+                    book_name, limit=limit - len(sample_docs), min_words=100
+                )
                 for row in rows:
                     if row["title"] not in seen_titles:
                         # 通过 RAG 获取内容

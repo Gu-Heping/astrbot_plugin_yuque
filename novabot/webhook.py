@@ -10,13 +10,12 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
-import yaml
-
 from astrbot.api import logger
 
+from .doc_projection import build_doc_metadata, build_markdown
 from .git_ops import GitOps
 from .rag import RAGEngine
-from .sync import toc_list_children, _count_chinese_words
+from .sync import toc_list_children
 from .yuque_client import YuqueClient
 
 if TYPE_CHECKING:
@@ -55,9 +54,8 @@ async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
                         del _doc_locks[old_id]
                         break
                 else:
-                    # 所有锁都被持有，强制删除第一个（不太可能发生）
-                    if _doc_locks:
-                        _doc_locks.pop(next(iter(_doc_locks)))
+                    # 所有锁都被持有时，不破坏锁语义，直接复用现有池并继续创建当前锁。
+                    logger.warning("[Webhook] 锁池已满且均在使用，跳过锁回收")
 
             _doc_locks[doc_id] = asyncio.Lock()
         return _doc_locks[doc_id]
@@ -685,35 +683,7 @@ class WebhookHandler:
 
         # 优先使用团队成员真实姓名
         author = self._match_creator_name(detail) or self._resolve_author(detail)
-        book = detail.get("book", {})
-        fm = {
-            "id": detail.get("id", 0),
-            "title": detail.get("title", "无标题"),
-            "slug": detail.get("slug", ""),
-            "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-            "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-        }
-        if author:
-            fm["author"] = author
-        if book.get("name"):
-            fm["book_name"] = book["name"]
-        if detail.get("description"):
-            fm["description"] = detail["description"]
-
-        # 存储 creator_id 用于精确匹配
-        creator_id = detail.get("user_id") or detail.get("creator_id")
-        if creator_id:
-            fm["creator_id"] = creator_id
-
-        yaml_block = yaml.dump(fm, allow_unicode=True, default_flow_style=False, sort_keys=False).strip()
-        body = detail.get("body", "") or detail.get("content", "") or ""
-        meta_table = (
-            "| 作者 | 创建时间 | 更新时间 |\n"
-            "|------|----------|----------|\n"
-            f"| {author or '未知'} | {fm['created_at']} | {fm['updated_at']} |\n\n"
-        )
-
-        content = f"---\n{yaml_block}\n---\n\n{meta_table}{body}"
+        content = build_markdown(detail, author)
         out_file.write_text(content, encoding="utf-8")
         logger.info(f"[Webhook] 写入文件: {out_file.relative_to(self.docs_dir)}")
 
@@ -747,29 +717,12 @@ class WebhookHandler:
 
         try:
             with DocIndex(str(db_path)) as doc_index:
-                book = detail.get("book", {})
-                body = detail.get("body", "") or detail.get("content", "") or ""
                 # 优先使用团队成员真实姓名（创建者）
                 author = self._match_creator_name(detail) or self._resolve_author(detail)
-
-                # 获取创建者 ID
-                creator_id = detail.get("user_id") or detail.get("creator_id")
-                if creator_id is None:
+                metadata = build_doc_metadata(detail, rel_path=rel_path, author=author)
+                if metadata.get("creator_id") is None:
                     logger.warning(f"[Webhook] 文档缺少 creator_id: {detail.get('title', '')} (user_id={detail.get('user_id')}, creator_id={detail.get('creator_id')})")
-
-                doc_index.add_doc({
-                    "yuque_id": detail.get("id"),
-                    "title": detail.get("title", ""),
-                    "slug": detail.get("slug", ""),
-                    "author": author,
-                    "book_name": book.get("name", "") if book else "",
-                    "book_namespace": book.get("namespace", "") if book else "",
-                    "creator_id": creator_id,
-                    "created_at": YuqueClient.normalize_timestamp(detail.get("created_at")),
-                    "updated_at": YuqueClient.normalize_timestamp(detail.get("updated_at")),
-                    "word_count": _count_chinese_words(body),  # 中文字数统计
-                    "file_path": rel_path,
-                })
+                doc_index.add_doc(metadata)
 
             logger.info(f"[Webhook] 更新索引: {detail.get('title', '')}")
         except Exception as e:
