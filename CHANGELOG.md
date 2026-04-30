@@ -4,6 +4,19 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.29.1] - 2026-04-30
+
+### 修复
+- **Token 重复计费**：统一为 Agent 的“预留 + 实际校正”路径，避免 `on_llm_response` 二次记账导致额度提前耗尽。
+- **语雀默认地址不一致**：对齐默认 `yuque_base_url` 为 `https://www.yuque.com/api/v2`，降低新安装配置误差风险。
+- **0 文档同步残留**：全量同步后无论文档数量是否为 0，都对齐 SQLite 与 RAG 状态，避免搜到已删除旧内容。
+- **Webhook 并发锁竞态**：锁池满且锁均持有时不再强删锁对象，避免潜在并发互斥失效。
+
+### 改进
+- **分层边界收敛**：为 `DocIndex` 与 `TokenLimiter` 增加公开接口，移除跨模块私有字段/私有连接访问。
+- **同步链路复用**：新增统一文档投影模块，复用 Markdown/frontmatter/metadata 构建逻辑，减少全量与增量实现漂移。
+- **主入口解耦**：抽离同步后处理流程，降低 `main.py` 复杂度；移除未接线的 `WebhookQueue` 实例化。
+
 ## [v0.29.0] - 2026-04-10
 
 ### 新增

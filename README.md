@@ -38,7 +38,7 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | 配置项 | 说明 |
 |--------|------|
 | `yuque_token` | 语雀团队 Token（必需） |
-| `yuque_base_url` | 语雀 API 地址，默认 `https://nova.yuque.com/api/v2` |
+| `yuque_base_url` | 语雀 API 地址，默认 `https://www.yuque.com/api/v2` |
 | `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
@@ -268,6 +268,7 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.29.1 | 修复 Token 重复计费、0 文档同步残留与默认地址不一致，收敛同步链路分层 |
 | v0.29.0 | 群聊发送者识别、群聊幻觉修复、Token 限额可配置 |
 | v0.28.0 | Agent 智能化升级：指令改用 Agent 处理、智能推荐权重优化 |
 | v0.27.0 | 成员轨迹、协作网络、主动关心机制 |

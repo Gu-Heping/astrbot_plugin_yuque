@@ -36,7 +36,7 @@ from .novabot.memory import ConversationMemory, MemberTrajectory, CollaborationN
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.29.0")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.29.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -139,7 +139,7 @@ class NovaBotPlugin(Star):
             self._get_doc_index(), self.rag, self.storage.docs_dir
         )
 
-        logger.info("NovaBot 插件初始化完成 (v0.29.0)")
+        logger.info("NovaBot 插件初始化完成 (v0.29.1)")
 
         # 注册 FunctionTool
         self._register_tools()
