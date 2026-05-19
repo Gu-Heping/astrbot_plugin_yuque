@@ -30,13 +30,14 @@ from .novabot.sync_workflow import run_post_sync_workflow
 from .novabot.tools import ALL_TOOLS
 from .novabot.knowledge_base import KnowledgeBaseManager
 from .novabot.memory import ConversationMemory, MemberTrajectory, CollaborationNetwork
+from .novabot import group_reply_gate
 
 
 # ============================================================================
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.29.2")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.29.3")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -57,6 +58,12 @@ class NovaBotPlugin(Star):
         self.wake_words = [w.strip().lower() for w in wake_words_str.split(",") if w.strip()]
         self.enable_private_chat = config.get("enable_private_chat", True)
         self.enable_group_at = config.get("enable_group_at", True)
+        self.group_reply_mode = config.get("group_reply_mode", "trigger")
+        if self.group_reply_mode not in ("trigger", "smart"):
+            logger.warning(
+                f"[Config] group_reply_mode 无效值 {self.group_reply_mode!r}，回退为 trigger"
+            )
+            self.group_reply_mode = "trigger"
 
         # 获取插件数据目录（AstrBot 标准路径，使用 self.name）
         # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
@@ -139,7 +146,7 @@ class NovaBotPlugin(Star):
             self._get_doc_index(), self.rag, self.storage.docs_dir
         )
 
-        logger.info("NovaBot 插件初始化完成 (v0.29.2)")
+        logger.info("NovaBot 插件初始化完成 (v0.29.3)")
 
         # 注册 FunctionTool
         self._register_tools()
@@ -562,7 +569,8 @@ class NovaBotPlugin(Star):
 
         消息路由规则：
         - 私聊：直接响应（可配置）
-        - 群聊：需要 @ 或唤醒词触发
+        - 群聊 trigger 模式：需要 @ 或唤醒词触发
+        - 群聊 smart 模式：非显式消息经守门判断是否回复
         - 命令消息：跳过，让命令处理器处理
         """
         msg = event.message_str.strip()
@@ -572,12 +580,21 @@ class NovaBotPlugin(Star):
             return
 
         # 判断是否应该处理这条消息
-        should_handle, query = self._should_handle_message(event, msg)
+        should_handle, query, trigger = self._should_handle_message(event, msg)
         if not should_handle:
             return  # 不处理，让其他插件处理
 
+        # 智能旁听：由守门模块决定是否回复
+        if trigger == "smart":
+            should_reply, gate_reason = await group_reply_gate.should_reply(
+                event, query, self
+            )
+            if not should_reply:
+                logger.info(f"[on_message] 智能旁听跳过: {gate_reason}")
+                return
+
         # 处理消息
-        logger.info(f"[on_message] 处理消息: {query[:30]}...")
+        logger.info(f"[on_message] 处理消息 ({trigger}): {query[:30]}...")
         try:
             response = await self.agent.handle_message(event, query)
             yield event.plain_result(response)
@@ -611,15 +628,16 @@ class NovaBotPlugin(Star):
         """判断是否应该处理这条消息
 
         Returns:
-            (should_handle, processed_query)
+            (should_handle, processed_query, trigger)
+            trigger: "at" | "wake" | "smart" | "private" | ""
         """
         is_group = event.get_group_id() is not None
 
         if is_group:
-            # 群聊：检查 @ 或唤醒词
+            # 群聊：显式 @ 触发
             if self.enable_group_at and self._is_at_me(event):
-                logger.info(f"[on_message] 检测到 @ 触发")
-                return True, self._remove_at(event, msg)
+                logger.info("[on_message] 检测到 @ 触发")
+                return True, self._remove_at(event, msg), "at"
 
             import re
             for wake in self.wake_words:
@@ -627,22 +645,29 @@ class NovaBotPlugin(Star):
                 pattern = rf'^{re.escape(wake)}[\s,，:：]*'
                 if re.match(pattern, msg.lower()):
                     logger.info(f"[on_message] 检测到唤醒词: {wake}")
-                    return True, re.sub(pattern, '', msg, count=1, flags=re.IGNORECASE).strip()
+                    processed = re.sub(
+                        pattern, "", msg, count=1, flags=re.IGNORECASE
+                    ).strip()
+                    return True, processed, "wake"
 
-            # 群聊中没有触发条件，不处理
-            return False, ""
+            # 智能旁听候选
+            if self.group_reply_mode == "smart":
+                return True, msg, "smart"
+
+            return False, "", ""
         else:
             # 私聊：直接响应（可配置）
             if self.enable_private_chat:
-                return True, msg
-            else:
-                # 也需要唤醒词
-                import re
-                for wake in self.wake_words:
-                    pattern = rf'^{re.escape(wake)}[\s,，:：]*'
-                    if re.match(pattern, msg.lower()):
-                        return True, re.sub(pattern, '', msg, count=1, flags=re.IGNORECASE).strip()
-                return False, ""
+                return True, msg, "private"
+            import re
+            for wake in self.wake_words:
+                pattern = rf'^{re.escape(wake)}[\s,，:：]*'
+                if re.match(pattern, msg.lower()):
+                    processed = re.sub(
+                        pattern, "", msg, count=1, flags=re.IGNORECASE
+                    ).strip()
+                    return True, processed, "wake"
+            return False, "", ""
 
     def _is_at_me(self, event: AstrMessageEvent) -> bool:
         """检查是否 @ 了机器人"""

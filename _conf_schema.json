@@ -44,6 +44,12 @@
     "default": true,
     "hint": "开启后，@NovaBot 可触发对话"
   },
+  "group_reply_mode": {
+    "description": "群聊回复模式",
+    "type": "string",
+    "default": "trigger",
+    "hint": "trigger：仅 @ 或唤醒词触发；smart：群消息智能旁听，由 Bot 自行决定是否回复（活跃群慎用）"
+  },
   "webhook_enabled": {
     "description": "启用 Webhook 服务（实时同步语雀文档变更）",
     "type": "bool",

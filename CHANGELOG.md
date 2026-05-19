@@ -4,6 +4,12 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.29.3] - 2026-05-19
+
+### 新增
+- **群聊智能旁听**：配置 `group_reply_mode=smart` 时，非 @/唤醒词的群消息经规则预过滤 + 轻量 LLM 守门，由 Bot 自行决定是否回复；默认 `trigger` 行为不变。
+- **守门 Token 统计**：新增 `group_reply_gate` 功能项，便于 `/tokens` 观测旁听成本。
+
 ## [v0.29.2] - 2026-05-19
 
 ### 新增

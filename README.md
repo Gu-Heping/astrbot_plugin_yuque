@@ -65,6 +65,7 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `wake_words` | 唤醒词（默认：novabot,nova,诺瓦） |
 | `enable_private_chat` | 私聊直接响应（默认 true） |
 | `enable_group_at` | 群聊 @ 触发（默认 true） |
+| `group_reply_mode` | 群聊回复模式：`trigger`（默认，仅 @/唤醒词）或 `smart`（智能旁听，Bot 自行决定是否回复） |
 
 ### 智能推送
 
@@ -143,7 +144,8 @@ NovaBot: 好嘞～以后会更活泼地和你聊天！
 ### 触发方式
 
 - **私聊**：直接发消息即可（可配置关闭）
-- **群聊**：需要 @NovaBot 或使用唤醒词（如 `nova 帮我找文档`）
+- **群聊（`group_reply_mode=trigger`，默认）**：需要 @NovaBot 或使用唤醒词（如 `nova 帮我找文档`）
+- **群聊（`group_reply_mode=smart`）**：@ 与唤醒词仍必回；其余群消息由 Bot 判断是否介入（水群短句、闲聊通常静默；学习/知识类问题可能自动回复）。活跃群慎用。
 
 ---
 
