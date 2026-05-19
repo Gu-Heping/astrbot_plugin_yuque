@@ -75,19 +75,61 @@ class ListRepoDocsTool(BaseTool):
     })
     plugin: Any = None
 
-    def _build_toc_tree(self, toc_list: list, parent_uuid: str = "") -> list:
+    def _build_slug_path_maps(self, doc_index, book_name: str) -> tuple[dict, dict]:
+        """从索引构建 slug/title -> file_path 映射"""
+        slug_map: dict[str, str] = {}
+        title_map: dict[str, dict] = {}
+        if not doc_index or not book_name:
+            return slug_map, title_map
+        try:
+            docs = doc_index.search(book=book_name, limit=500)
+            for doc in docs:
+                slug = doc.get("slug", "")
+                title = doc.get("title", "")
+                fp = doc.get("file_path", "")
+                author = doc.get("author", "")
+                if slug and fp:
+                    slug_map[slug] = fp
+                if title:
+                    title_map[title] = {"slug": slug, "file_path": fp, "author": author}
+        except Exception as e:
+            logger.debug(f"构建 slug/path 映射失败: {e}")
+        return slug_map, title_map
+
+    def _build_toc_tree(
+        self,
+        toc_list: list,
+        parent_uuid: str = "",
+        slug_map: dict | None = None,
+        title_map: dict | None = None,
+    ) -> list:
         """构建 TOC 树形结构"""
+        slug_map = slug_map or {}
+        title_map = title_map or {}
         children = []
         for item in toc_list:
             if (item.get("parent_uuid") or "") == parent_uuid:
+                title = item.get("title", "无标题")
+                doc_type = item.get("type", "DOC")
+                slug = item.get("slug") or item.get("url", "") or ""
+                file_path = ""
+                if doc_type == "DOC":
+                    file_path = slug_map.get(slug, "")
+                    if not file_path and title in title_map:
+                        file_path = title_map[title].get("file_path", "")
+                        if not slug:
+                            slug = title_map[title].get("slug", "")
                 node = {
-                    "title": item.get("title", "无标题"),
-                    "type": item.get("type", "DOC"),
-                    "slug": item.get("slug") or item.get("url", ""),
+                    "title": title,
+                    "type": doc_type,
+                    "slug": slug,
+                    "file_path": file_path,
                     "depth": item.get("depth", 1),
                 }
                 child_uuid = item.get("uuid", "")
-                sub_children = self._build_toc_tree(toc_list, child_uuid)
+                sub_children = self._build_toc_tree(
+                    toc_list, child_uuid, slug_map, title_map
+                )
                 if sub_children:
                     node["children"] = sub_children
                 children.append(node)
@@ -106,7 +148,18 @@ class ListRepoDocsTool(BaseTool):
             author_hint = ""
             if doc_type == "DOC" and author_map.get(title):
                 author_hint = f" (by {author_map[title]})"
-            lines.append(f"{indent}{icon} {title}{type_hint}{author_hint}")
+            path_hint = ""
+            if doc_type == "DOC":
+                parts = []
+                slug = node.get("slug", "")
+                fp = node.get("file_path", "")
+                if slug:
+                    parts.append(f"slug={slug}")
+                if fp:
+                    parts.append(f"path={fp}")
+                if parts:
+                    path_hint = f" [{', '.join(parts)}]"
+            lines.append(f"{indent}{icon} {title}{type_hint}{author_hint}{path_hint}")
             if node.get("children"):
                 lines.extend(self._format_tree(node["children"], author_map, indent + "  "))
         return lines
@@ -155,32 +208,33 @@ class ListRepoDocsTool(BaseTool):
                 available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
             return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
 
-        # 准备作者信息（从 SQLite 索引）
+        # 准备作者与 slug/path 映射（从 SQLite 索引）
         author_map = {}
+        slug_map = {}
+        title_map = {}
         doc_index = self.get_doc_index()
+        book_name = matched_repo.get("name", "") if matched_repo else repo_name
         if doc_index:
             try:
-                book_name = matched_repo.get("name", "") if matched_repo else repo_name
-                docs = doc_index.search(book=book_name, limit=200)
-                for doc in docs:
-                    title = doc.get("title", "")
-                    author = doc.get("author", "")
-                    if title and author:
-                        author_map[title] = author
+                slug_map, title_map = self._build_slug_path_maps(doc_index, book_name)
+                for title, info in title_map.items():
+                    if info.get("author"):
+                        author_map[title] = info["author"]
             except Exception as e:
-                logger.debug(f"从 SQLite 读取作者信息失败: {e}")
+                logger.debug(f"从 SQLite 读取文档映射失败: {e}")
 
         # 从 TOC 读取层级结构
         toc_file = matched_dir / ".toc.json"
         if toc_file.exists():
             try:
                 toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
-                tree = self._build_toc_tree(toc_list)
+                tree = self._build_toc_tree(toc_list, slug_map=slug_map, title_map=title_map)
                 lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 目录结构:\n"]
                 lines.extend(self._format_tree(tree, author_map))
                 doc_count = sum(1 for item in toc_list if item.get("type") == "DOC")
                 title_count = sum(1 for item in toc_list if item.get("type") == "TITLE")
                 lines.append(f"\n共 {doc_count} 篇文档, {title_count} 个分组")
+                lines.append("💡 DOC 节点后的 path 可用于 read_doc 或 get_doc_details")
                 return "\n".join(lines)
             except Exception as e:
                 logger.warning(f"读取 TOC 失败: {e}")

@@ -481,6 +481,28 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取所有文档失败: {e}")
             return []
 
+    def find_doc_by_file_path(self, file_path: str) -> Optional[Dict]:
+        """按本地相对路径查询文档（精确匹配优先）"""
+        if not file_path:
+            return None
+        path = file_path.replace("\\", "/").lstrip("/")
+        try:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT * FROM docs WHERE file_path = ?",
+                (path,),
+            ).fetchone()
+            if row:
+                return dict(row)
+            row = conn.execute(
+                "SELECT * FROM docs WHERE file_path LIKE ? LIMIT 1",
+                (f"%{path}",),
+            ).fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 按路径查询失败: {e}")
+            return None
+
     def find_docs_by_slug(self, slug: str, limit: int = 5) -> List[Dict]:
         """按 slug 查询文档（用于链接解析）"""
         if not slug:
@@ -489,7 +511,7 @@ class DocIndex:
             conn = self._get_conn()
             rows = conn.execute(
                 """
-                SELECT title, author, book_name, book_namespace, file_path
+                SELECT *
                 FROM docs
                 WHERE slug = ?
                 LIMIT ?

@@ -48,7 +48,9 @@ DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
 - 用户: "我想学爬虫，怎么入门" → 调用 learning_path 或 generate_knowledge_card
 - 用户: "看看社团里有哪些作者" → 调用 list_authors
 - 用户: "张三写过哪些文档" → 调用 search_docs 按作者筛选
-- 用户: "https://nova.yuque.com/xxx/yyy/zzz" → 调用 parse_yuque_url 解析链接并读取文档
+- 用户: "https://nova.yuque.com/xxx/yyy/zzz" → 调用 parse_yuque_url 或 get_doc_details(url=...)
+- 用户: "这篇文档的完整信息/链接/字数" → 调用 get_doc_details（include_content 按需）
+- 用户: "某知识库目录结构" → 调用 list_repo_docs（含 slug 与 path）
 - 用户: "推荐学习伙伴" → 调用 partner_recommend
 - 用户: "谁也在学爬虫" → 调用 partner_recommend（指定 topic="爬虫"）
 - 用户: "本周周报" → 调用 weekly_report

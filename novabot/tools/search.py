@@ -11,7 +11,16 @@ from typing import Any
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from ..doc_utils import (
+    doc_record_to_public_dict,
+    parse_yuque_doc_url,
+    read_document_content,
+)
 from .base import BaseTool
+
+
+def _api_base_url(plugin) -> str:
+    return getattr(plugin, "yuque_base_url", "https://www.yuque.com/api/v2")
 
 
 @dataclass
@@ -32,100 +41,63 @@ class ParseYuqueUrlTool(BaseTool):
     })
     plugin: Any = None
 
-    def _parse_yuque_url(self, url: str) -> tuple[str, str] | None:
-        """解析语雀链接，提取 namespace 和 doc_slug
-
-        Args:
-            url: 语雀链接
-
-        Returns:
-            (namespace, doc_slug) 或 None
-        """
-        # 匹配格式: https://xxx.yuque.com/{namespace}/{doc_slug}
-        # namespace 可能是 user/repo 或 group/repo 形式
-        pattern = r'https?://[\w-]+\.yuque\.com/([\w-]+/[\w-]+)/([\w-]+)'
-        match = re.match(pattern, url)
-        if match:
-            namespace = match.group(1)
-            doc_slug = match.group(2)
-            return namespace, doc_slug
-        return None
-
     async def run(self, event: AstrMessageEvent, url: str) -> str:
         docs_dir = self.get_docs_dir()
         if not docs_dir.exists():
             return "文档目录不存在，请先执行 /sync 同步"
 
-        # 解析链接
-        parsed = self._parse_yuque_url(url)
+        parsed = parse_yuque_doc_url(url)
         if not parsed:
             return f"无法解析语雀链接格式: {url}\n期望格式: https://xxx.yuque.com/namespace/doc-slug"
 
         namespace, doc_slug = parsed
         logger.info(f"[parse_yuque_url] 解析链接: namespace={namespace}, slug={doc_slug}")
 
-        # 从 SQLite 查找文档
+        doc_index = self.get_doc_index()
+        if not doc_index:
+            return "元数据索引不存在，请先执行 /sync 同步"
+
         try:
-            from ..doc_index import DocIndex
-            db_path = self.plugin.storage.data_dir / "doc_index.db"
+            rows = doc_index.find_docs_by_slug(doc_slug, limit=5)
+            if not rows:
+                return f"未找到 slug 为「{doc_slug}」的文档"
 
-            with DocIndex(str(db_path)) as doc_index:
-                rows = doc_index.find_docs_by_slug(doc_slug, limit=5)
-                if not rows:
-                    return f"未找到 slug 为「{doc_slug}」的文档"
-
-                # 尝试匹配 namespace
-                matched_row = None
-                for row_dict in rows:
-                    book_ns = row_dict.get("book_namespace", "")
-                    if namespace in book_ns or book_ns in namespace:
-                        matched_row = row_dict
-                        break
-
-                # 没有精确匹配则用第一个
-                if not matched_row:
-                    matched_row = rows[0]
-
-                file_path = matched_row.get("file_path")
-                title = matched_row.get("title", "未知")
-                author = matched_row.get("author", "")
-                book_name = matched_row.get("book_name", "")
-
-                if not file_path:
-                    return f"文档记录存在但缺少文件路径: {title}"
-
-                # 读取文档内容
-                doc_file = docs_dir / file_path
-                if not doc_file.exists():
-                    return f"文档文件不存在: {file_path}"
-
-                content = doc_file.read_text(encoding="utf-8")
-
-                # 去掉 YAML frontmatter
-                if content.startswith("---"):
-                    parts = content.split("---", 2)
-                    if len(parts) >= 3:
-                        content = parts[2].strip()
-
-                # 去掉元信息表格
-                lines = content.split('\n')
-                content_start = 0
-                for i, line in enumerate(lines):
-                    stripped = line.strip()
-                    if not stripped:
-                        content_start = i + 1
-                        continue
-                    if stripped.startswith('|') or re.match(r'^\|[-:\s|]+\|$', stripped):
-                        content_start = i + 1
-                        continue
+            matched_row = None
+            for row_dict in rows:
+                book_ns = row_dict.get("book_namespace", "")
+                if namespace in book_ns or book_ns in namespace:
+                    matched_row = row_dict
                     break
-                content = '\n'.join(lines[content_start:]).strip()
+            if not matched_row:
+                matched_row = rows[0]
 
-                # 截断过长内容
-                if len(content) > 5000:
-                    content = content[:5000] + "\n\n... (文档过长，已截断)"
+            pub = doc_record_to_public_dict(matched_row, _api_base_url(self.plugin))
+            file_path = matched_row.get("file_path")
+            if not file_path:
+                return f"文档记录存在但缺少文件路径: {pub['title']}"
 
-                return f"📄 《{title}》\n作者：{author}\n知识库：{book_name}\n\n{content}"
+            doc_file = docs_dir / file_path
+            if not doc_file.exists():
+                return f"文档文件不存在: {file_path}"
+
+            content_info = read_document_content(doc_file, offset=0, limit=8000, strip_metadata=True)
+            body = content_info["content"]
+            meta_lines = [
+                f"📄 《{pub['title']}》",
+                f"链接：{pub.get('url') or url}",
+                f"作者：{pub.get('author') or '未知'}",
+                f"知识库：{pub.get('book_name') or ''}",
+                f"创建：{pub.get('created_at') or '未知'}",
+                f"更新：{pub.get('updated_at') or '未知'}",
+                f"字数：{pub.get('word_count') or 0}",
+            ]
+            if content_info.get("has_more"):
+                meta_lines.append(
+                    f"正文：已返回 {content_info['returned_chars']}/{content_info['total_chars']} 字，"
+                    f"继续阅读请调用 get_doc_details(path=\"{file_path}\", include_content=true, content_offset={content_info['next_offset']})"
+                )
+            meta_lines.extend(["", body])
+            return "\n".join(meta_lines)
 
         except Exception as e:
             logger.error(f"[parse_yuque_url] 查找文档失败: {e}")
@@ -290,20 +262,45 @@ class ReadDocTool(BaseTool):
     """读取文档工具"""
 
     name: str = "read_doc"
-    description: str = "读取指定路径的文档完整内容。先用 grep_local_docs 找到相关文档，然后用这个工具读取完整内容。"
+    description: str = (
+        "读取指定路径的文档内容。先用 grep_local_docs 或 search_docs 获取 path。"
+        "长文可用 offset/limit 分页；strip_metadata=false 时保留 frontmatter。"
+    )
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "文档路径（grep 结果中的路径）"
-            }
+                "description": "文档路径（grep 或 search_docs 返回的 file_path）"
+            },
+            "offset": {
+                "type": "integer",
+                "description": "正文起始字符偏移，默认 0",
+                "default": 0,
+            },
+            "limit": {
+                "type": "integer",
+                "description": "最大返回字符数，默认 12000，最大 20000",
+                "default": 12000,
+            },
+            "strip_metadata": {
+                "type": "boolean",
+                "description": "是否去掉 frontmatter 与元信息表，默认 true",
+                "default": True,
+            },
         },
         "required": ["path"]
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, path: str) -> str:
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        path: str,
+        offset: int = 0,
+        limit: int = 12000,
+        strip_metadata: bool = True,
+    ) -> str:
         docs_dir = self.get_docs_dir()
         doc_file = docs_dir / path
 
@@ -314,10 +311,31 @@ class ReadDocTool(BaseTool):
             return "非法路径"
 
         try:
-            content = doc_file.read_text(encoding="utf-8")
-            if len(content) > 8000:
-                content = content[:8000] + "\n\n... (文档过长，已截断)"
-            return f"📄 文档内容:\n\n{content}"
+            safe_limit = min(max(limit, 1), 20000)
+            if strip_metadata:
+                info = read_document_content(
+                    doc_file, offset=offset, limit=safe_limit, strip_metadata=True
+                )
+                header = [f"📄 文档: {path}"]
+                if info.get("has_more"):
+                    header.append(
+                        f"（正文 {info['returned_chars']}/{info['total_chars']} 字，"
+                        f"offset={info['offset']}；继续: read_doc(path=\"{path}\", offset={info['next_offset']})）"
+                    )
+                elif info["total_chars"] > 0:
+                    header.append(f"（全文共 {info['total_chars']} 字）")
+                header.append("")
+                return "\n".join(header) + info["content"]
+
+            raw = doc_file.read_text(encoding="utf-8")
+            total = len(raw)
+            chunk = raw[offset : offset + safe_limit]
+            has_more = offset + len(chunk) < total
+            lines = [f"📄 文档: {path}（原始文件 {len(chunk)}/{total} 字，offset={offset}）"]
+            if has_more:
+                lines.append(f"继续: read_doc(path=\"{path}\", offset={offset + len(chunk)}, strip_metadata=false)")
+            lines.extend(["", chunk])
+            return "\n".join(lines)
         except Exception as e:
             return f"读取失败: {e}"
 

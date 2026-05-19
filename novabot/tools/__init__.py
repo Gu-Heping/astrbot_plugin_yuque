@@ -10,7 +10,7 @@ from .search import (
     KnowledgeCardTool,
     ParseYuqueUrlTool,
 )
-from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool
+from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool, GetDocDetailsTool
 from .repo import ListKnowledgeBasesTool, ListRepoDocsTool
 from .persona import SetPreferenceTool
 from .natural_language import (
@@ -51,6 +51,7 @@ __all__ = [
     "SearchDocsTool",
     "ListAuthorsTool",
     "DocStatsTool",
+    "GetDocDetailsTool",
     # 知识库工具
     "ListKnowledgeBasesTool",
     "ListRepoDocsTool",
@@ -90,6 +91,7 @@ ALL_TOOLS = [
     SearchDocsTool,
     ListAuthorsTool,
     DocStatsTool,
+    GetDocDetailsTool,
     ListKnowledgeBasesTool,
     ListRepoDocsTool,
     SetPreferenceTool,
