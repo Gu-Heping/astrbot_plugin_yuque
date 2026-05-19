@@ -48,7 +48,9 @@
     "description": "群聊回复模式",
     "type": "string",
     "default": "trigger",
-    "hint": "trigger：仅 @ 或唤醒词触发；smart：群消息智能旁听，由 Bot 自行决定是否回复（活跃群慎用）"
+    "options": ["trigger", "smart"],
+    "labels": ["仅 @/唤醒词（默认）", "智能旁听（Bot 自行决定是否回复）"],
+    "hint": "智能旁听适合小群/答疑群；活跃群慎用，可能增加 Token 消耗"
   },
   "webhook_enabled": {
     "description": "启用 Webhook 服务（实时同步语雀文档变更）",
