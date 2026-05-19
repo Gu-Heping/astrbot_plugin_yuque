@@ -4,6 +4,19 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.29.2] - 2026-05-19
+
+### 新增
+- **`get_doc_details` 工具**：按 `title` / `path` / `yuque_id` / `url` 获取单篇文档完整元数据（含语雀链接、创建/更新时间、字数），可选附带正文并支持 `content_offset` / `content_limit` 分页。
+- **`doc_utils` 模块**：统一语雀 URL 构建与解析、Markdown 正文分页读取，供多个工具复用。
+
+### 改进
+- **`search_docs`**：结果增加 `yuque_id`、`slug`、完整创建/更新时间、语雀链接等字段。
+- **`read_doc`**：支持 `offset` / `limit` 分页（默认 12000 字，最大 20000），返回总字数与续读指引；可选 `strip_metadata` 保留 frontmatter。
+- **`parse_yuque_url`**：返回链接、时间、字数等元数据；长文提示通过 `get_doc_details` 续读；支持带 query/anchor 的链接。
+- **`list_repo_docs`**：TOC 文档节点附带 `slug` 与 `file_path`，便于 Agent 直接调用 `read_doc` / `get_doc_details`。
+- **`DocIndex`**：新增 `find_doc_by_file_path`；`find_docs_by_slug` 返回完整记录列。
+
 ## [v0.29.1] - 2026-04-30
 
 ### 修复

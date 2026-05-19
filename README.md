@@ -216,12 +216,13 @@ NovaBot 为 AI 提供以下工具（自动调用）：
 |------|------|
 | `search_knowledge_base` | RAG 语义搜索 |
 | `grep_local_docs` | 关键词精确匹配 |
-| `read_doc` | 读取完整文档 |
-| `parse_yuque_url` | 解析语雀链接 |
-| `search_docs` | 按作者/知识库/标题筛选 |
+| `read_doc` | 读取文档正文（支持 offset/limit 分页） |
+| `get_doc_details` | 获取单篇文档完整元数据与可选正文 |
+| `parse_yuque_url` | 解析语雀链接并读取内容与元数据 |
+| `search_docs` | 按作者/知识库/标题筛选（含链接、时间、字数） |
 | `list_authors` | 列出所有作者 |
 | `list_knowledge_bases` | 列出知识库 |
-| `list_repo_docs` | 知识库目录结构 |
+| `list_repo_docs` | 知识库目录结构（含 slug、path） |
 | `doc_stats` | 文档统计 |
 | `generate_knowledge_card` | 生成知识卡片 |
 | `set_preference` | 设置用户偏好 |
@@ -247,6 +248,7 @@ astrbot_plugin_yuque/
 │   ├── sync.py          # 文档同步
 │   ├── storage.py       # 数据存储
 │   ├── doc_index.py     # SQLite 索引
+│   ├── doc_utils.py     # 文档 URL/正文读取工具函数
 │   ├── profile.py       # 用户画像
 │   ├── partner.py       # 伙伴推荐
 │   ├── knowledge_card.py# 知识卡片
@@ -269,6 +271,7 @@ astrbot_plugin_yuque/
 
 | 版本 | 变更 |
 |------|------|
+| v0.29.2 | 新增 `get_doc_details`；增强 `search_docs`/`read_doc`/`parse_yuque_url`/`list_repo_docs` 文档信息获取 |
 | v0.29.1 | 修复计费/同步一致性，新增 `/weekly raw` 导出按周原始 CSV（管理员） |
 | v0.29.0 | 群聊发送者识别、群聊幻觉修复、Token 限额可配置 |
 | v0.28.0 | Agent 智能化升级：指令改用 Agent 处理、智能推荐权重优化 |
