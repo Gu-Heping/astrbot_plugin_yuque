@@ -16,7 +16,9 @@ from .doc_projection import build_doc_metadata, build_markdown
 from .git_ops import GitOps
 from .rag import RAGEngine
 from .sync import toc_list_children
+from .sync_coordinator import sync_team_path_prefix
 from .yuque_client import YuqueClient
+from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME, scoped_document_id
 
 if TYPE_CHECKING:
     from .push_notifier import PushNotifier
@@ -68,13 +70,14 @@ class WebhookHandler:
         self,
         docs_dir: Path,
         data_dir: Path,
-        get_client: Callable[[], YuqueClient],
+        get_client: Callable[..., YuqueClient],
         rag: Optional[RAGEngine],
         config: dict,
         push_notifier: Optional["PushNotifier"] = None,
         subscription_manager: Optional["SubscriptionManager"] = None,
         storage: Optional["Storage"] = None,
         trajectory_manager=None,
+        chunk_store=None,
         cache_clear_callback: Optional[Callable[[], None]] = None,
     ):
         """
@@ -90,6 +93,7 @@ class WebhookHandler:
             subscription_manager: 订阅管理器（可选）
             storage: 存储实例（可选，用于匹配团队成员）
             trajectory_manager: 成员轨迹管理器（可选）
+            chunk_store: chunk 索引存储（可选）
             cache_clear_callback: RAG 缓存清理回调（可选）
         """
         self.docs_dir = docs_dir
@@ -101,7 +105,14 @@ class WebhookHandler:
         self.subscription_manager = subscription_manager
         self.storage = storage
         self.trajectory_manager = trajectory_manager
+        self.chunk_store = chunk_store
         self.cache_clear_callback = cache_clear_callback
+
+    def _get_client_for_team(self, team_id: str = DEFAULT_TEAM_ID) -> YuqueClient:
+        try:
+            return self.get_client(team_id)
+        except TypeError:
+            return self.get_client()
 
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）
@@ -226,7 +237,9 @@ class WebhookHandler:
         else:
             dir_name = "unknown"
 
-        repo_dir = self.docs_dir / dir_name
+        team_prefix = sync_team_path_prefix(str(detail.get("team_id") or DEFAULT_TEAM_ID))
+        team_root = self.docs_dir / team_prefix if team_prefix else self.docs_dir
+        repo_dir = team_root / dir_name
         repo_dir.mkdir(parents=True, exist_ok=True)
 
         title = detail.get("title", "无标题")
@@ -251,7 +264,7 @@ class WebhookHandler:
             logger.error(f"[Webhook] 路径检查失败: {e}")
             raise
 
-        rel_path = str(out_file.relative_to(self.docs_dir))
+        rel_path = str(out_file.relative_to(self.docs_dir)).replace("\\", "/")
         return repo_dir, out_file, rel_path
 
     async def handle(self, payload: dict) -> dict:
@@ -264,7 +277,7 @@ class WebhookHandler:
             处理结果
         """
         # 详细日志：记录原始 payload
-        logger.info(f"[Webhook] ========== 开始处理 ==========")
+        logger.info("[Webhook] ========== 开始处理 ==========")
 
         data = payload.get("data", {})
         action = data.get("action_type", "")
@@ -300,7 +313,7 @@ class WebhookHandler:
             result = {"status": "ignored", "action": action}
 
         logger.info(f"[Webhook] 处理结果: {result}")
-        logger.info(f"[Webhook] ========== 处理完成 ==========")
+        logger.info("[Webhook] ========== 处理完成 ==========")
         return result
 
     async def _handle_doc_change(self, payload: dict) -> dict:
@@ -309,7 +322,7 @@ class WebhookHandler:
         doc_id = data.get("id")
         book = data.get("book", {})
 
-        logger.info(f"[Webhook] → 处理文档变更事件")
+        logger.info("[Webhook] → 处理文档变更事件")
 
         if not book:
             logger.error("[Webhook] 文档事件缺少 book 信息")
@@ -322,7 +335,8 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
 
-        client = self.get_client()
+        preliminary_team = self._get_team_info(repo_id=repo_id, repo_name=repo_name)
+        client = self._get_client_for_team(preliminary_team["team_id"])
 
         # 获取 TOC
         toc_list = None
@@ -360,13 +374,18 @@ class WebhookHandler:
         # 获取 namespace
         namespace = await self._get_namespace(client, repo_id, repo_slug)
         logger.info(f"[Webhook] 知识库 namespace: {namespace or '(无)'}")
+        team_info = self._get_team_info(repo_id=repo_id, repo_name=repo_name, namespace=namespace)
+        if team_info["team_id"] != preliminary_team["team_id"]:
+            client = self._get_client_for_team(team_info["team_id"])
+        detail["team_id"] = team_info["team_id"]
+        detail["team_name"] = team_info["team_name"]
 
         # 统一路径解析（与全量同步保持一致）
-        logger.info(f"[Webhook] 步骤 1/5: 解析文档路径")
+        logger.info("[Webhook] 步骤 1/5: 解析文档路径")
         repo_dir, out_file, rel_path = self._resolve_doc_output(detail, repo_name, namespace, toc_list)
 
         # 处理文档移动（删除旧路径文件）
-        old_record = self._get_old_record(doc_id)
+        old_record = self._get_old_record(doc_id, team_info["team_id"])
         if old_record:
             old_path = old_record.get("file_path")
             if old_path and old_path != rel_path:
@@ -377,18 +396,20 @@ class WebhookHandler:
                         logger.info(f"[Webhook] 删除旧路径文件: {old_path}")
                     except Exception as e:
                         logger.warning(f"[Webhook] 删除旧文件失败: {e}")
+                self._delete_chunk_index(doc_id, team_info["team_id"])
 
         # 写入 Markdown
-        logger.info(f"[Webhook] 步骤 2/5: 写入 Markdown 文件")
+        logger.info("[Webhook] 步骤 2/5: 写入 Markdown 文件")
         self._write_markdown_file(out_file, detail, repo_dir)
 
         # 更新 SQLite
-        logger.info(f"[Webhook] 步骤 3/5: 更新 SQLite 索引")
+        logger.info("[Webhook] 步骤 3/5: 更新 SQLite 索引")
         self._update_doc_index(detail, rel_path)
 
         # 更新 ChromaDB
-        logger.info(f"[Webhook] 步骤 4/5: 更新 ChromaDB 向量")
+        logger.info("[Webhook] 步骤 4/5: 更新 ChromaDB 向量")
         self._update_rag(detail, rel_path)
+        self._update_chunk_index(doc_id, rel_path)
 
         # 清理 RAG 缓存（v0.27.2）
         if self.cache_clear_callback:
@@ -399,7 +420,7 @@ class WebhookHandler:
                 logger.warning(f"[Webhook] 清理缓存失败: {e}")
 
         # 更新 .toc.json
-        logger.info(f"[Webhook] 步骤 5/5: 更新 .toc.json")
+        logger.info("[Webhook] 步骤 5/5: 更新 .toc.json")
         if toc_list:
             self._update_toc_json(repo_dir, toc_list)
 
@@ -584,13 +605,39 @@ class WebhookHandler:
         doc_id = data.get("id")
         book = data.get("book", {})
 
-        logger.info(f"[Webhook] → 处理文档删除事件")
+        logger.info("[Webhook] → 处理文档删除事件")
 
         if not doc_id:
             logger.error("[Webhook] 删除事件缺少 doc_id")
             return {"status": "error", "message": "missing doc_id"}
 
-        old_record = self._get_old_record(doc_id)
+        repo_id = book.get("id")
+        repo_name = book.get("name", "") or book.get("slug", "")
+        repo_slug = book.get("slug", "")
+        preliminary_team, preliminary_resolved = self._find_team_info(
+            repo_id=repo_id,
+            repo_name=repo_name,
+        )
+        client = self._get_client_for_team(preliminary_team["team_id"])
+        namespace = await self._get_namespace(client, repo_id, repo_slug) if repo_id else None
+        team_info, team_resolved = self._find_team_info(
+            repo_id=repo_id,
+            repo_name=repo_name,
+            namespace=namespace,
+        )
+        if team_info["team_id"] != preliminary_team["team_id"]:
+            client = self._get_client_for_team(team_info["team_id"])
+
+        team_info, team_error = self._resolve_delete_team_info(
+            doc_id=doc_id,
+            team_info=team_info,
+            team_resolved=team_resolved or preliminary_resolved,
+        )
+        if team_error:
+            logger.warning(f"[Webhook] {team_error}")
+            return {"status": "error", "message": team_error}
+
+        old_record = self._get_old_record(doc_id, team_info["team_id"])
         deleted_files = []
         repo_dir = None
 
@@ -607,25 +654,24 @@ class WebhookHandler:
                     except Exception as e:
                         logger.warning(f"[Webhook] 删除文件失败: {e}")
 
-                try:
-                    repo_dir = self.docs_dir / Path(file_path).parts[0]
-                except Exception:
-                    repo_dir = full_path.parent
+                repo_dir = self._repo_dir_from_doc_path(file_path, team_info["team_id"]) or full_path.parent
         else:
             logger.warning(f"[Webhook] 索引中未找到文档: doc_id={doc_id}")
 
         # 删除 SQLite 记录
-        logger.info(f"[Webhook] 步骤 1/4: 删除 SQLite 记录")
+        logger.info("[Webhook] 步骤 1/4: 删除 SQLite 记录")
         from .doc_index import DocIndex
 
         db_path = self.data_dir / "doc_index.db"
         with DocIndex(str(db_path)) as doc_index:
-            doc_index.delete_doc(doc_id)
+            doc_index.delete_doc(doc_id, team_id=team_info["team_id"])
+
+        self._delete_chunk_index(doc_id, team_info["team_id"])
 
         # 删除 ChromaDB 向量
-        logger.info(f"[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
+        logger.info("[Webhook] 步骤 2/4: 删除 ChromaDB 向量")
         if self.rag:
-            self.rag.delete_doc(doc_id)
+            self.rag.delete_doc(doc_id, team_id=team_info["team_id"])
             # 清理缓存
             if self.cache_clear_callback:
                 try:
@@ -634,10 +680,9 @@ class WebhookHandler:
                     logger.warning(f"[Webhook] 清理缓存失败: {e}")
 
         # 更新 .toc.json：优先重新拉取完整 TOC 覆盖
-        logger.info(f"[Webhook] 步骤 3/4: 更新 .toc.json")
+        logger.info("[Webhook] 步骤 3/4: 更新 .toc.json")
         if repo_dir and book.get("id"):
             try:
-                client = self.get_client()
                 toc_list = await client.get_repo_toc(book.get("id"))
                 self._update_toc_json(repo_dir, toc_list)
             except Exception as e:
@@ -647,7 +692,7 @@ class WebhookHandler:
             self._remove_from_toc_json(repo_dir, doc_id)
 
         # Git commit
-        logger.info(f"[Webhook] 步骤 4/4: Git 提交")
+        logger.info("[Webhook] 步骤 4/4: Git 提交")
         commit_hash = None
         if deleted_files:
             # 删除操作无法获取作者，使用空字符串
@@ -662,7 +707,7 @@ class WebhookHandler:
             "commit": commit_hash,
         }
 
-    def _get_old_record(self, doc_id: int) -> Optional[dict]:
+    def _get_old_record(self, doc_id: int, team_id: str = DEFAULT_TEAM_ID) -> Optional[dict]:
         """从 SQLite 索引获取文档旧记录"""
         if not doc_id:
             return None
@@ -672,9 +717,21 @@ class WebhookHandler:
         try:
             db_path = self.data_dir / "doc_index.db"
             with DocIndex(str(db_path)) as doc_index:
-                return doc_index.get_doc_by_yuque_id(doc_id)
+                return doc_index.get_doc_by_yuque_id(doc_id, team_id=team_id or None)
         except Exception as e:
             logger.debug(f"[Webhook] 读取旧索引失败: {e}")
+            return None
+
+    def _repo_dir_from_doc_path(self, file_path: str, team_id: str = DEFAULT_TEAM_ID) -> Optional[Path]:
+        try:
+            parts = Path(file_path).parts
+            if not parts:
+                return None
+            team_prefix = sync_team_path_prefix(team_id)
+            if team_prefix and len(parts) >= 2 and parts[0] == team_prefix:
+                return self.docs_dir / parts[0] / parts[1]
+            return self.docs_dir / parts[0]
+        except Exception:
             return None
 
     def _write_markdown_file(self, out_file: Path, detail: dict, repo_dir: Path):
@@ -709,6 +766,80 @@ class WebhookHandler:
 
         return None
 
+    def _get_team_info(
+        self,
+        *,
+        repo_id: Optional[int] = None,
+        repo_name: str = "",
+        namespace: Optional[str] = None,
+    ) -> dict:
+        team_info, _ = self._find_team_info(
+            repo_id=repo_id,
+            repo_name=repo_name,
+            namespace=namespace,
+        )
+        return team_info
+
+    def _find_team_info(
+        self,
+        *,
+        repo_id: Optional[int] = None,
+        repo_name: str = "",
+        namespace: Optional[str] = None,
+    ) -> tuple[dict, bool]:
+        repos_file = self.docs_dir / ".repos.json"
+        if repos_file.exists():
+            try:
+                repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                for repo in repos if isinstance(repos, list) else []:
+                    if (
+                        (repo_id is not None and repo.get("id") == repo_id)
+                        or (namespace and repo.get("namespace") == namespace)
+                        or (repo_name and repo.get("name") == repo_name)
+                    ):
+                        return {
+                            "team_id": repo.get("team_id") or DEFAULT_TEAM_ID,
+                            "team_name": repo.get("team_name") or DEFAULT_TEAM_NAME,
+                        }, True
+            except Exception as e:
+                logger.debug(f"[Webhook] 读取团队信息失败: {e}")
+        return {"team_id": DEFAULT_TEAM_ID, "team_name": DEFAULT_TEAM_NAME}, False
+
+    def _resolve_delete_team_info(
+        self,
+        doc_id: int,
+        team_info: dict,
+        team_resolved: bool,
+    ) -> tuple[Optional[dict], Optional[str]]:
+        """Resolve delete scope without silently falling back across teams."""
+        if team_resolved:
+            return team_info, None
+
+        from .doc_index import DocIndex
+
+        db_path = self.data_dir / "doc_index.db"
+        with DocIndex(str(db_path)) as doc_index:
+            rows = doc_index.find_docs_by_yuque_id(doc_id, limit=20)
+
+        if not rows:
+            return team_info, None
+
+        teams: dict[str, dict] = {}
+        for row in rows:
+            row_team_id = row.get("team_id") or DEFAULT_TEAM_ID
+            teams[row_team_id] = {
+                "team_id": row_team_id,
+                "team_name": row.get("team_name") or DEFAULT_TEAM_NAME,
+            }
+
+        if len(teams) == 1:
+            return next(iter(teams.values())), None
+
+        return None, (
+            f"无法确认删除事件所属团队: doc_id={doc_id} 同时存在于多个 team_id，"
+            "请先执行 /sync 刷新 .repos.json 后重试"
+        )
+
     def _update_doc_index(self, detail: dict, rel_path: str):
         """更新 SQLite 元数据索引"""
         from .doc_index import DocIndex
@@ -719,7 +850,13 @@ class WebhookHandler:
             with DocIndex(str(db_path)) as doc_index:
                 # 优先使用团队成员真实姓名（创建者）
                 author = self._match_creator_name(detail) or self._resolve_author(detail)
-                metadata = build_doc_metadata(detail, rel_path=rel_path, author=author)
+                metadata = build_doc_metadata(
+                    detail,
+                    rel_path=rel_path,
+                    author=author,
+                    team_id=detail.get("team_id") or DEFAULT_TEAM_ID,
+                    team_name=detail.get("team_name") or DEFAULT_TEAM_NAME,
+                )
                 if metadata.get("creator_id") is None:
                     logger.warning(f"[Webhook] 文档缺少 creator_id: {detail.get('title', '')} (user_id={detail.get('user_id')}, creator_id={detail.get('creator_id')})")
                 doc_index.add_doc(metadata)
@@ -727,6 +864,38 @@ class WebhookHandler:
             logger.info(f"[Webhook] 更新索引: {detail.get('title', '')}")
         except Exception as e:
             logger.error(f"[Webhook] 更新索引失败: {e}")
+
+    def _update_chunk_index(self, doc_id: int, rel_path: str):
+        """更新单篇文档的 chunk 索引。"""
+        if not self.chunk_store:
+            return
+        try:
+            from .chunk_indexer import upsert_chunk_from_markdown_file
+
+            result = upsert_chunk_from_markdown_file(
+                docs_dir=self.docs_dir,
+                file_path=self.docs_dir / rel_path,
+                chunk_store=self.chunk_store,
+                yuque_base_url=self.config.get("yuque_base_url", "https://www.yuque.com/api/v2"),
+                chunk_size=self.config.get("knowledge_chunk_size", 1200),
+                chunk_overlap=self.config.get("knowledge_chunk_overlap", 180),
+            )
+            logger.info(
+                f"[Webhook] 更新 chunk: doc_id={result['document_id']} chunks={result['chunks']}"
+            )
+        except Exception as e:
+            logger.error(f"[Webhook] 更新 chunk 失败: doc_id={doc_id}, path={rel_path}: {e}")
+
+    def _delete_chunk_index(self, doc_id: int, team_id: str = DEFAULT_TEAM_ID):
+        """删除单篇文档的 chunk 索引。"""
+        if not self.chunk_store or not doc_id:
+            return
+        try:
+            document_id = scoped_document_id(team_id, doc_id)
+            deleted = self.chunk_store.delete_document(document_id)
+            logger.info(f"[Webhook] 删除 chunk: doc_id={document_id}, rows={deleted}")
+        except Exception as e:
+            logger.error(f"[Webhook] 删除 chunk 失败: doc_id={doc_id}: {e}")
 
     def _update_rag(self, detail: dict, rel_path: str):
         """更新 ChromaDB 向量索引"""
@@ -761,6 +930,8 @@ class WebhookHandler:
 
             self.rag.upsert_doc({
                 "id": detail.get("id"),
+                "team_id": detail.get("team_id") or DEFAULT_TEAM_ID,
+                "team_name": detail.get("team_name") or DEFAULT_TEAM_NAME,
                 "content": body,
                 "title": detail.get("title", ""),
                 "slug": detail.get("slug", ""),

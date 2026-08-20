@@ -7,7 +7,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from uuid import uuid4
 
 from astrbot.api import logger

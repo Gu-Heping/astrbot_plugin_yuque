@@ -178,7 +178,7 @@ class LearningPathRecommender:
         # 用户已写文档提示
         user_docs_hint = ""
         if user_doc_titles:
-            user_docs_hint = f"\n\n**注意：以下文档用户已写过，不应作为推荐资源：**\n" + "\n".join(f"- {t}" for t in user_doc_titles[:10])
+            user_docs_hint = "\n\n**注意：以下文档用户已写过，不应作为推荐资源：**\n" + "\n".join(f"- {t}" for t in user_doc_titles[:10])
 
         # 选择提示词模板
         if resources:
@@ -257,7 +257,7 @@ def format_learning_path(path: dict) -> str:
             challenges = stage.get("challenges", stage.get("tasks", []))
             resources = stage.get("resources", [])
 
-            lines.append(f"━━━━━━━━━━━━━━━")
+            lines.append("━━━━━━━━━━━━━━━")
             lines.append(f"📚 阶段 {stage_num}：{focus}" + (f"（{duration}）" if duration else ""))
             lines.append("")
 

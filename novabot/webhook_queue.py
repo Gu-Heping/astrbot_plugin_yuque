@@ -5,7 +5,7 @@ NovaBot Webhook 队列处理器
 
 import asyncio
 from collections import deque
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from astrbot.api import logger
 

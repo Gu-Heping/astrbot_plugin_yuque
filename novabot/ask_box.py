@@ -356,7 +356,6 @@ class AskBoxManager:
             content = q.get("content", "")
             sender_name = q.get("sender_name", "未知")
             answer_count = q.get("answer_count", 0)
-            created = q.get("created_at", "")
 
             # 截取问题内容
             display = content[:40] + "..." if len(content) > 40 else content

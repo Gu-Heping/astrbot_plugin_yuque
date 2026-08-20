@@ -10,8 +10,8 @@
 
 | 功能 | 说明 |
 |------|------|
-| **语雀同步** | 全量同步 + Webhook 实时同步，输出 Markdown + YAML frontmatter |
-| **RAG 检索** | LangChain + ChromaDB 语义搜索，支持关键词精确匹配 |
+| **语雀同步** | 全量同步 + Webhook 实时同步，输出 Markdown + YAML frontmatter，支持多语雀团队隔离同步 |
+| **RAG 检索** | Evidence-first 混合检索：Chunk 关键词召回 + 向量语义搜索 + 元数据范围过滤 |
 | **自然语言交互** | 直接对话即可，AI 自动识别意图调用工具 |
 | **用户画像** | LLM 分析用户文档，生成技术画像和兴趣领域 |
 | **人格定制** | 每个用户可设置称呼、语气、回复风格 |
@@ -37,11 +37,45 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 | 配置项 | 说明 |
 |--------|------|
-| `yuque_token` | 语雀团队 Token（必需） |
-| `yuque_base_url` | 语雀 API 地址，默认 `https://www.yuque.com/api/v2` |
+| `yuque_token` | 默认语雀团队 Token（单团队部署必需；多团队部署可作为默认团队） |
+| `yuque_base_url` | 默认语雀 API 地址，默认 `https://www.yuque.com/api/v2` |
+| `yuque_teams` | 可选，多语雀团队 JSON 数组；留空时沿用 `yuque_token` 单团队模式 |
 | `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
+
+#### 多语雀团队
+
+`yuque_teams` 将 Team 作为一等实体。每个 Team 拥有独立 Token、API 地址、同步生命周期、文档路径、元数据索引和检索范围；Agent 会根据 Team 名称、描述、知识库、路径、作者、更新时间与关键词自行组合检索范围。
+
+示例：
+
+```json
+[
+  {
+    "team_id": "nova",
+    "name": "NOVA",
+    "description": "社团公共知识库、活动记录与项目沉淀",
+    "yuque_token": "xxx",
+    "yuque_base_url": "https://www.yuque.com/api/v2",
+    "enabled": true
+  },
+  {
+    "team_id": "research",
+    "name": "Research",
+    "description": "科研资料、论文笔记与课题协作",
+    "yuque_token": "yyy",
+    "enabled": true
+  }
+]
+```
+
+兼容说明：
+
+- 未配置 `yuque_teams` 时，NovaBot 继续使用原来的 `yuque_token` 和原始文档目录。
+- 默认团队保持旧文档 ID 与目录布局；非默认团队写入 `yuque_docs/<team_id>/<知识库名>/...`。
+- 文档身份按 `team_id + yuque_id` 区分，同一个语雀文档 ID 可在不同团队中共存。
+- 多团队检索可组合 `team_id`、知识库、路径前缀、作者、更新时间、关键词和语义查询；带时间范围的检索只匹配有更新时间元数据的文档。
 
 ### Webhook 实时同步
 
@@ -109,10 +143,10 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 | 指令 | 说明 |
 |------|------|
-| `/sync` | 同步知识库 |
+| `/sync` | 同步全部已启用团队知识库 |
+| `/sync <team_id>` 或 `/sync team <team_id>` | 只同步指定团队 |
 | `/sync status` | 查看同步状态 |
-| `/sync members` | 同步团队成员 |
-| `/sync clean` | 清理孤儿目录 |
+| `/sync members [team_id]` | 同步团队成员；传入 `team_id` 时使用指定团队 Token |
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
 | `/webhook` | Webhook 服务状态 |
@@ -180,8 +214,9 @@ NovaBot: 好嘞～以后会更活泼地和你聊天！
 
 ```
 1. 管理员配置 yuque_token + embedding_api_key
-2. 管理员: /sync members
-3. 管理员: /sync
+   - 多团队部署时，额外配置 yuque_teams
+2. 管理员: /sync members [team_id]
+3. 管理员: /sync 或 /sync <team_id>
 4. 用户: /bind <用户名>
 5. 用户: /profile refresh（生成画像）
 6. 用户: 直接对话或使用指令
@@ -203,7 +238,8 @@ data/plugin_data/astrbot_plugin_yuque/
 ├── search_logs.json        # 搜索日志
 ├── yuque_docs/             # Markdown 文档
 │   ├── .yuque-id-to-path.json
-│   └── <知识库名>/*.md
+│   ├── <默认团队知识库名>/*.md
+│   └── <team_id>/<知识库名>/*.md
 ├── doc_index.db            # SQLite 元数据索引
 └── chroma_db/              # RAG 向量数据库
 ```
@@ -216,15 +252,16 @@ NovaBot 为 AI 提供以下工具（自动调用）：
 
 | 工具 | 功能 |
 |------|------|
-| `search_knowledge_base` | RAG 语义搜索 |
-| `grep_local_docs` | 关键词精确匹配 |
+| `list_teams` | 列出可用语雀团队及描述 |
+| `search_knowledge_base` | Evidence-first 混合检索，支持 team/repository/path/author/time 范围 |
+| `grep_local_docs` | 关键词精确匹配，支持 team/repository/path/author/time 范围 |
 | `read_doc` | 读取文档正文（支持 offset/limit 分页） |
 | `get_doc_details` | 获取单篇文档完整元数据与可选正文 |
 | `parse_yuque_url` | 解析语雀链接并读取内容与元数据 |
 | `search_docs` | 按作者/知识库/标题筛选（含链接、时间、字数） |
 | `list_authors` | 列出所有作者 |
-| `list_knowledge_bases` | 列出知识库 |
-| `list_repo_docs` | 知识库目录结构（含 slug、path） |
+| `list_knowledge_bases` | 列出知识库，可按 team 过滤 |
+| `list_repo_docs` | 知识库目录结构（含 slug、path），可按 team 过滤 |
 | `doc_stats` | 文档统计 |
 | `generate_knowledge_card` | 生成知识卡片 |
 | `set_preference` | 设置用户偏好 |
@@ -235,6 +272,8 @@ NovaBot 为 AI 提供以下工具（自动调用）：
 | `subscribe` | 订阅知识库/作者 |
 | `unsubscribe` | 取消订阅 |
 | `profile_view` | 查看用户画像 |
+
+知识事实问答默认采用 Evidence-first：Agent 应优先调用 `list_teams` / `list_knowledge_bases` 确定范围，再使用 `search_knowledge_base`、`grep_local_docs`、`read_doc` 或 `get_doc_details` 取得证据后回答。普通聊天、用户设置、画像刷新、订阅、学习路径、协作网络等社区能力不强制要求知识库证据。
 
 ---
 

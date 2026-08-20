@@ -9,6 +9,7 @@ from typing import Dict, Optional
 import yaml
 
 from .yuque_client import YuqueClient
+from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME
 
 
 def count_chinese_words(text: str) -> int:
@@ -44,6 +45,12 @@ def build_markdown(detail: Dict, author: str = "") -> str:
     }
     if author:
         fm["author"] = author
+    team_id = detail.get("team_id")
+    team_name = detail.get("team_name")
+    if team_id:
+        fm["team_id"] = team_id
+    if team_name:
+        fm["team_name"] = team_name
     if book.get("name"):
         fm["book_name"] = book["name"]
     if detail.get("description"):
@@ -70,6 +77,8 @@ def build_doc_metadata(
     fallback_title: str = "",
     fallback_slug: str = "",
     fallback_namespace: Optional[str] = None,
+    team_id: str = DEFAULT_TEAM_ID,
+    team_name: str = DEFAULT_TEAM_NAME,
 ) -> Dict:
     """构建 SQLite/RAG 使用的文档元数据字典"""
     book = detail.get("book", {})
@@ -86,6 +95,8 @@ def build_doc_metadata(
         "title": detail.get("title", fallback_title),
         "slug": detail.get("slug", fallback_slug),
         "author": author,
+        "team_id": detail.get("team_id") or team_id or DEFAULT_TEAM_ID,
+        "team_name": detail.get("team_name") or team_name or DEFAULT_TEAM_NAME,
         "book_name": book.get("name", "") if book else "",
         "book_namespace": (
             book.get("namespace", "") if book else ""

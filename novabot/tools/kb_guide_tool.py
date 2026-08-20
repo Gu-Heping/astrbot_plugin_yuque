@@ -4,7 +4,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import FunctionTool
 from astrbot.api.event import AstrMessageEvent

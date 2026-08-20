@@ -8,13 +8,12 @@ from typing import TYPE_CHECKING, Optional
 from astrbot.api import logger
 
 from .llm_utils import call_llm, format_resources_for_path, sanitize_user_input
-from .prompts import GAP_PROMPT, GAP_NO_BINDING_PROMPT, GAP_NO_PROFILE_PROMPT, GAP_NO_TARGET_PROMPT
+from .prompts import GAP_PROMPT, GAP_NO_TARGET_PROMPT
 from .token_monitor import FEATURE_LEARNING_PATH
 
 if TYPE_CHECKING:
     from .rag import RAGEngine
     from .storage import Storage
-    from .doc_index import DocIndex
     from .token_monitor import TokenMonitor
 
 

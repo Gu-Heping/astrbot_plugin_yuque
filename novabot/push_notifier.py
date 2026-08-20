@@ -5,9 +5,8 @@ NovaBot 智能推送模块
 
 import json
 import re
-from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 

@@ -6,7 +6,6 @@ NovaBot Git 历史分析器
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 from astrbot.api import logger
 

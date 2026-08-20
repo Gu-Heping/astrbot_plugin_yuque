@@ -15,6 +15,7 @@ from ..doc_utils import (
     parse_yuque_doc_url,
     read_document_content,
 )
+from ..evidence import evidence_from_document_content, format_citations, format_evidence_block
 from .base import BaseTool
 
 
@@ -34,6 +35,8 @@ def _format_search_doc_lines(results: list[dict], api_base_url: str) -> list[str
             lines.append(f"   slug: {pub['slug']}")
         if pub.get("author"):
             lines.append(f"   作者: {pub['author']}")
+        if pub.get("team_name") or pub.get("team_id"):
+            lines.append(f"   团队: {pub.get('team_name') or pub.get('team_id')} ({pub.get('team_id') or 'unknown'})")
         if pub.get("book_name"):
             lines.append(f"   知识库: {pub['book_name']}")
         if pub.get("created_at"):
@@ -48,6 +51,11 @@ def _format_search_doc_lines(results: list[dict], api_base_url: str) -> list[str
             lines.append(f"   链接: {pub['url']}")
         lines.append("")
     return lines
+
+
+def _filter_summary(**filters) -> str:
+    parts = [f"{key}={value}" for key, value in filters.items() if value]
+    return ", ".join(parts) if parts else "无"
 
 
 @dataclass
@@ -71,6 +79,22 @@ class SearchDocsTool(BaseTool):
                 "type": "string",
                 "description": "文档标题（模糊匹配）"
             },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID（可选，如 default、other）。多团队场景用来限定检索范围。"
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "本地路径前缀/片段（可选，如 other/工程 或 工程/指南）"
+            },
+            "updated_after": {
+                "type": "string",
+                "description": "更新时间下界（可选，ISO 或 YYYY-MM-DD）"
+            },
+            "updated_before": {
+                "type": "string",
+                "description": "更新时间上界（可选，ISO 或 YYYY-MM-DD）"
+            },
             "order_by": {
                 "type": "string",
                 "description": "排序方式：updated_at（更新时间）、created_at（创建时间）、word_count（字数）",
@@ -86,7 +110,19 @@ class SearchDocsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, author: str = "", book: str = "", title: str = "", order_by: str = "updated_at", limit: int = 10) -> str:
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        author: str = "",
+        book: str = "",
+        title: str = "",
+        team_id: str = "",
+        path_prefix: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+        order_by: str = "updated_at",
+        limit: int = 10,
+    ) -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
@@ -96,6 +132,10 @@ class SearchDocsTool(BaseTool):
                 author=author or None,
                 book=book or None,
                 title=title or None,
+                team_id=team_id or None,
+                path_prefix=path_prefix or None,
+                updated_after=updated_after or None,
+                updated_before=updated_before or None,
                 order_by=order_by,
                 limit=limit,
             )
@@ -108,9 +148,20 @@ class SearchDocsTool(BaseTool):
                     filters.append(f"知识库={book}")
                 if title:
                     filters.append(f"标题={title}")
+                if team_id:
+                    filters.append(f"团队={team_id}")
+                if path_prefix:
+                    filters.append(f"路径={path_prefix}")
+                if updated_after:
+                    filters.append(f"更新晚于={updated_after}")
+                if updated_before:
+                    filters.append(f"更新早于={updated_before}")
                 return f"未找到匹配的文档（筛选: {', '.join(filters) if filters else '无'}）"
 
-            output = [f"找到 {len(results)} 篇文档:\n"]
+            output = [
+                f"找到 {len(results)} 篇文档"
+                f"（筛选: {_filter_summary(author=author, book=book, title=title, team_id=team_id, path=path_prefix, updated_after=updated_after, updated_before=updated_before)}）:\n"
+            ]
             output.extend(_format_search_doc_lines(results, _api_base_url(self.plugin)))
             output.append("💡 需要完整元数据与正文时，可调用 get_doc_details(path=...)")
 
@@ -127,23 +178,61 @@ class ListAuthorsTool(BaseTool):
     description: str = "列出所有文档作者及其贡献统计（文档数、总字数）。适合「看看有哪些作者」「谁写的最多」这类查询。"
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID（可选）"
+            },
+            "book": {
+                "type": "string",
+                "description": "知识库名（可选）"
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "路径前缀/片段（可选）"
+            },
+            "updated_after": {
+                "type": "string",
+                "description": "更新时间下界（可选）"
+            },
+            "updated_before": {
+                "type": "string",
+                "description": "更新时间上界（可选）"
+            },
+        },
         "required": []
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent) -> str:
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        team_id: str = "",
+        book: str = "",
+        path_prefix: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+    ) -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
 
         try:
-            authors = doc_index.list_authors()
+            authors = doc_index.list_authors(
+                team_id=team_id or None,
+                book=book or None,
+                path_prefix=path_prefix or None,
+                updated_after=updated_after or None,
+                updated_before=updated_before or None,
+            )
 
             if not authors:
-                return "没有找到作者信息"
+                return f"没有找到作者信息（筛选: {_filter_summary(team_id=team_id, book=book, path=path_prefix, updated_after=updated_after, updated_before=updated_before)}）"
 
-            output = [f"👥 作者列表（共 {len(authors)} 人）:\n"]
+            output = [
+                f"👥 作者列表（共 {len(authors)} 人，筛选: "
+                f"{_filter_summary(team_id=team_id, book=book, path=path_prefix, updated_after=updated_after, updated_before=updated_before)}）:\n"
+            ]
             for i, a in enumerate(authors[:20], 1):
                 output.append(f"{i}. {a['author']}")
                 output.append(f"   📄 {a['doc_count']} 篇文档, 📝 {a['total_words'] or 0} 字")
@@ -160,31 +249,67 @@ class DocStatsTool(BaseTool):
     """文档统计工具"""
 
     name: str = "doc_stats"
-    description: str = "获取文档统计信息：总文档数、总字数、知识库数。可按作者筛选。"
+    description: str = "获取文档统计信息：总文档数、总字数、知识库数。可按团队、作者、知识库、路径、更新时间筛选。"
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
         "properties": {
             "author": {
                 "type": "string",
                 "description": "作者名（可选，用于查看某人的统计）"
+            },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID（可选）"
+            },
+            "book": {
+                "type": "string",
+                "description": "知识库名（可选）"
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "路径前缀/片段（可选）"
+            },
+            "updated_after": {
+                "type": "string",
+                "description": "更新时间下界（可选）"
+            },
+            "updated_before": {
+                "type": "string",
+                "description": "更新时间上界（可选）"
             }
         },
         "required": []
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, author: str = "") -> str:
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        author: str = "",
+        team_id: str = "",
+        book: str = "",
+        path_prefix: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+    ) -> str:
         doc_index = self.get_doc_index()
         if not doc_index:
             return "元数据索引不存在，请先执行 /sync 同步"
 
         try:
-            stats = doc_index.get_stats(author=author or None)
+            stats = doc_index.get_stats(
+                author=author or None,
+                team_id=team_id or None,
+                book=book or None,
+                path_prefix=path_prefix or None,
+                updated_after=updated_after or None,
+                updated_before=updated_before or None,
+            )
 
-            if author:
-                output = [f"📊 {author} 的贡献统计:\n"]
-            else:
-                output = ["📊 NOVA 知识库统计:\n"]
+            output = [
+                "📊 文档统计"
+                f"（筛选: {_filter_summary(author=author, team_id=team_id, book=book, path=path_prefix, updated_after=updated_after, updated_before=updated_before)}）:\n"
+            ]
 
             output.append(f"📄 文档数: {stats['doc_count']}")
             output.append(f"📝 总字数: {stats['total_words'] or 0}")
@@ -220,6 +345,10 @@ class GetDocDetailsTool(BaseTool):
                 "type": "integer",
                 "description": "语雀文档 ID",
             },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID（可选；当不同团队存在相同 yuque_id 或标题时用于限定范围）",
+            },
             "url": {
                 "type": "string",
                 "description": "语雀文档链接",
@@ -250,20 +379,39 @@ class GetDocDetailsTool(BaseTool):
         title: str,
         path: str,
         yuque_id: Optional[int],
+        team_id: str,
         url: str,
         api_base: str,
     ) -> tuple[Optional[dict], Optional[str]]:
         """解析文档记录，返回 (row, error_message)"""
         if yuque_id:
-            row = doc_index.get_doc_by_yuque_id(int(yuque_id))
+            if not team_id:
+                rows = doc_index.find_docs_by_yuque_id(int(yuque_id), limit=5)
+                if len(rows) > 1:
+                    candidates = [doc_record_to_public_dict(r, api_base) for r in rows]
+                    return None, json.dumps(
+                        {
+                            "error": "multiple_matches",
+                            "message": f"找到 {len(rows)} 篇 yuque_id={yuque_id} 的文档，请用 team_id、path 或 url 精确指定",
+                            "candidates": candidates,
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                if len(rows) == 1:
+                    return rows[0], None
+            row = doc_index.get_doc_by_yuque_id(int(yuque_id), team_id=team_id or None)
             if not row:
-                return None, f"未找到 yuque_id={yuque_id} 的文档"
+                scope = f" team_id={team_id}" if team_id else ""
+                return None, f"未找到 yuque_id={yuque_id}{scope} 的文档"
             return row, None
 
         if path:
             row = doc_index.find_doc_by_file_path(path)
             if not row:
                 return None, f"未找到路径为「{path}」的文档"
+            if team_id and row.get("team_id") != team_id:
+                return None, f"路径「{path}」存在，但不属于 team_id={team_id}"
             return row, None
 
         if url:
@@ -274,6 +422,10 @@ class GetDocDetailsTool(BaseTool):
             rows = doc_index.find_docs_by_slug(doc_slug, limit=5)
             if not rows:
                 return None, f"未找到 slug 为「{doc_slug}」的文档"
+            if team_id:
+                rows = [row_dict for row_dict in rows if row_dict.get("team_id") == team_id]
+                if not rows:
+                    return None, f"未找到 slug 为「{doc_slug}」且 team_id={team_id} 的文档"
             matched = None
             for row_dict in rows:
                 book_ns = row_dict.get("book_namespace", "")
@@ -285,9 +437,10 @@ class GetDocDetailsTool(BaseTool):
             return matched, None
 
         if title:
-            rows = doc_index.search(title=title, limit=5)
+            rows = doc_index.search(title=title, team_id=team_id or None, limit=5)
             if not rows:
-                return None, f"未找到标题包含「{title}」的文档"
+                scope = f"（team_id={team_id}）" if team_id else ""
+                return None, f"未找到标题包含「{title}」的文档{scope}"
             if len(rows) > 1:
                 candidates = [doc_record_to_public_dict(r, api_base) for r in rows]
                 return None, json.dumps(
@@ -309,6 +462,7 @@ class GetDocDetailsTool(BaseTool):
         title: str = "",
         path: str = "",
         yuque_id: int = 0,
+        team_id: str = "",
         url: str = "",
         include_content: bool = False,
         content_offset: int = 0,
@@ -327,6 +481,7 @@ class GetDocDetailsTool(BaseTool):
                 title.strip(),
                 path.strip(),
                 yuque_id_val,
+                team_id.strip(),
                 url.strip(),
                 api_base,
             )
@@ -368,11 +523,22 @@ class GetDocDetailsTool(BaseTool):
                         description=f"读取正文失败: {e}",
                     )
 
-            return format_doc_details_response(
+            response = format_doc_details_response(
                 pub,
                 include_content=include_content,
                 content_info=content_info,
             )
+            if include_content and content_info is not None:
+                evidence = [
+                    evidence_from_document_content(
+                        {**row, "url": pub.get("url") or ""},
+                        content_info.get("content", ""),
+                        evidence_id="E1",
+                        evidence_type="get_doc_details",
+                    )
+                ]
+                return "\n\n".join([format_evidence_block(evidence), format_citations(evidence), response])
+            return response
         except Exception as e:
             logger.error(f"[get_doc_details] 失败: {e}", exc_info=True)
             return f"获取文档详情失败: {e}"

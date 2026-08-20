@@ -61,7 +61,7 @@ DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
 【回答风格】
 - 有温度，像学习伙伴
 - 回答后追问「还想了解什么？」
-- 始终标注来源
+- 使用知识库证据回答时标注来源；普通聊天不需要伪造来源
 """
 
 
@@ -180,7 +180,7 @@ class NovaBotAgent:
                     )
                     logger.debug(f"[Agent] 已记录到长期记忆: yuque_id={yuque_id}")
 
-            logger.info(f"[Agent] 消息处理完成")
+            logger.info("[Agent] 消息处理完成")
             return llm_resp.completion_text
 
         except Exception as e:
@@ -498,6 +498,26 @@ class NovaBotAgent:
 注意：
 - 优先使用知识库内容回答，联网搜索作为补充
 - 使用联网搜索后，标注「来源：网络搜索」"""
+
+        team_registry = getattr(self.plugin, "team_registry", None)
+        if team_registry:
+            team_text = team_registry.describe_for_agent()
+            if team_text:
+                prompt += f"""
+
+【可检索团队范围】
+{team_text}
+
+当用户的问题明显指向某个团队、知识库、路径、作者或时间范围时，请先缩小检索范围；如果范围不明确，再进行开放检索。普通聊天、用户设置、画像、订阅和社区协作工具不需要强制知识库证据。"""
+
+        prompt += """
+
+【知识事实问答的 Evidence-first 规则】
+- 当你回答“知识库里有什么事实/流程/规定/链接/文档内容”时，必须先调用证据工具获取 Grounding Evidence。
+- 证据工具包括：search_knowledge_base、grep_local_docs、read_doc、get_doc_details、parse_yuque_url。
+- 只有 Grounding Evidence 中的 [E#] 片段可作为事实依据；候选结果、工具提示和你的常识不能直接当作知识库事实依据。
+- 如果 Grounding Evidence 为空，请明确说“知识库中暂未找到可靠答案”，可以建议换关键词或放宽检索范围。
+- 豁免工具和场景：普通聊天、set_preference、profile_view、subscribe、unsubscribe、partner_recommend、learning_path、weekly_report、knowledge_gap、记忆、学习进度、问题档案、成员轨迹和协作网络。它们可以直接按用户意图调用，不要为了这些动作强行先查知识库。"""
 
         return prompt
 

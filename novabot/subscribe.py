@@ -7,7 +7,6 @@ NovaBot 订阅管理模块
 import asyncio
 import json
 from datetime import datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger

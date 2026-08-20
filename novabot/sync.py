@@ -4,16 +4,14 @@ NovaBot 文档同步模块
 """
 
 import json
-import re
 import subprocess
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-import yaml
-
 from astrbot.api import logger
 
 from .doc_projection import build_doc_metadata, build_markdown, count_chinese_words
+from .models import Team, scoped_document_id
 from .yuque_client import YuqueClient
 
 
@@ -99,6 +97,7 @@ def sync_repo_path_drift(
     repo_dir_name: str,
     toc_list: List[Dict],
     index: Dict[str, str],
+    team_id: str = "default",
 ) -> List[Tuple[str, str]]:
     """
     遍历 TOC，计算所有文档新路径，执行路径漂移修正。
@@ -108,7 +107,7 @@ def sync_repo_path_drift(
         output_dir: 文档输出根目录
         repo_dir_name: 知识库目录名
         toc_list: TOC 列表
-        index: 当前的 yuque_id -> path 索引
+        index: 当前的 scoped_document_id -> path 索引
 
     Returns:
         移动列表 [(old_path, new_path), ...]
@@ -117,7 +116,7 @@ def sync_repo_path_drift(
         return []
 
     toc_by_uuid: Dict[str, Dict] = {n["uuid"]: n for n in toc_list if n.get("uuid")}
-    computed_paths: Dict[int, str] = {}  # yuque_id -> new_rel_path
+    computed_paths: Dict[str, str] = {}  # scoped_document_id -> new_rel_path
     used_bases: Dict[Tuple[str, str], Set[str]] = {}  # (repo_dir, parent_path) -> set of base names
 
     def resolve_basename(repo_dir: str, parent_path: str, base: str) -> str:
@@ -153,7 +152,7 @@ def sync_repo_path_drift(
                     rel_path = f"{repo_dir_name}/{doc_filename}"
 
                 if yuque_id is not None:
-                    computed_paths[yuque_id] = rel_path
+                    computed_paths[scoped_document_id(team_id, yuque_id)] = rel_path
 
                 # DOC/SHEET 也可能有子节点
                 children = toc_list_children(item.get("uuid"), toc_by_uuid)
@@ -173,16 +172,16 @@ def sync_repo_path_drift(
 
     # 对比并收集移动
     moves: List[Tuple[str, str]] = []
-    for yuque_id, new_path in computed_paths.items():
-        old_path = index.get(str(yuque_id))
+    for document_key, new_path in computed_paths.items():
+        old_path = index.get(document_key)
         if old_path and old_path != new_path:
             old_file = output_dir / old_path
             new_file = output_dir / new_path
             if old_file.exists():
                 new_file.parent.mkdir(parents=True, exist_ok=True)
                 moves.append((old_path, new_path))
-                index[str(yuque_id)] = new_path
-                logger.info(f"[PathDrift] {old_path} -> {new_path} (id={yuque_id})")
+                index[document_key] = new_path
+                logger.info(f"[PathDrift] {old_path} -> {new_path} (id={document_key})")
 
     # 执行 git mv（如果输出目录是 git 仓库）
     if moves:
@@ -226,12 +225,18 @@ class DocSyncer:
         output_dir: Path,
         members: Optional[Dict[str, Dict]] = None,
         global_index: Optional[Dict[str, str]] = None,
+        team: Optional[Team] = None,
+        team_path_prefix: str = "",
     ):
         self.client = client
         self.output_dir = output_dir
+        self.team_path_prefix = team_path_prefix.strip("/\\")
+        self.sync_root = output_dir / self.team_path_prefix if self.team_path_prefix else output_dir
+        self.sync_root.mkdir(parents=True, exist_ok=True)
         self.members = members or {}
         self.used_basenames: Dict[tuple, set] = {}  # (repo_name, parent_path) -> set of basenames
-        self.global_index = global_index or {}  # yuque_id -> path (跨知识库)
+        self.team = team or Team.default()
+        self.global_index = self._normalize_global_index(global_index or {})  # scoped_document_id -> path
         self.doc_metadata: List[Dict] = []  # 收集文档元数据
         # 统计 user_id 分布
         self._user_id_stats: Dict[str, int] = {}
@@ -248,7 +253,7 @@ class DocSyncer:
         """
         # 确保目录名不为空
         dir_name = YuqueClient.slug_safe(repo_name) or namespace.replace("/", "_")
-        repo_dir = self.output_dir / dir_name
+        repo_dir = self.sync_root / dir_name
         repo_dir.mkdir(parents=True, exist_ok=True)
 
         # 获取 TOC
@@ -260,8 +265,9 @@ class DocSyncer:
         toc_file.write_text(json.dumps(toc_list, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # 路径漂移修正：先遍历整个 TOC，检测并修正路径移动
+        drift_repo_dir = f"{self.team_path_prefix}/{dir_name}" if self.team_path_prefix else dir_name
         drift_moves = sync_repo_path_drift(
-            self.output_dir, dir_name, toc_list, self.global_index
+            self.output_dir, drift_repo_dir, toc_list, self.global_index, self.team.team_id
         )
         if drift_moves:
             logger.info(f"[Sync] 路径漂移修正: {len(drift_moves)} 个文档移动")
@@ -269,7 +275,7 @@ class DocSyncer:
         # 处理 TOC 节点
         roots = toc_list_children(None, toc_by_uuid)
         stats = {"docs": 0, "titles": 0, "errors": 0, "removed": 0}
-        repo_index = {}  # 本仓库的 yuque_id -> path
+        repo_index = {}  # 本仓库的 scoped_document_id -> path
 
         for item in roots:
             await self._process_toc_item(
@@ -287,7 +293,7 @@ class DocSyncer:
         # 清理孤儿文件：删除不在当前 TOC 中的 .md 文件
         valid_paths: Set[str] = set(repo_index.values())
         for md_file in repo_dir.rglob("*.md"):
-            rel_path = str(md_file.relative_to(self.output_dir))
+            rel_path = str(md_file.relative_to(self.output_dir)).replace("\\", "/")
             if rel_path not in valid_paths:
                 try:
                     md_file.unlink()
@@ -321,6 +327,22 @@ class DocSyncer:
                         pass
             if not removed_any:
                 break
+
+    def _normalize_global_index(self, index: Dict[str, str]) -> Dict[str, str]:
+        """Keep legacy default keys bare and non-default keys team-scoped."""
+        if self.team.team_id == "default":
+            return dict(index)
+        normalized = dict(index)
+        prefix = f"{self.team.team_id}/"
+        for key, path in list(index.items()):
+            if ":" in key:
+                continue
+            if str(path).replace("\\", "/").startswith(prefix):
+                normalized[scoped_document_id(self.team.team_id, key)] = path
+        return normalized
+
+    def _document_key(self, yuque_id) -> str:
+        return scoped_document_id(self.team.team_id, yuque_id)
 
     async def _process_toc_item(
         self,
@@ -363,10 +385,10 @@ class DocSyncer:
 
                 # 检查是否移动了位置（文档ID对应旧路径，但新路径不同）
                 # 注意：如果 sync_repo_path_drift 已执行 git mv，此处旧文件不存在，检查会跳过
-                rel_path = str(out_file.relative_to(self.output_dir))
+                rel_path = str(out_file.relative_to(self.output_dir)).replace("\\", "/")
                 if yuque_id:
-                    yuque_id_str = str(yuque_id)
-                    old_path = self.global_index.get(yuque_id_str)
+                    document_key = self._document_key(yuque_id)
+                    old_path = self.global_index.get(document_key)
                     if old_path and old_path != rel_path:
                         # 删除旧文件（如果存在）
                         old_file = self.output_dir / old_path
@@ -389,7 +411,7 @@ class DocSyncer:
 
                 # 更新索引
                 if yuque_id:
-                    repo_index[str(yuque_id)] = rel_path
+                    repo_index[self._document_key(yuque_id)] = rel_path
 
                 # 收集元数据（用于构建搜索索引）
                 self.doc_metadata.append(
@@ -400,6 +422,8 @@ class DocSyncer:
                         fallback_title=title,
                         fallback_slug=slug,
                         fallback_namespace=namespace,
+                        team_id=self.team.team_id,
+                        team_name=self.team.name,
                     )
                 )
 
@@ -488,6 +512,12 @@ async def sync_all_repos(
     output_dir: Path,
     members: Optional[Dict[str, Dict]] = None,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    team: Optional[Team] = None,
+    team_path_prefix: str = "",
+    replace_index: bool = True,
+    cleanup_orphans: bool = True,
+    write_repo_cache: bool = True,
+    protected_root_dirs: Optional[Set[str]] = None,
 ) -> Dict:
     """同步所有知识库
 
@@ -526,7 +556,8 @@ async def sync_all_repos(
     global_index = _read_global_index(output_dir)
 
     # 同步
-    syncer = DocSyncer(client, output_dir, members, global_index)
+    sync_team = team or Team.default()
+    syncer = DocSyncer(client, output_dir, members, global_index, sync_team, team_path_prefix)
     repos_info = []
     total_stats = {"docs": 0, "titles": 0, "errors": 0, "removed": 0}
 
@@ -548,6 +579,8 @@ async def sync_all_repos(
         total_stats["removed"] += stats.get("removed", 0)
 
         repos_info.append({
+            "team_id": sync_team.team_id,
+            "team_name": sync_team.name,
             "id": repo.get("id"),
             "namespace": namespace,
             "name": name,
@@ -563,18 +596,22 @@ async def sync_all_repos(
     from .doc_index import DocIndex
     db_path = output_dir.parent / "doc_index.db"
     doc_index = DocIndex(str(db_path))
-    doc_index.clear()
+    if replace_index:
+        doc_index.clear()
+    else:
+        doc_index.clear_team(sync_team.team_id)
     if syncer.doc_metadata:
         doc_index.add_docs(syncer.doc_metadata)
     logger.info(f"[Sync] 元数据索引完成: {len(syncer.doc_metadata)} 篇文档")
 
     # 保存知识库列表（同时保存两份：一份在 docs 目录，一份在 data 根目录供工具读取）
-    repos_file = output_dir / ".repos.json"
-    repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
+    if write_repo_cache:
+        repos_file = output_dir / ".repos.json"
+        repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # 额外保存一份到 data 根目录，供 LLM 工具读取
-    repos_cache = output_dir.parent / "yuque_repos.json"
-    repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 额外保存一份到 data 根目录，供 LLM 工具读取
+        repos_cache = output_dir.parent / "yuque_repos.json"
+        repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
 
     # 清理孤儿知识库目录（不在当前 API 列表中的目录）
     # 注意：目录名可能是 slug_safe(name) 或 namespace.replace("/", "_")
@@ -588,20 +625,33 @@ async def sync_all_repos(
             current_dirs.add(dir_name)
 
     orphan_count = 0
-    for d in output_dir.iterdir():
-        if d.name.startswith(".") or not d.is_dir():
-            continue
-        if d.name not in current_dirs:
-            # 自动删除孤儿目录
-            try:
-                import shutil
-                shutil.rmtree(d)
-                orphan_count += 1
-                logger.info(f"[Sync] 清理孤儿目录: {d.name}")
-            except Exception as e:
-                logger.warning(f"[Sync] 清理目录失败 {d.name}: {e}")
+    orphan_prefixes: list[str] = []
+    if cleanup_orphans:
+        cleanup_root = syncer.sync_root
+        protected_dirs = {str(name).strip("/\\") for name in (protected_root_dirs or set())}
+        for d in cleanup_root.iterdir():
+            if d.name.startswith(".") or not d.is_dir():
+                continue
+            if d.name in protected_dirs:
+                logger.debug(f"[Sync] 跳过受保护目录: {d.relative_to(output_dir)}")
+                continue
+            if d.name not in current_dirs:
+                # 自动删除孤儿目录
+                try:
+                    import shutil
+                    rel_prefix = str(d.relative_to(output_dir)).replace("\\", "/").rstrip("/")
+                    shutil.rmtree(d)
+                    orphan_count += 1
+                    orphan_prefixes.append(rel_prefix)
+                    logger.info(f"[Sync] 清理孤儿目录: {d.relative_to(output_dir)}")
+                except Exception as e:
+                    logger.warning(f"[Sync] 清理目录失败 {d.name}: {e}")
 
     if orphan_count > 0:
+        removed_index = _drop_index_paths_under(syncer.global_index, orphan_prefixes)
+        if removed_index:
+            _write_global_index(output_dir, syncer.global_index)
+            logger.info(f"[Sync] 已清理 {removed_index} 条孤儿全局索引")
         logger.info(f"[Sync] 已清理 {orphan_count} 个孤儿目录")
 
     # 输出 user_id 统计
@@ -613,7 +663,10 @@ async def sync_all_repos(
     logger.info(f"[Sync] 完成: {total_stats['docs']} docs, {total_stats['titles']} titles, {total_stats['removed']} removed")
     return {
         "repos_count": len(repos),
+        "team_id": sync_team.team_id,
+        "team_name": sync_team.name,
         "token_type": "团队" if is_group else "个人",
+        "repos_info": repos_info,
         **total_stats
     }
 
@@ -633,3 +686,16 @@ def _write_global_index(output_dir: Path, index: Dict[str, str]) -> None:
     """写入全局 ID->路径 索引"""
     index_file = output_dir / ".yuque-id-to-path.json"
     index_file.write_text(json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _drop_index_paths_under(index: Dict[str, str], rel_prefixes: list[str]) -> int:
+    prefixes = [prefix.replace("\\", "/").rstrip("/") for prefix in rel_prefixes if prefix]
+    if not prefixes:
+        return 0
+    removed = 0
+    for key, path in list(index.items()):
+        normalized = str(path).replace("\\", "/").lstrip("/")
+        if any(normalized == prefix or normalized.startswith(f"{prefix}/") for prefix in prefixes):
+            index.pop(key, None)
+            removed += 1
+    return removed

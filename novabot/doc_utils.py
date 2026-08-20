@@ -49,6 +49,8 @@ def doc_record_to_public_dict(row: dict, api_base_url: str) -> dict:
         "title": row.get("title") or "",
         "slug": slug,
         "author": row.get("author") or "",
+        "team_id": row.get("team_id") or "",
+        "team_name": row.get("team_name") or "",
         "book_name": row.get("book_name") or "",
         "book_namespace": namespace,
         "creator_id": row.get("creator_id"),
