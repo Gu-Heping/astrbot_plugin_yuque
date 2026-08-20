@@ -86,7 +86,7 @@ async def run_multi_team_sync(
                 cleanup_orphans=True,
                 write_repo_cache=False,
                 protected_root_dirs={
-                    other.team_id for other in selected_teams if other.team_id != DEFAULT_TEAM_ID
+                    other.team_id for other in teams if other.team_id != DEFAULT_TEAM_ID
                 },
             )
         except Exception as e:
@@ -102,6 +102,15 @@ async def run_multi_team_sync(
         for key in ("repos_count", "docs", "titles", "errors", "removed"):
             total_result[key] += result.get(key, 0)
 
+    all_repos_info = _preserve_failed_team_repos(
+        docs_dir,
+        all_repos_info,
+        failed_team_ids={
+            team_id
+            for team_id, state in team_states.items()
+            if state.get("errors_count", 0) > 0 and state.get("repos_count", 0) == 0
+        },
+    )
     write_repos_cache(docs_dir, all_repos_info)
     _save_finish_state(storage, total_result, team_states)
 
@@ -120,6 +129,42 @@ def write_repos_cache(docs_dir: Path, repos_info: list[dict]) -> None:
     repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
     repos_cache = docs_dir.parent / "yuque_repos.json"
     repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_existing_repos_cache(docs_dir: Path) -> list[dict]:
+    for repos_file in (docs_dir / ".repos.json", docs_dir.parent / "yuque_repos.json"):
+        if not repos_file.exists():
+            continue
+        try:
+            repos = json.loads(repos_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(repos, list):
+            return [repo for repo in repos if isinstance(repo, dict)]
+    return []
+
+
+def _preserve_failed_team_repos(
+    docs_dir: Path,
+    repos_info: list[dict],
+    *,
+    failed_team_ids: set[str],
+) -> list[dict]:
+    if not failed_team_ids:
+        return repos_info
+    existing = _load_existing_repos_cache(docs_dir)
+    current_keys = {
+        (str(repo.get("team_id") or DEFAULT_TEAM_ID), repo.get("id"), repo.get("namespace"))
+        for repo in repos_info
+    }
+    preserved = [
+        repo
+        for repo in existing
+        if str(repo.get("team_id") or DEFAULT_TEAM_ID) in failed_team_ids
+        and (str(repo.get("team_id") or DEFAULT_TEAM_ID), repo.get("id"), repo.get("namespace"))
+        not in current_keys
+    ]
+    return [*repos_info, *preserved]
 
 
 def _default_client_factory(team: Team) -> YuqueClient:

@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from astrbot.api import logger
+
 from .models import DEFAULT_TEAM_ID, Team
 
 
@@ -80,7 +82,11 @@ class TeamRegistry:
         return teams
 
     def get(self, team_id: str = DEFAULT_TEAM_ID) -> Team:
-        return self._teams.get(team_id) or self._teams[DEFAULT_TEAM_ID]
+        team = self._teams.get(team_id)
+        if team:
+            return team
+        logger.warning(f"[TeamRegistry] 未找到团队 {team_id}，回退到默认团队")
+        return self._teams[DEFAULT_TEAM_ID]
 
     def list_enabled(self) -> list[Team]:
         return [team for team in self._teams.values() if team.enabled]

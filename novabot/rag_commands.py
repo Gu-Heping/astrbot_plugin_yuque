@@ -75,9 +75,6 @@ def handle_rag_command(
 
     if action_lower == "rebuild":
         messages = ["🔄 重建 RAG 索引..."]
-        if not context.rag.clear():
-            messages.append("❌ 清空向量库失败")
-            return messages
         indexed = context.rag.index_from_sync(str(context.docs_dir))
         messages.append(f"✅ 重建完成，索引 {indexed} 篇文档")
         return messages

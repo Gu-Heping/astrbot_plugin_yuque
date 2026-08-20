@@ -57,6 +57,22 @@ def _load_repos(docs_dir: Path) -> dict[str, dict]:
     return by_name
 
 
+def _repo_dir_from_rel_path(rel_path: str, repos: dict[str, dict]) -> str:
+    parts = [part for part in rel_path.replace("\\", "/").split("/") if part]
+    if not parts:
+        return ""
+    repo_names = {
+        key
+        for key, repo in repos.items()
+        if key and key in {str(repo.get("name") or ""), str(repo.get("namespace") or "")}
+    }
+    if parts[0] in repo_names or len(parts) == 1:
+        return parts[0]
+    if len(parts) >= 2:
+        return parts[1]
+    return parts[0]
+
+
 def rebuild_chunk_index_from_sync(
     *,
     docs_dir: Path | str,
@@ -83,7 +99,7 @@ def rebuild_chunk_index_from_sync(
             raw = md_file.read_text(encoding="utf-8")
             fm, _ = _read_frontmatter(raw)
             rel_path = str(md_file.relative_to(docs_path)).replace("\\", "/")
-            repo_dir = rel_path.split("/", 1)[0] if "/" in rel_path else ""
+            repo_dir = _repo_dir_from_rel_path(rel_path, repos)
             repo_info = repos.get(str(fm.get("book_namespace") or "")) or repos.get(
                 str(fm.get("book_name") or "")
             ) or repos.get(repo_dir) or {}
@@ -142,8 +158,8 @@ def upsert_chunk_from_markdown_file(
     raw = md_file.read_text(encoding="utf-8")
     fm, _ = _read_frontmatter(raw)
     rel_path = str(md_file.relative_to(docs_path)).replace("\\", "/")
-    repo_dir = rel_path.split("/", 1)[0] if "/" in rel_path else ""
     repos = _load_repos(docs_path)
+    repo_dir = _repo_dir_from_rel_path(rel_path, repos)
     repo_info = repos.get(str(fm.get("book_namespace") or "")) or repos.get(
         str(fm.get("book_name") or "")
     ) or repos.get(repo_dir) or {}

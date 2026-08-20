@@ -29,6 +29,25 @@ def test_webhook_reads_team_info_from_repos_cache(tmp_path):
     assert handler._get_team_info(repo_id=8) == {"team_id": "default", "team_name": "NOVA"}
 
 
+def test_webhook_prefers_repo_id_before_duplicate_repo_name(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    handler = _handler(tmp_path, store)
+    (handler.docs_dir / ".repos.json").write_text(
+        """
+        [
+          {"id":7,"team_id":"wrong","team_name":"Wrong","name":"工程","namespace":"wrong/eng"},
+          {"id":8,"team_id":"nova","team_name":"NOVA","name":"工程","namespace":"nova/eng"}
+        ]
+        """,
+        encoding="utf-8",
+    )
+
+    assert handler._get_team_info(repo_id=8, repo_name="工程") == {
+        "team_id": "nova",
+        "team_name": "NOVA",
+    }
+
+
 def test_webhook_resolves_doc_output_with_team_prefix(tmp_path):
     store = ChunkStore(tmp_path / "chunks.db")
     handler = _handler(tmp_path, store)

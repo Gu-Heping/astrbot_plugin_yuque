@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
+import threading
 from pathlib import Path
 
 from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME, Chunk
@@ -13,45 +14,58 @@ class ChunkStore:
     def __init__(self, path: Path | str):
         self.path = Path(path)
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
 
     def open(self) -> None:
-        if self._conn is not None:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self.path))
-        self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA journal_mode=WAL")
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS chunks (
-                chunk_id TEXT PRIMARY KEY,
-                document_id TEXT NOT NULL,
-                chunk_index INTEGER NOT NULL,
-                content TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                title TEXT NOT NULL DEFAULT '',
-                team_id TEXT NOT NULL DEFAULT 'default',
-                team_name TEXT NOT NULL DEFAULT 'NOVA',
-                repository TEXT NOT NULL DEFAULT '',
-                namespace TEXT NOT NULL DEFAULT '',
-                slug TEXT NOT NULL DEFAULT '',
-                file_path TEXT NOT NULL DEFAULT '',
-                source_url TEXT NOT NULL DEFAULT '',
-                author TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
+        with self._lock:
+            if self._conn is not None:
+                return
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._conn = sqlite3.connect(str(self.path), check_same_thread=False, timeout=30)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chunks (
+                    chunk_id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    content TEXT NOT NULL,
+                    content_hash TEXT NOT NULL,
+                    title TEXT NOT NULL DEFAULT '',
+                    team_id TEXT NOT NULL DEFAULT 'default',
+                    team_name TEXT NOT NULL DEFAULT 'NOVA',
+                    repository TEXT NOT NULL DEFAULT '',
+                    namespace TEXT NOT NULL DEFAULT '',
+                    slug TEXT NOT NULL DEFAULT '',
+                    file_path TEXT NOT NULL DEFAULT '',
+                    source_url TEXT NOT NULL DEFAULT '',
+                    author TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL DEFAULT ''
+                )
+                """
             )
-            """
-        )
-        for column, default in (
-            ("team_id", DEFAULT_TEAM_ID),
-            ("team_name", DEFAULT_TEAM_NAME),
-            ("author", ""),
-        ):
-            self._ensure_column(column, f"TEXT NOT NULL DEFAULT '{default}'")
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id)")
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_team ON chunks(team_id)")
-        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_repo ON chunks(repository)")
-        self._conn.commit()
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chunk_meta (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            self._conn.execute(
+                "INSERT OR IGNORE INTO chunk_meta(key, value) VALUES ('version', 0)"
+            )
+            for column, default in (
+                ("team_id", DEFAULT_TEAM_ID),
+                ("team_name", DEFAULT_TEAM_NAME),
+                ("author", ""),
+            ):
+                self._ensure_column(column, f"TEXT NOT NULL DEFAULT '{default}'")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(document_id)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_team ON chunks(team_id)")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_chunks_repo ON chunks(repository)")
+            self._conn.commit()
 
     def _ensure_column(self, name: str, definition: str) -> None:
         assert self._conn is not None
@@ -66,9 +80,10 @@ class ChunkStore:
         return self._conn
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _row_to_chunk(self, row: sqlite3.Row) -> Chunk:
         return Chunk(
@@ -91,7 +106,7 @@ class ChunkStore:
 
     def save_document_chunks(self, document_id: str, chunks: list[Chunk]) -> None:
         conn = self._ensure_open()
-        with conn:
+        with self._lock, conn:
             conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
             conn.executemany(
                 """
@@ -122,41 +137,58 @@ class ChunkStore:
                     for c in chunks
                 ],
             )
+            self._bump_version(conn)
 
     def delete_document(self, document_id: str) -> int:
         conn = self._ensure_open()
-        with conn:
+        with self._lock, conn:
             cur = conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
+            if cur.rowcount:
+                self._bump_version(conn)
             return cur.rowcount
 
     def all_chunks(self) -> list[Chunk]:
         conn = self._ensure_open()
-        rows = conn.execute("SELECT * FROM chunks ORDER BY document_id, chunk_index").fetchall()
+        with self._lock:
+            rows = conn.execute("SELECT * FROM chunks ORDER BY document_id, chunk_index").fetchall()
         return [self._row_to_chunk(row) for row in rows]
 
     def get_document_chunks(self, document_id: str) -> list[Chunk]:
         conn = self._ensure_open()
-        rows = conn.execute(
-            "SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_index",
-            (document_id,),
-        ).fetchall()
+        with self._lock:
+            rows = conn.execute(
+                "SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_index",
+                (document_id,),
+            ).fetchall()
         return [self._row_to_chunk(row) for row in rows]
 
     def clear(self) -> None:
         conn = self._ensure_open()
-        with conn:
+        with self._lock, conn:
             conn.execute("DELETE FROM chunks")
+            self._bump_version(conn)
 
     def chunk_count(self) -> int:
         conn = self._ensure_open()
-        row = conn.execute("SELECT count(*) FROM chunks").fetchone()
+        with self._lock:
+            row = conn.execute("SELECT count(*) FROM chunks").fetchone()
         return int(row[0]) if row else 0
 
     def content_signature(self) -> str:
         conn = self._ensure_open()
-        rows = conn.execute("SELECT content_hash FROM chunks ORDER BY chunk_id").fetchall()
+        with self._lock:
+            rows = conn.execute("SELECT content_hash FROM chunks ORDER BY chunk_id").fetchall()
         combined = "".join(row[0] for row in rows)
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
+
+    def version(self) -> int:
+        conn = self._ensure_open()
+        with self._lock:
+            row = conn.execute("SELECT value FROM chunk_meta WHERE key='version'").fetchone()
+        return int(row[0]) if row else 0
+
+    def _bump_version(self, conn: sqlite3.Connection) -> None:
+        conn.execute("UPDATE chunk_meta SET value = value + 1 WHERE key='version'")
 
     def __enter__(self) -> "ChunkStore":
         self.open()

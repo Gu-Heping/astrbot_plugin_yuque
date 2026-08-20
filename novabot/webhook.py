@@ -791,16 +791,19 @@ class WebhookHandler:
         if repos_file.exists():
             try:
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
-                for repo in repos if isinstance(repos, list) else []:
-                    if (
-                        (repo_id is not None and repo.get("id") == repo_id)
-                        or (namespace and repo.get("namespace") == namespace)
-                        or (repo_name and repo.get("name") == repo_name)
-                    ):
-                        return {
-                            "team_id": repo.get("team_id") or DEFAULT_TEAM_ID,
-                            "team_name": repo.get("team_name") or DEFAULT_TEAM_NAME,
-                        }, True
+                repo_list = repos if isinstance(repos, list) else []
+                matchers = (
+                    lambda repo: repo_id is not None and repo.get("id") == repo_id,
+                    lambda repo: bool(namespace) and repo.get("namespace") == namespace,
+                    lambda repo: bool(repo_name) and repo.get("name") == repo_name,
+                )
+                for matcher in matchers:
+                    for repo in repo_list:
+                        if matcher(repo):
+                            return {
+                                "team_id": repo.get("team_id") or DEFAULT_TEAM_ID,
+                                "team_name": repo.get("team_name") or DEFAULT_TEAM_NAME,
+                            }, True
             except Exception as e:
                 logger.debug(f"[Webhook] 读取团队信息失败: {e}")
         return {"team_id": DEFAULT_TEAM_ID, "team_name": DEFAULT_TEAM_NAME}, False

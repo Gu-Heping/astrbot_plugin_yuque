@@ -74,25 +74,22 @@ def test_rag_command_search_logs_and_formats_results():
     ]
 
 
-def test_rag_command_rebuild_clears_and_indexes_docs(tmp_path):
+def test_rag_command_rebuild_indexes_docs_without_preemptive_clear(tmp_path):
     rag = _Rag()
     context, _ = _context(rag=rag, docs_dir=tmp_path)
 
     messages = handle_rag_command(context, action="rebuild")
 
     assert messages == ["🔄 重建 RAG 索引...", "✅ 重建完成，索引 3 篇文档"]
-    assert rag.cleared is True
+    assert rag.cleared is False
     assert rag.indexed_dir == str(tmp_path)
 
 
-def test_rag_command_rebuild_stops_when_clear_fails(tmp_path):
+def test_rag_command_rebuild_does_not_call_outer_clear(tmp_path):
     class FailedClearRag(_Rag):
         def clear(self):
-            return False
+            raise AssertionError("outer clear should not run")
 
     context, _ = _context(rag=FailedClearRag(), docs_dir=tmp_path)
 
-    assert handle_rag_command(context, action="rebuild") == [
-        "🔄 重建 RAG 索引...",
-        "❌ 清空向量库失败",
-    ]
+    assert handle_rag_command(context, action="rebuild") == ["🔄 重建 RAG 索引...", "✅ 重建完成，索引 3 篇文档"]

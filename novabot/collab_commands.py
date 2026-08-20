@@ -31,6 +31,7 @@ def format_potential_collaborators(
     *,
     members: dict,
     doc_index: Any = None,
+    team_id: str | None = None,
 ) -> str:
     """Format fallback potential collaborator recommendations."""
     lines = [f"【「{topic}」领域潜在协作伙伴】\n"]
@@ -51,7 +52,13 @@ def format_potential_collaborators(
         for reason in reasons:
             lines.append(f"   ✓ {reason}")
 
-        partner_doc = _find_partner_doc(topic, partner_id, partner_name, doc_index)
+        partner_doc = _find_partner_doc(
+            topic,
+            partner_id,
+            partner_name,
+            doc_index,
+            team_id=team_id,
+        )
         if partner_doc:
             lines.append(f"   📄 相关文档：{partner_doc[:25]}...")
 
@@ -97,10 +104,19 @@ def format_collaborators(
     return "\n".join(lines)
 
 
-def _find_partner_doc(topic: str, partner_id: str, partner_name: str, doc_index: Any) -> str:
+def _find_partner_doc(
+    topic: str,
+    partner_id: str,
+    partner_name: str,
+    doc_index: Any,
+    *,
+    team_id: str | None = None,
+) -> str:
     if not doc_index:
         return ""
     try:
+        docs = doc_index.search(title=topic, team_id=team_id, limit=5)
+    except TypeError:
         docs = doc_index.search(title=topic, limit=5)
     except Exception:
         return ""

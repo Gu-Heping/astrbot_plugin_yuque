@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 from astrbot.api import logger
 
 from .doc_projection import build_doc_metadata, build_markdown, count_chinese_words
-from .models import Team, scoped_document_id
+from .models import DEFAULT_TEAM_ID, Team, scoped_document_id
 from .yuque_client import YuqueClient
 
 
@@ -339,6 +339,7 @@ class DocSyncer:
                 continue
             if str(path).replace("\\", "/").startswith(prefix):
                 normalized[scoped_document_id(self.team.team_id, key)] = path
+                normalized.pop(key, None)
         return normalized
 
     def _document_key(self, yuque_id) -> str:
@@ -398,6 +399,9 @@ class DocSyncer:
                                 logger.info(f"[Sync] 文档移动，删除旧路径: {old_path}")
                             except OSError:
                                 pass
+
+                detail["team_id"] = self.team.team_id
+                detail["team_name"] = self.team.name
 
                 # 写入新文件
                 content = self._build_markdown(detail, author)
@@ -629,6 +633,7 @@ async def sync_all_repos(
     if cleanup_orphans:
         cleanup_root = syncer.sync_root
         protected_dirs = {str(name).strip("/\\") for name in (protected_root_dirs or set())}
+        protected_dirs.update(_known_non_default_team_dirs(output_dir, sync_team.team_id))
         for d in cleanup_root.iterdir():
             if d.name.startswith(".") or not d.is_dir():
                 continue
@@ -669,6 +674,27 @@ async def sync_all_repos(
         "repos_info": repos_info,
         **total_stats
     }
+
+
+def _known_non_default_team_dirs(output_dir: Path, current_team_id: str) -> Set[str]:
+    protected: Set[str] = set()
+    for cache_file in (output_dir / ".repos.json", output_dir.parent / "yuque_repos.json"):
+        if not cache_file.exists():
+            continue
+        try:
+            repos = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        for repo in repos if isinstance(repos, list) else []:
+            team_id = str(repo.get("team_id") or DEFAULT_TEAM_ID).strip()
+            if team_id and team_id not in {DEFAULT_TEAM_ID, current_team_id}:
+                protected.add(team_id.strip("/\\"))
+    index = _read_global_index(output_dir)
+    for key, path in index.items():
+        prefix = str(path).replace("\\", "/").split("/", 1)[0].strip()
+        if prefix and prefix != current_team_id and ":" in key:
+            protected.add(prefix)
+    return protected
 
 
 def _read_global_index(output_dir: Path) -> Dict[str, str]:

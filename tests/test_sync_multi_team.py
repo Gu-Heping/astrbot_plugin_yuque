@@ -84,6 +84,14 @@ class _FakeStorage:
         self.save_sync_state(state)
 
 
+class _FailingClient:
+    async def get_user(self):
+        raise RuntimeError("boom")
+
+    async def close(self):
+        return None
+
+
 @pytest.mark.asyncio
 async def test_sync_all_repos_can_append_isolated_team_indexes(tmp_path):
     docs_dir = tmp_path / "yuque_docs"
@@ -196,6 +204,55 @@ async def test_multi_team_sync_coordinator_records_state_and_cache(tmp_path):
     repos_cache = json.loads((tmp_path / "yuque_repos.json").read_text(encoding="utf-8"))
     assert {repo["team_id"] for repo in repos} == {"default", "other"}
     assert repos_cache == repos
+
+
+@pytest.mark.asyncio
+async def test_multi_team_sync_preserves_failed_team_repos_cache(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    docs_dir.mkdir()
+    storage = _FakeStorage(docs_dir)
+    (docs_dir / ".repos.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 20,
+                    "name": "工程",
+                    "namespace": "other/eng",
+                    "team_id": "other",
+                    "team_name": "Other",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "default": _FakeYuqueClient(
+            user_id=1,
+            repo_name="工程",
+            namespace="nova/eng",
+            doc_id=101,
+            title="默认团队文档",
+        ),
+        "other": _FailingClient(),
+    }
+
+    summary = await run_multi_team_sync(
+        teams=teams,
+        storage=storage,
+        docs_dir=docs_dir,
+        members={"7": {"name": "Alice"}},
+        client_factory=lambda team: clients[team.team_id],
+    )
+
+    repos = json.loads((docs_dir / ".repos.json").read_text(encoding="utf-8"))
+    assert summary["team_states"]["other"]["errors_count"] == 1
+    assert {repo["team_id"] for repo in repos} == {"default", "other"}
+    assert any(repo["namespace"] == "other/eng" for repo in repos)
 
 
 def test_path_drift_uses_team_scoped_document_id(tmp_path):

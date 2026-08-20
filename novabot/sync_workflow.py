@@ -4,6 +4,7 @@ NovaBot 同步后流程编排
 """
 
 import asyncio
+import ast
 import subprocess
 from pathlib import Path
 from typing import Any, Callable
@@ -114,7 +115,12 @@ async def run_background_sync_pipeline(
     )
     if error:
         logger.error(f"[Sync] {error}")
-        return {"teams_count": 0, "result": {"docs": 0, "removed": 0, "errors": 1}}
+        return {
+            "teams_count": 0,
+            "result": {"docs": 0, "removed": 0, "errors": 1},
+            "team_states": {},
+            "repos_info": [],
+        }
 
     sync_summary = await sync_runner(
         teams=sync_teams,
@@ -344,5 +350,25 @@ def _parse_git_status_files(stdout: str) -> list[str]:
     for line in stdout.splitlines():
         if not line.strip():
             continue
-        files.append(line[3:] if len(line) > 3 else line.strip())
+        path = line[3:] if len(line) > 3 else line.strip()
+        if " -> " in path:
+            old_path, new_path = path.split(" -> ", 1)
+            files.extend([_unquote_git_path(old_path), _unquote_git_path(new_path)])
+        else:
+            files.append(_unquote_git_path(path))
     return files
+
+
+def _unquote_git_path(path: str) -> str:
+    value = path.strip()
+    if not (value.startswith('"') and value.endswith('"')):
+        return value
+    try:
+        decoded = ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return value.strip('"')
+    decoded_text = str(decoded)
+    try:
+        return decoded_text.encode("latin1").decode("utf-8")
+    except UnicodeError:
+        return decoded_text

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from typing import Awaitable, Callable
 
@@ -32,14 +33,15 @@ class KnowledgeCore:
         self.keyword_index = keyword_index or ChunkKeywordIndex()
         self.vector_search = vector_search
         self.reliable_threshold = reliable_threshold
-        self._keyword_signature: str | None = None
+        self._keyword_version: int | None = None
 
-    def _ensure_keyword_index(self) -> None:
-        signature = self.chunk_store.content_signature()
-        if signature == self._keyword_signature:
+    async def _ensure_keyword_index(self) -> None:
+        version = await asyncio.to_thread(self.chunk_store.version)
+        if version == self._keyword_version:
             return
-        self.keyword_index.build(self.chunk_store.all_chunks())
-        self._keyword_signature = signature
+        chunks = await asyncio.to_thread(self.chunk_store.all_chunks)
+        await asyncio.to_thread(self.keyword_index.build, chunks)
+        self._keyword_version = version
 
     async def search(
         self,
@@ -51,7 +53,7 @@ class KnowledgeCore:
         resolved_scope = (
             scope if isinstance(scope, RetrievalScope) else RetrievalScope.from_dict(scope)
         )
-        self._ensure_keyword_index()
+        await self._ensure_keyword_index()
         keyword_results = self._keyword_results(query, top_k * 4, resolved_scope)
         vector_results: list[RetrievalResult] = []
         if self.vector_search is not None:
@@ -66,9 +68,7 @@ class KnowledgeCore:
         scope: RetrievalScope,
     ) -> list[RetrievalResult]:
         results: list[RetrievalResult] = []
-        for hit in self.keyword_index.search(query, top_k=top_k):
-            if not scope.matches_doc(hit.chunk.as_document()):
-                continue
+        for hit in self.keyword_index.search(query, top_k=top_k, scope=scope):
             score = hit.score
             reliable = score >= self.reliable_threshold and bool(hit.matched_terms)
             if hit.title_match or hit.phrase_match:
@@ -95,16 +95,15 @@ class KnowledgeCore:
             if existing is None:
                 merged[result.chunk.chunk_id] = result
                 continue
-            score = 0.5 * max(existing.keyword_score, result.keyword_score) + 0.5 * max(
-                existing.vector_score, result.vector_score
-            )
-            if score <= 0:
-                score = max(existing.score, result.score)
+            keyword_score = max(existing.keyword_score, result.keyword_score)
+            vector_score = max(existing.vector_score, result.vector_score)
+            base_score = max(existing.score, result.score, keyword_score, vector_score)
+            score = min(1.0, base_score + 0.12)
             merged[result.chunk.chunk_id] = RetrievalResult(
                 chunk=_prefer_richer_chunk(existing.chunk, result.chunk),
                 score=score,
-                keyword_score=max(existing.keyword_score, result.keyword_score),
-                vector_score=max(existing.vector_score, result.vector_score),
+                keyword_score=keyword_score,
+                vector_score=vector_score,
                 methods=tuple(dict.fromkeys([*existing.methods, *result.methods])),
                 reliable=existing.reliable or result.reliable or score >= self.reliable_threshold,
             )

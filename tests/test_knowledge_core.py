@@ -1,9 +1,11 @@
 import pytest
+from concurrent.futures import ThreadPoolExecutor
 
 from novabot.chunk_store import ChunkStore
 from novabot.chunking import split_markdown
 from novabot.knowledge_core import KnowledgeCore
 from novabot.keyword_index import ChunkKeywordIndex
+from novabot.models import Chunk, RetrievalResult
 
 
 @pytest.mark.asyncio
@@ -93,3 +95,69 @@ async def test_knowledge_core_scopes_by_namespace_and_requires_time_metadata(tmp
     )
 
     assert [result.chunk.namespace for result in results] == ["nova/eng"]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_core_filters_scope_before_keyword_truncation(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    for i in range(8):
+        store.save_document_chunks(
+            f"other:{i}",
+            split_markdown(
+                f"other:{i}",
+                "# 部署\n\n部署说明 通用内容",
+                title="部署说明",
+                team_id="other",
+                team_name="Other",
+                size=220,
+                overlap=40,
+            ),
+        )
+    store.save_document_chunks(
+        "nova:1",
+        split_markdown(
+            "nova:1",
+            "# 部署\n\n部署说明 Nova 专属内容",
+            title="部署说明",
+            team_id="nova",
+            team_name="NOVA",
+            size=220,
+            overlap=40,
+        ),
+    )
+
+    core = KnowledgeCore(store, keyword_index=ChunkKeywordIndex())
+    results = await core.search("部署说明", scope={"team_id": "nova"}, top_k=1)
+
+    assert [result.chunk.team_id for result in results] == ["nova"]
+
+
+def test_chunk_store_can_be_read_from_worker_thread(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    store.save_document_chunks(
+        "nova:1",
+        split_markdown("nova:1", "# 标题\n\n线程安全内容", team_id="nova", size=220, overlap=40),
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        count = pool.submit(store.chunk_count).result()
+
+    assert count == 1
+
+
+def test_hybrid_merge_boosts_dual_method_hit_without_lowering_best_score(tmp_path):
+    chunk = Chunk(
+        chunk_id="c1",
+        document_id="d1",
+        chunk_index=0,
+        content="混合检索",
+        content_hash="h",
+    )
+    core = KnowledgeCore(ChunkStore(tmp_path / "chunks.db"))
+
+    merged = core._merge(
+        [RetrievalResult(chunk=chunk, score=0.9, keyword_score=0.9, methods=("keyword",))],
+        [RetrievalResult(chunk=chunk, score=0.1, vector_score=0.1, methods=("semantic",))],
+    )
+
+    assert merged[0].score >= 0.9

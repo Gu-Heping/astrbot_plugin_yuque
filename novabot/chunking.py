@@ -76,10 +76,10 @@ def _boundary_cut(text: str, size: int) -> int:
     if len(text) <= size:
         return len(text)
     for pattern in (r"[。！？\.\?\!]", r"[；;]", r"[\n]", r"[\s]"):
-        for match in re.finditer(pattern, text[:size]):
-            pos = match.end()
-            if pos >= size * 0.3:
-                return pos
+        positions = [match.end() for match in re.finditer(pattern, text[:size])]
+        valid = [pos for pos in positions if pos >= size * 0.3]
+        if valid:
+            return valid[-1]
     return size
 
 
@@ -127,7 +127,9 @@ def split_markdown(
                 piece = block[start:end].strip()
                 if piece:
                     parts.append(piece)
-                next_start = min(len(block), start + step)
+                if end >= len(block):
+                    break
+                next_start = min(len(block), max(start + 1, end - overlap))
                 start = next_start if next_start > start else start + step
             continue
         if current and len(current) + len(block) + 2 > size:

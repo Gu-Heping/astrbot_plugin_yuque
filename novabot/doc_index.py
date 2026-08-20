@@ -13,6 +13,10 @@ from astrbot.api import logger
 from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 class DocIndex:
     """文档元数据索引"""
 
@@ -94,46 +98,64 @@ class DocIndex:
     def _ensure_team_yuque_identity(self, conn: sqlite3.Connection) -> None:
         """Migrate old yuque_id-global uniqueness to team-scoped identity."""
 
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'docs'"
-        ).fetchone()
-        table_sql = row[0] if row else ""
-        if "yuque_id INTEGER UNIQUE" not in table_sql:
+        if not self._has_global_yuque_unique_index(conn):
             return
 
         logger.info("[DocIndex] 迁移 yuque_id 唯一约束为 team_id + yuque_id")
-        conn.execute("DROP TABLE IF EXISTS docs_new")
-        conn.execute("""
-            CREATE TABLE docs_new (
-                id INTEGER PRIMARY KEY,
-                yuque_id INTEGER,
-                title TEXT,
-                slug TEXT,
-                author TEXT,
-                team_id TEXT DEFAULT 'default',
-                team_name TEXT DEFAULT 'NOVA',
-                book_name TEXT,
-                book_namespace TEXT,
-                creator_id INTEGER,
-                created_at TEXT,
-                updated_at TEXT,
-                word_count INTEGER DEFAULT 0,
-                file_path TEXT,
-                indexed_at TEXT
-            )
-        """)
-        conn.execute("""
-            INSERT INTO docs_new
-            (id, yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace,
-             creator_id, created_at, updated_at, word_count, file_path, indexed_at)
-            SELECT id, yuque_id, title, slug, author,
-                   COALESCE(team_id, 'default'), COALESCE(team_name, 'NOVA'),
-                   book_name, book_namespace, creator_id, created_at, updated_at,
-                   word_count, file_path, indexed_at
-            FROM docs
-        """)
-        conn.execute("DROP TABLE docs")
-        conn.execute("ALTER TABLE docs_new RENAME TO docs")
+        conn.commit()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DROP TABLE IF EXISTS docs_new")
+            conn.execute("""
+                CREATE TABLE docs_new (
+                    id INTEGER PRIMARY KEY,
+                    yuque_id INTEGER,
+                    title TEXT,
+                    slug TEXT,
+                    author TEXT,
+                    team_id TEXT DEFAULT 'default',
+                    team_name TEXT DEFAULT 'NOVA',
+                    book_name TEXT,
+                    book_namespace TEXT,
+                    creator_id INTEGER,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    word_count INTEGER DEFAULT 0,
+                    file_path TEXT,
+                    indexed_at TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO docs_new
+                (id, yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace,
+                 creator_id, created_at, updated_at, word_count, file_path, indexed_at)
+                SELECT id, yuque_id, title, slug, author,
+                       COALESCE(team_id, 'default'), COALESCE(team_name, 'NOVA'),
+                       book_name, book_namespace, creator_id, created_at, updated_at,
+                       word_count, file_path, indexed_at
+                FROM docs
+            """)
+            conn.execute("DROP TABLE docs")
+            conn.execute("ALTER TABLE docs_new RENAME TO docs")
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+
+    def _has_global_yuque_unique_index(self, conn: sqlite3.Connection) -> bool:
+        for row in conn.execute("PRAGMA index_list(docs)").fetchall():
+            index_name = row[1]
+            is_unique = bool(row[2])
+            if not is_unique:
+                continue
+            columns = [
+                info[2]
+                for info in conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+            ]
+            if columns == ["yuque_id"]:
+                return True
+        return False
 
     def clear(self):
         """清空索引"""
@@ -175,8 +197,8 @@ class DocIndex:
                 doc.get("title", ""),
                 doc.get("slug", ""),
                 doc.get("author", ""),
-                doc.get("team_id", DEFAULT_TEAM_ID),
-                doc.get("team_name", DEFAULT_TEAM_NAME),
+                doc.get("team_id") or DEFAULT_TEAM_ID,
+                doc.get("team_name") or DEFAULT_TEAM_NAME,
                 doc.get("book_name", ""),
                 doc.get("book_namespace", ""),
                 doc.get("creator_id"),
@@ -277,8 +299,8 @@ class DocIndex:
                         d.get("title", ""),
                         d.get("slug", ""),
                         d.get("author", ""),
-                        d.get("team_id", DEFAULT_TEAM_ID),
-                        d.get("team_name", DEFAULT_TEAM_NAME),
+                        d.get("team_id") or DEFAULT_TEAM_ID,
+                        d.get("team_name") or DEFAULT_TEAM_NAME,
                         d.get("book_name", ""),
                         d.get("book_namespace", ""),
                         d.get("creator_id"),
@@ -308,8 +330,8 @@ class DocIndex:
                             d.get("title", ""),
                             d.get("slug", ""),
                             d.get("author", ""),
-                            d.get("team_id", DEFAULT_TEAM_ID),
-                            d.get("team_name", DEFAULT_TEAM_NAME),
+                            d.get("team_id") or DEFAULT_TEAM_ID,
+                            d.get("team_name") or DEFAULT_TEAM_NAME,
                             d.get("book_name", ""),
                             d.get("book_namespace", ""),
                             d.get("creator_id"),
@@ -409,8 +431,24 @@ class DocIndex:
             conditions.append("title LIKE ?")
             params.append(f"%{title}%")
         if path_prefix:
-            conditions.append("REPLACE(file_path, '\\', '/') LIKE ?")
-            params.append(f"%{path_prefix.strip('/')}%")
+            normalized_prefix = path_prefix.strip("/\\")
+            conditions.append(
+                "("
+                "REPLACE(file_path, '\\', '/') = ? OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\' OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\' OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\'"
+                ")"
+            )
+            escaped = _escape_like(normalized_prefix)
+            params.extend(
+                [
+                    normalized_prefix,
+                    f"{escaped}/%",
+                    f"%/{escaped}",
+                    f"%/{escaped}/%",
+                ]
+            )
         if updated_after:
             conditions.append("updated_at >= ?")
             params.append(updated_after)

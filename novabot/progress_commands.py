@@ -136,7 +136,7 @@ async def analyze_progress_with_llm(
         safe_domain = sanitize_user_input(domain, max_length=50)
         level = LEVEL_MAP.get(data.get("level", ""), "入门")
         milestones = data.get("milestones", [])
-        last_active = sanitize_user_input(data.get("last_active", "未知"), max_length=20)
+        last_active = sanitize_user_input(data.get("last_active") or "未知", max_length=20)
         domains_info.append(
             f"- {safe_domain}: {level}，{len(milestones)} 个里程碑，最近活跃：{last_active}"
         )

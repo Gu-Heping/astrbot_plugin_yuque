@@ -7,7 +7,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 
-from .models import Chunk
+from .models import Chunk, RetrievalScope
 
 
 _STOP_WORDS = frozenset(
@@ -29,8 +29,8 @@ def tokenize(text: str) -> list[str]:
         text = text.replace(url, key, 1)
     for piece in re.findall(r"[a-z]+|[0-9]+|\x00URL\d+\x00|[一-鿿]", text):
         tokens.append(placeholders.get(piece, piece))
-    chars = re.findall(r"[一-鿿]", text)
-    tokens.extend("".join(chars[i : i + 2]) for i in range(len(chars) - 1))
+    for segment in re.findall(r"[一-鿿]+", text):
+        tokens.extend(segment[i : i + 2] for i in range(len(segment) - 1))
     return tokens
 
 
@@ -61,17 +61,21 @@ class ChunkKeywordIndex:
         self.b = b
         self._chunks: dict[str, Chunk] = {}
         self._index: dict[str, list[tuple[str, int, int, int]]] = {}
+        self._body_lengths: dict[str, int] = {}
         self._avg_len = 0.0
 
     def build(self, chunks: list[Chunk]) -> None:
         self._chunks = {chunk.chunk_id: chunk for chunk in chunks}
         self._index = {}
+        self._body_lengths = {}
         total_len = 0
         for chunk in chunks:
             title_tokens = tokenize(chunk.title)
             body_tokens = tokenize(chunk.content)
             path_tokens = tokenize(chunk.file_path)
-            total_len += max(len(body_tokens), 1)
+            body_len = max(len(body_tokens), 1)
+            self._body_lengths[chunk.chunk_id] = body_len
+            total_len += body_len
             counts = Counter(body_tokens + title_tokens + path_tokens)
             title_counts = Counter(title_tokens)
             path_counts = Counter(path_tokens)
@@ -81,7 +85,12 @@ class ChunkKeywordIndex:
                 )
         self._avg_len = total_len / max(len(chunks), 1)
 
-    def search(self, query: str, top_k: int = 20) -> list[KeywordHit]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 20,
+        scope: RetrievalScope | None = None,
+    ) -> list[KeywordHit]:
         terms = extract_query_terms(query)
         if not terms or not self._chunks:
             return []
@@ -96,7 +105,9 @@ class ChunkKeywordIndex:
             idf = math.log((total - len(postings) + 0.5) / (len(postings) + 0.5) + 1.0)
             for chunk_id, freq, title_count, path_count in postings:
                 chunk = self._chunks[chunk_id]
-                body_len = max(len(tokenize(chunk.content)), 1)
+                if scope and not scope.matches_doc(chunk.as_document()):
+                    continue
+                body_len = self._body_lengths.get(chunk_id, 1)
                 denom = freq + self.k1 * (1 - self.b + self.b * body_len / max(self._avg_len, 1))
                 bm25 = idf * (freq * (self.k1 + 1)) / max(denom, 0.001)
                 boost = idf * (title_count * 2.0 + path_count)
@@ -106,7 +117,8 @@ class ChunkKeywordIndex:
 
         if len(terms) > 1:
             phrase = "".join(terms[:2])
-            for chunk_id, chunk in self._chunks.items():
+            for chunk_id in list(scores):
+                chunk = self._chunks[chunk_id]
                 if phrase and phrase in (chunk.title + chunk.content + chunk.file_path).casefold():
                     phrase_hits[chunk_id] = phrase_hits.get(chunk_id, 0) + 1
                     scores[chunk_id] = scores.get(chunk_id, 0.0) * 1.15

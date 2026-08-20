@@ -7,7 +7,12 @@ from datetime import datetime
 from astrbot.api import logger
 
 
-def update_collaboration_network_from_docs(*, doc_index, collaboration_manager) -> dict:
+def update_collaboration_network_from_docs(
+    *,
+    doc_index,
+    collaboration_manager,
+    team_id: str | None = None,
+) -> dict:
     """Build same-repository collaboration edges from document metadata."""
 
     if not collaboration_manager:
@@ -18,26 +23,28 @@ def update_collaboration_network_from_docs(*, doc_index, collaboration_manager) 
         return {"repos": 0, "relations": 0}
 
     try:
-        docs = doc_index.get_all_docs()
+        docs = _load_docs(doc_index, team_id=team_id)
     except Exception as e:
         logger.error(f"[Collaboration] 获取文档列表失败: {e}")
         return {"repos": 0, "relations": 0}
 
-    repo_contributors: dict[str, set[str]] = {}
+    repo_contributors: dict[tuple[str, str], set[str]] = {}
     for doc in docs:
         book_name = doc.get("book_name", "")
         creator_id = doc.get("creator_id")
         if not book_name or not creator_id:
             continue
-        repo_contributors.setdefault(book_name, set()).add(str(creator_id))
+        doc_team_id = str(doc.get("team_id") or "default")
+        repo_contributors.setdefault((doc_team_id, book_name), set()).add(str(creator_id))
 
     total_repos = 0
     total_relations = 0
-    for book_name, contributors in repo_contributors.items():
+    for (repo_team_id, book_name), contributors in repo_contributors.items():
         if len(contributors) < 2:
             continue
 
-        collaboration_manager.add_repo_contributors(book_name, list(contributors))
+        repo_key = book_name if repo_team_id == "default" else f"{repo_team_id}/{book_name}"
+        collaboration_manager.add_repo_contributors(repo_key, list(contributors))
         total_repos += 1
         n = len(contributors)
         total_relations += n * (n - 1) // 2
@@ -49,7 +56,12 @@ def update_collaboration_network_from_docs(*, doc_index, collaboration_manager) 
     return {"repos": total_repos, "relations": total_relations}
 
 
-def init_member_trajectories_from_docs(*, doc_index, trajectory_manager) -> dict:
+def init_member_trajectories_from_docs(
+    *,
+    doc_index,
+    trajectory_manager,
+    team_id: str | None = None,
+) -> dict:
     """Create member trajectory events from document publish/update metadata."""
 
     if not trajectory_manager:
@@ -60,7 +72,7 @@ def init_member_trajectories_from_docs(*, doc_index, trajectory_manager) -> dict
         return {"members": 0, "events": 0}
 
     try:
-        docs = doc_index.get_all_docs()
+        docs = _load_docs(doc_index, team_id=team_id)
     except Exception as e:
         logger.error(f"[Trajectory] 获取文档列表失败: {e}")
         return {"members": 0, "events": 0}
@@ -111,3 +123,16 @@ def _doc_trajectory_event(doc: dict) -> tuple[str, str]:
     if abs((updated - created).total_seconds()) < 3600:
         return "publish_doc", created_at
     return "update_doc", updated_at
+
+
+def _load_docs(doc_index, *, team_id: str | None = None) -> list[dict]:
+    if not team_id:
+        return doc_index.get_all_docs()
+    try:
+        return doc_index.search(team_id=team_id, limit=10000)
+    except TypeError:
+        return [
+            doc
+            for doc in doc_index.get_all_docs()
+            if str(doc.get("team_id") or "default") == team_id
+        ]

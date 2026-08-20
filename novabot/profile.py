@@ -356,9 +356,9 @@ def format_generated_profile_summary(profile: dict) -> str:
     return (
         "✅ 画像已生成\n"
         "━━━━━━━━━━━━━━━\n"
-        f"兴趣: {', '.join(p.get('interests', []))}\n"
+        f"兴趣: {', '.join(_string_list(p.get('interests')))}\n"
         f"水平: {LEVEL_LABELS.get(p.get('level', ''), '未知')}\n"
-        f"标签: {', '.join(p.get('tags', []))}\n"
+        f"标签: {', '.join(_string_list(p.get('tags')))}\n"
         "\n"
         f"📝 {p.get('summary', '')}"
     )
@@ -396,7 +396,7 @@ def format_profile_view(*, binding: dict, profile: dict | None) -> str:
     ]
     lines.extend(skill_lines or ["暂无数据"])
 
-    tags = p.get("tags", [])
+    tags = _string_list(p.get("tags"))
     if tags:
         lines.extend(["", "🏷️ 标签", f"• {' • '.join(tags)}"])
 
@@ -416,6 +416,16 @@ def format_profile_view(*, binding: dict, profile: dict | None) -> str:
 
     lines.extend(["", "💡 使用 /profile refresh 重新分析"])
     return "\n".join(lines)
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]
 
 
 def _profile_skill_lines(profile: dict) -> list[str]:

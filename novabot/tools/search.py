@@ -592,7 +592,9 @@ class ReadDocTool(BaseTool):
                     )
                 elif info["total_chars"] > 0:
                     header.append(f"（全文共 {info['total_chars']} 字）")
-                header.extend(["", format_evidence_block(evidence), "", format_citations(evidence)])
+                header.extend(
+                    ["", format_evidence_block(evidence), "", info["content"], "", format_citations(evidence)]
+                )
                 return "\n".join(header)
 
             raw = doc_file.read_text(encoding="utf-8")

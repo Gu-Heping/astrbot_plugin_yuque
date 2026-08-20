@@ -7,6 +7,7 @@ import pytest
 
 from novabot.models import Team
 from novabot.sync_workflow import (
+    _parse_git_status_files,
     build_sync_commit_message,
     commit_sync_changes,
     mark_sync_failed,
@@ -37,6 +38,16 @@ class _FakeGit:
     def add_commit(self, files, message):
         self.commits.append((files, message))
         return "abc1234"
+
+
+def test_parse_git_status_files_handles_renames_and_quoted_paths():
+    stdout = 'R  "old path/\\345\\267\\245.md" -> "new path/\\345\\267\\245.md"\n M plain.md\n'
+
+    assert _parse_git_status_files(stdout) == [
+        "old path/工.md",
+        "new path/工.md",
+        "plain.md",
+    ]
 
 
 @dataclass

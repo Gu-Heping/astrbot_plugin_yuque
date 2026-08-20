@@ -109,7 +109,13 @@ def format_frequent_questions(
     return "\n".join(lines)
 
 
-def find_related_docs_for_questions(doc_index: Any, questions: list[dict], limit: int = 3) -> list[dict]:
+def find_related_docs_for_questions(
+    doc_index: Any,
+    questions: list[dict],
+    limit: int = 3,
+    *,
+    team_id: str | None = None,
+) -> list[dict]:
     """Find likely related docs for frequent questions."""
     if not doc_index or not questions:
         return []
@@ -118,7 +124,10 @@ def find_related_docs_for_questions(doc_index: Any, questions: list[dict], limit
         keywords = extract_question_keywords(questions)
         if not keywords:
             return []
-        return doc_index.search(title=" ".join(keywords[:3]), limit=limit)
+        try:
+            return doc_index.search(title=" ".join(keywords[:3]), team_id=team_id, limit=limit)
+        except TypeError:
+            return doc_index.search(title=" ".join(keywords[:3]), limit=limit)
     except Exception as e:
         logger.debug(f"[Questions] 相关文档推荐失败: {e}")
         return []

@@ -56,7 +56,7 @@ async def test_rag_adapter_filters_semantic_results_by_scope(tmp_path):
 
     assert [result.chunk.document_id for result in results] == ["nova:42"]
     assert results[0].methods == ("semantic",)
-    assert results[0].reliable is True
+    assert results[0].reliable is False
 
 
 @pytest.mark.asyncio
@@ -76,6 +76,7 @@ async def test_hybrid_search_merges_keyword_and_semantic_methods(tmp_path):
                 "team_id": "nova",
                 "team_name": "NOVA",
                 "content": chunk.content,
+                "score": 0.88,
             }
         ]
     )
@@ -166,3 +167,25 @@ async def test_rag_adapter_synthetic_chunk_carries_path_and_time_scope(tmp_path)
     assert len(results) == 1
     assert results[0].chunk.file_path == "工程/指南/部署.md"
     assert results[0].chunk.updated_at == "2026-02-01"
+
+
+@pytest.mark.asyncio
+async def test_rag_adapter_marks_real_high_similarity_score_reliable(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    _save_chunk(store, "nova:42", "Nova 团队向量内容。", team_id="nova", team_name="NOVA")
+    rag = _FakeRag(
+        [
+            {
+                "id": "nova:42",
+                "team_id": "nova",
+                "team_name": "NOVA",
+                "content": "Nova 团队向量内容。",
+                "score": 0.91,
+            }
+        ]
+    )
+    adapter = RagVectorSearchAdapter(rag, store)
+
+    results = await adapter("vector", top_k=5, scope=RetrievalScope.from_dict({"team_id": "nova"}))
+
+    assert results[0].reliable is True

@@ -35,14 +35,18 @@ class RagVectorSearchAdapter:
             chunk = self._chunk_from_result(item, scope)
             if chunk is None:
                 continue
-            vector_score = max(0.05, 1.0 - (rank - 1) * 0.08)
+            vector_score, score_is_real = _extract_vector_score(item, rank)
             results.append(
                 RetrievalResult(
                     chunk=chunk,
                     score=vector_score,
                     vector_score=vector_score,
                     methods=("semantic",),
-                    reliable=vector_score >= self.reliable_threshold and bool(chunk.content.strip()),
+                    reliable=(
+                        score_is_real
+                        and vector_score >= self.reliable_threshold
+                        and bool(chunk.content.strip())
+                    ),
                 )
             )
             if len(results) >= top_k:
@@ -98,6 +102,14 @@ def _synthetic_chunk(item: dict) -> Chunk | None:
         author=str(item.get("author") or ""),
         updated_at=str(item.get("updated_at") or ""),
     )
+
+
+def _extract_vector_score(item: dict, rank: int) -> tuple[float, bool]:
+    for key in ("score", "similarity", "distance_score", "relevance_score"):
+        value = item.get(key)
+        if isinstance(value, (int, float)):
+            return max(0.0, min(1.0, float(value))), True
+    return max(0.05, 1.0 - (rank - 1) * 0.08), False
 
 
 def _parse_source(source: str) -> tuple[str, str]:

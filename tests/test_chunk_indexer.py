@@ -124,3 +124,30 @@ book_name: 工程
     contents = {chunk.document_id: chunk.content for chunk in store.all_chunks()}
     assert "默认团队内容" in contents["42"]
     assert "其他团队内容" in contents["other:42"]
+
+
+def test_chunk_indexer_uses_repo_dir_after_team_prefix_when_frontmatter_missing_team(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    repo_dir = docs_dir / "other" / "工程"
+    repo_dir.mkdir(parents=True)
+    (docs_dir / ".repos.json").write_text(
+        '[{"team_id":"other","team_name":"Other","name":"工程","namespace":"other/eng"}]',
+        encoding="utf-8",
+    )
+    (repo_dir / "部署.md").write_text(
+        """---
+id: 42
+title: 部署说明
+---
+
+其他团队路径推断内容。
+""",
+        encoding="utf-8",
+    )
+    store = ChunkStore(tmp_path / "chunks.db")
+
+    rebuild_chunk_index_from_sync(docs_dir=docs_dir, chunk_store=store)
+    chunks = store.get_document_chunks("other:42")
+
+    assert chunks[0].team_id == "other"
+    assert chunks[0].repository == "工程"
