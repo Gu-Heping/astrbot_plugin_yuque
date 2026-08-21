@@ -32,10 +32,39 @@ def normalize_group_ids(raw: Any) -> frozenset[str]:
 def event_group_id(event: Any) -> str:
     """Return the current event group ID, or an empty string for private chats."""
 
+    private_checker = getattr(event, "is_private_chat", None)
+    if callable(private_checker):
+        try:
+            if private_checker():
+                return ""
+        except Exception:
+            pass
+
     getter = getattr(event, "get_group_id", None)
     if not callable(getter):
         return ""
     return str(getter() or "").strip()
+
+
+def is_group_chat(event: Any) -> bool:
+    """Return whether this event should be treated as a group chat."""
+
+    private_checker = getattr(event, "is_private_chat", None)
+    if callable(private_checker):
+        try:
+            if private_checker():
+                return False
+        except Exception:
+            pass
+
+    group_checker = getattr(event, "is_group_chat", None)
+    if callable(group_checker):
+        try:
+            return bool(group_checker())
+        except Exception:
+            pass
+
+    return bool(event_group_id(event))
 
 
 def is_group_chat_allowed(
@@ -52,3 +81,17 @@ def is_group_chat_allowed(
     if not whitelist_enabled:
         return True
     return group_id in allowed_group_ids
+
+
+def suppress_default_llm(event: Any) -> None:
+    """Prevent AstrBot from falling back to its default LLM for this event."""
+
+    setter = getattr(event, "should_call_llm", None)
+    if callable(setter):
+        setter(True)
+        return
+
+    try:
+        event.call_llm = True
+    except Exception:
+        pass

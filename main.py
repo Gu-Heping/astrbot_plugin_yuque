@@ -43,7 +43,13 @@ from .novabot.sync_status import format_sync_already_running, format_sync_starte
 from .novabot.rag_adapter import RagVectorSearchAdapter
 from .novabot.team import TeamRegistry, normalize_yuque_base_url
 from .novabot.team_clients import TeamClientManager
-from .novabot.chat_scope import event_group_id, is_group_chat_allowed, normalize_group_ids
+from .novabot.chat_scope import (
+    event_group_id,
+    is_group_chat,
+    is_group_chat_allowed,
+    normalize_group_ids,
+    suppress_default_llm,
+)
 from .novabot.help_text import format_help_text
 from .novabot.rag_commands import RagCommandContext, handle_rag_command
 from .novabot.card_commands import generate_card_command, validate_card_request
@@ -695,6 +701,7 @@ class NovaBotPlugin(Star):
             )
             if not should_reply:
                 logger.info(f"[on_message] 智能旁听跳过: {gate_reason}")
+                suppress_default_llm(event)
                 return
 
         # 处理消息
@@ -748,7 +755,7 @@ class NovaBotPlugin(Star):
         if not self._is_event_scope_allowed(event):
             return False, "", ""
 
-        is_group = bool(event_group_id(event))
+        is_group = is_group_chat(event)
 
         if is_group:
             # 群聊：显式 @ 触发

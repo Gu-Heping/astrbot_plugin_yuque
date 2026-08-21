@@ -13,6 +13,8 @@ from astrbot.core.agent.message import (
     TextPart,
 )
 
+from .chat_scope import is_group_chat
+
 
 # 默认系统提示词
 DEFAULT_SYSTEM_PROMPT = """你是 NovaBot，NOVA 社团的智能助手。
@@ -98,7 +100,7 @@ class NovaBotAgent:
         user_context["sender_name"] = sender_name
 
         # 获取对话历史（群聊中减少历史轮数，避免混淆上下文）
-        is_group = event.get_group_id() is not None
+        is_group = is_group_chat(event)
         max_history_rounds = 1 if is_group else 5  # 群聊只保留1轮，私聊5轮
         conversation_history = await self._get_conversation_history(umo, max_rounds=max_history_rounds)
 
