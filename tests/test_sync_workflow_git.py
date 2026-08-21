@@ -71,11 +71,18 @@ class _Storage:
 
 
 class _Registry:
-    def __init__(self, teams):
+    def __init__(self, teams, discovered=None):
         self.teams = teams
+        self.discovered = discovered or []
+        self.discovery_calls = 0
 
     def list_enabled(self):
         return [team for team in self.teams if team.enabled]
+
+    async def discover_pending(self):
+        self.discovery_calls += 1
+        self.teams.extend(self.discovered)
+        self.discovered = []
 
 
 class _MemberClient:
@@ -428,6 +435,46 @@ async def test_run_background_sync_pipeline_accepts_requested_team_id(tmp_path):
     assert summary["teams_count"] == 1
     assert [team.team_id for team in calls["sync"]["teams"]] == ["other"]
     assert calls["post"]["result"] == {"docs": 1, "removed": 0, "errors": 0}
+
+
+@pytest.mark.asyncio
+async def test_run_background_sync_pipeline_discovers_token_only_teams_before_selection(tmp_path):
+    storage = _Storage({})
+    calls = {}
+    registry = _Registry(
+        [Team.default(yuque_token="", enabled=False)],
+        discovered=[Team(team_id="group_123", name="Discovered", yuque_token="token")],
+    )
+
+    async def sync_runner(**kwargs):
+        calls["sync"] = kwargs
+        return {
+            "teams_count": 1,
+            "result": {"docs": 0, "removed": 0, "errors": 0},
+            "team_states": {},
+            "repos_info": [],
+        }
+
+    async def post_sync_runner(**kwargs):
+        calls["post"] = kwargs
+
+    await run_background_sync_pipeline(
+        team_registry=registry,
+        storage=storage,
+        docs_dir=tmp_path,
+        rag=None,
+        collaboration_manager=None,
+        trajectory_manager=None,
+        update_collaboration=lambda: None,
+        init_trajectories=lambda: None,
+        requested_team_id="group_123",
+        sync_runner=sync_runner,
+        post_sync_runner=post_sync_runner,
+        commit_runner=lambda **kwargs: None,
+    )
+
+    assert registry.discovery_calls == 1
+    assert [team.team_id for team in calls["sync"]["teams"]] == ["group_123"]
 
 
 def test_refresh_collaboration_artifacts_formats_success_message():

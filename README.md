@@ -38,8 +38,8 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | 配置项 | 说明 |
 |--------|------|
 | `yuque_token` | 默认语雀团队 Token（单团队部署必需；多团队部署可作为默认团队） |
-| `yuque_base_url` | 默认语雀 API 地址，默认 `https://www.yuque.com/api/v2` |
-| `yuque_teams` | 可选，多语雀团队 JSON 数组；留空时沿用 `yuque_token` 单团队模式 |
+| `yuque_base_url` | 默认语雀 API 地址，默认 `https://www.yuque.com/api/v2`；也可填写 `https://nova.yuque.com/` 这类 Web 地址，系统会规范化为 `/api/v2` |
+| `yuque_teams` | 可选，多语雀团队 JSON 数组；留空时沿用 `yuque_token` 单团队模式；支持 token-first 自动发现 |
 | `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
@@ -49,6 +49,32 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 `yuque_teams` 将 Team 作为一等实体。每个 Team 拥有独立 Token、API 地址、同步生命周期、文档路径、元数据索引和检索范围；Agent 会根据 Team 名称、描述、知识库、路径、作者、更新时间与关键词自行组合检索范围。
 
 示例：
+
+最小配置只需要提供各团队 token，NovaBot 会在启动或同步前调用语雀 API 自动补齐 Team：
+
+```json
+[
+  { "yuque_token": "token-a" },
+  { "yuque_token": "token-b" }
+]
+```
+
+也可以保留人工描述，方便 Agent 判断检索范围：
+
+```json
+[
+  {
+    "yuque_token": "token-a",
+    "description": "2025 新手团队知识库"
+  },
+  {
+    "yuque_token": "token-b",
+    "description": "2026 寒假项目知识库"
+  }
+]
+```
+
+完整显式配置仍然受支持，且手动 `team_id` 优先：
 
 ```json
 [
@@ -73,6 +99,8 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 兼容说明：
 
 - 未配置 `yuque_teams` 时，NovaBot 继续使用原来的 `yuque_token` 和原始文档目录。
+- `yuque_teams` 支持完整对象、token-only 对象和字符串 token 简写；缺少 `team_id`/`name` 时，系统用 `get_user()` 自动发现并生成 `group_<id>` 或 `user_<id>`。
+- 自动发现结果只在内存中使用，不会写回 AstrBot 配置；如两个 token 发现出同一个团队，只保留第一项并记录重复配置错误。
 - 默认团队保持旧文档 ID 与目录布局；非默认团队写入 `yuque_docs/<team_id>/<知识库名>/...`。
 - 文档身份按 `team_id + yuque_id` 区分，同一个语雀文档 ID 可在不同团队中共存。
 - 多团队检索可组合 `team_id`、知识库、路径前缀、作者、更新时间、关键词和语义查询；带时间范围的检索只匹配有更新时间元数据的文档。

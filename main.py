@@ -41,7 +41,7 @@ from .novabot.sync_workflow import (
 from .novabot.sync_coordinator import syncable_teams
 from .novabot.sync_status import format_sync_already_running, format_sync_started, format_sync_status
 from .novabot.rag_adapter import RagVectorSearchAdapter
-from .novabot.team import TeamRegistry
+from .novabot.team import TeamRegistry, normalize_yuque_base_url
 from .novabot.team_clients import TeamClientManager
 from .novabot.help_text import format_help_text
 from .novabot.rag_commands import RagCommandContext, handle_rag_command
@@ -127,7 +127,9 @@ class NovaBotPlugin(Star):
 
         # 配置
         self.yuque_token = config.get("yuque_token", "")
-        self.yuque_base_url = config.get("yuque_base_url", "https://www.yuque.com/api/v2")
+        self.yuque_base_url = normalize_yuque_base_url(
+            config.get("yuque_base_url", "https://www.yuque.com/api/v2")
+        )
         self.embedding_api_key = config.get("embedding_api_key", "")
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
@@ -805,6 +807,12 @@ class NovaBotPlugin(Star):
         elif action_lower not in ("", "members", "status", "collab"):
             requested_sync_team_id = action.strip()
 
+        if action_lower == "status":
+            state = self.storage.load_sync_state()
+            yield event.plain_result(format_sync_status(state))
+            return
+
+        await self.team_registry.discover_pending()
         sync_teams, sync_error = select_sync_teams(
             self.team_registry.list_enabled(),
             requested_team_id=requested_sync_team_id,
@@ -839,12 +847,6 @@ class NovaBotPlugin(Star):
             except Exception as e:
                 logger.error(f"同步团队成员失败: {e}")
                 yield event.plain_result(f"❌ 同步失败: {e}")
-            return
-
-        # 查看状态
-        if action_lower == "status":
-            state = self.storage.load_sync_state()
-            yield event.plain_result(format_sync_status(state))
             return
 
         # 手动更新协作网络和成员轨迹

@@ -8,6 +8,7 @@ from typing import Any
 from astrbot.api import logger
 
 from .models import DEFAULT_TEAM_ID
+from .team import normalize_yuque_base_url
 from .yuque_client import YuqueClient
 
 
@@ -27,7 +28,7 @@ class TeamClientManager:
     ):
         self.team_registry = team_registry
         self.legacy_token = legacy_token
-        self.legacy_base_url = legacy_base_url
+        self.legacy_base_url = normalize_yuque_base_url(legacy_base_url)
         self.client_factory = client_factory
         self._clients: dict[str, Any] = {}
 
@@ -38,10 +39,11 @@ class TeamClientManager:
         resolved_team_id = team.team_id or DEFAULT_TEAM_ID
         if resolved_team_id not in self._clients:
             token = team.yuque_token
-            base_url = team.yuque_base_url
             if resolved_team_id == DEFAULT_TEAM_ID:
                 token = token or self.legacy_token
-                base_url = base_url or self.legacy_base_url
+                base_url = normalize_yuque_base_url(team.yuque_base_url or self.legacy_base_url)
+            else:
+                base_url = normalize_yuque_base_url(team.yuque_base_url)
             self._clients[resolved_team_id] = self.client_factory(token, base_url)
         return self._clients[resolved_team_id]
 

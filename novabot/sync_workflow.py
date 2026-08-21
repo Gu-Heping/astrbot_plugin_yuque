@@ -61,6 +61,14 @@ def select_sync_teams(
     return [], f"❌ 未找到可同步团队: {requested}"
 
 
+async def discover_pending_teams(team_registry) -> None:
+    """Resolve token-only team entries when the registry supports discovery."""
+
+    discover = getattr(team_registry, "discover_pending", None)
+    if callable(discover):
+        await discover()
+
+
 async def sync_team_members(*, client, storage, team: Team | None = None) -> str:
     """Synchronize Yuque group members into NovaBot storage."""
 
@@ -120,6 +128,7 @@ async def run_background_sync_pipeline(
 ) -> dict:
     """Run multi-team sync plus all post-sync side effects."""
 
+    await discover_pending_teams(team_registry)
     sync_teams, error = select_sync_teams(
         team_registry.list_enabled(),
         requested_team_id=requested_team_id,
