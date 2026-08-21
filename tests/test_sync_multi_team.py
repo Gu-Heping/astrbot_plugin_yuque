@@ -331,6 +331,46 @@ async def test_targeted_default_sync_preserves_other_team_doc_index(tmp_path):
     assert [doc["title"] for doc in refreshed.search(team_id="other")] == ["其他团队文档"]
 
 
+@pytest.mark.asyncio
+async def test_non_default_team_id_cannot_collide_with_default_repo_root(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    default_repo = docs_dir / "eng"
+    default_repo.mkdir(parents=True)
+    (default_repo / ".toc.json").write_text("[]", encoding="utf-8")
+    (default_repo / "README.md").write_text("默认团队内容", encoding="utf-8")
+    (docs_dir / ".repos.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 10,
+                    "name": "eng",
+                    "namespace": "nova/eng",
+                    "team_id": "default",
+                    "team_name": "NOVA",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    storage = _FakeStorage(docs_dir)
+
+    def client_factory(team):
+        raise AssertionError("colliding team must be rejected before creating a client")
+
+    summary = await run_multi_team_sync(
+        teams=[Team(team_id="eng", name="Eng Team", yuque_token="team-token")],
+        storage=storage,
+        docs_dir=docs_dir,
+        members={"7": {"name": "Alice"}},
+        client_factory=client_factory,
+    )
+
+    assert summary["result"]["errors"] == 1
+    assert summary["team_states"]["eng"]["errors_count"] == 1
+    assert (default_repo / "README.md").exists()
+
+
 def test_path_drift_uses_team_scoped_document_id(tmp_path):
     docs_dir = tmp_path / "yuque_docs"
     default_repo = docs_dir / "工程"

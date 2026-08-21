@@ -68,6 +68,15 @@ async def run_multi_team_sync(
 
     for team_index, team in enumerate(selected_teams, 1):
         _save_team_progress(storage, team, team_index, len(selected_teams))
+        conflict = _team_root_collision_reason(docs_dir, team)
+        if conflict:
+            logger.error(f"[Sync] 团队目录冲突，跳过同步: {conflict}")
+            result = _failed_team_result(team)
+            result["error"] = conflict
+            team_states[team.team_id] = _team_state(team, result)
+            for key in ("repos_count", "docs", "titles", "errors", "removed"):
+                total_result[key] += result.get(key, 0)
+            continue
 
         def team_progress(current: int, total: int, repo_name: str) -> None:
             storage.update_progress(current, total, repo_name)
@@ -130,6 +139,49 @@ def write_repos_cache(docs_dir: Path, repos_info: list[dict]) -> None:
     repos_file.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
     repos_cache = docs_dir.parent / "yuque_repos.json"
     repos_cache.write_text(json.dumps(repos_info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _team_root_collision_reason(docs_dir: Path, team: Team) -> str:
+    if team.team_id == DEFAULT_TEAM_ID:
+        return ""
+    prefix = sync_team_path_prefix(team.team_id)
+    if not prefix:
+        return ""
+    default_repo_dirs = _known_default_repo_dirs(docs_dir)
+    if prefix in default_repo_dirs:
+        return f"team_id={team.team_id} 与默认团队知识库目录冲突"
+
+    team_root = docs_dir / prefix
+    if team_root.is_dir() and _looks_like_repo_root(team_root):
+        return f"team_id={team.team_id} 指向已存在的知识库目录"
+    return ""
+
+
+def _known_default_repo_dirs(docs_dir: Path) -> set[str]:
+    repo_dirs: set[str] = set()
+    for repo in _load_existing_repos_cache(docs_dir):
+        if str(repo.get("team_id") or DEFAULT_TEAM_ID) != DEFAULT_TEAM_ID:
+            continue
+        name = str(repo.get("name") or "")
+        namespace = str(repo.get("namespace") or "")
+        slug = str(repo.get("slug") or "")
+        for value in (
+            YuqueClient.slug_safe(name),
+            slug,
+            namespace.replace("/", "_") if namespace else "",
+        ):
+            cleaned = str(value or "").strip("/\\")
+            if cleaned:
+                repo_dirs.add(cleaned)
+    if docs_dir.exists():
+        for child in docs_dir.iterdir():
+            if child.is_dir() and _looks_like_repo_root(child):
+                repo_dirs.add(child.name)
+    return repo_dirs
+
+
+def _looks_like_repo_root(path: Path) -> bool:
+    return (path / ".toc.json").exists() or (path / ".index.json").exists()
 
 
 def _load_existing_repos_cache(docs_dir: Path) -> list[dict]:
