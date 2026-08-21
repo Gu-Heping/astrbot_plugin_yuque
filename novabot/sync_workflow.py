@@ -12,6 +12,7 @@ from typing import Any, Callable
 from astrbot.api import logger
 
 from .chunk_indexer import rebuild_chunk_index_from_sync
+from .chunk_store import ChunkStore
 from .git_ops import GitOps
 from .models import DEFAULT_TEAM_ID, Team
 from .sync_coordinator import run_multi_team_sync, syncable_teams
@@ -226,9 +227,8 @@ async def run_post_sync_workflow(
                 storage.save_sync_state(state)
 
             chunk_progress(0, docs_count)
-            chunk_result = await asyncio.to_thread(
-                rebuild_chunk_index_from_sync,
-                docs_dir=docs_dir,
+            chunk_result = await _rebuild_chunk_index_safely(
+                docs_dir=Path(docs_dir),
                 chunk_store=chunk_store,
                 yuque_base_url=yuque_base_url,
                 chunk_size=chunk_size,
@@ -330,6 +330,54 @@ def build_sync_commit_message(result: dict) -> str:
     if removed_count > 0:
         commit_msg += f", 清理 {removed_count} 个文件"
     return commit_msg
+
+
+async def _rebuild_chunk_index_safely(
+    *,
+    docs_dir: Path,
+    chunk_store,
+    yuque_base_url: str,
+    chunk_size: int,
+    chunk_overlap: int,
+    progress_callback,
+) -> dict:
+    temp_path = _chunk_rebuild_temp_path(chunk_store)
+    _cleanup_chunk_store_files(temp_path)
+    temp_store = ChunkStore(temp_path)
+    try:
+        chunk_result = await asyncio.to_thread(
+            rebuild_chunk_index_from_sync,
+            docs_dir=docs_dir,
+            chunk_store=temp_store,
+            yuque_base_url=yuque_base_url,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            progress_callback=progress_callback,
+        )
+        if chunk_result.get("errors", 0) > 0:
+            logger.warning("[ChunkIndex] 暂存索引存在错误，保留当前活动 chunk 索引")
+            return chunk_result
+        chunks = await asyncio.to_thread(temp_store.all_chunks)
+        await asyncio.to_thread(chunk_store.replace_all_chunks, chunks)
+        return chunk_result
+    finally:
+        temp_store.close()
+        _cleanup_chunk_store_files(temp_path)
+
+
+def _chunk_rebuild_temp_path(chunk_store) -> Path:
+    store_path = Path(getattr(chunk_store, "path", "chunks.db"))
+    return store_path.with_name(f"{store_path.name}.rebuild")
+
+
+def _cleanup_chunk_store_files(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.warning(f"[ChunkIndex] 清理暂存索引失败: {candidate}: {e}")
 
 
 def mark_sync_failed(storage) -> None:

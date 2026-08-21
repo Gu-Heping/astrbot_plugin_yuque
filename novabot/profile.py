@@ -431,7 +431,7 @@ def _string_list(value) -> list[str]:
 def _profile_skill_lines(profile: dict) -> list[str]:
     skills = profile.get("skills", {})
     lines = []
-    for interest in profile.get("interests", []):
+    for interest in _string_list(profile.get("interests")):
         skill_level = skills.get(interest)
         if skill_level:
             lines.append(f"• {interest} ({LEVEL_LABELS.get(skill_level, '入门')})")

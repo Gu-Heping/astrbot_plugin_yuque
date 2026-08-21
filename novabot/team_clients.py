@@ -33,6 +33,8 @@ class TeamClientManager:
 
     def get(self, team_id: str = DEFAULT_TEAM_ID):
         team = self.team_registry.get(team_id or DEFAULT_TEAM_ID)
+        if team is None:
+            raise ValueError(f"unknown team_id: {team_id}")
         resolved_team_id = team.team_id or DEFAULT_TEAM_ID
         if resolved_team_id not in self._clients:
             token = team.yuque_token

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any
 
@@ -124,10 +125,10 @@ def find_related_docs_for_questions(
         keywords = extract_question_keywords(questions)
         if not keywords:
             return []
-        try:
-            return doc_index.search(title=" ".join(keywords[:3]), team_id=team_id, limit=limit)
-        except TypeError:
-            return doc_index.search(title=" ".join(keywords[:3]), limit=limit)
+        query = " ".join(keywords[:3])
+        if team_id and _search_accepts_team_id(doc_index):
+            return doc_index.search(title=query, team_id=team_id, limit=limit)
+        return doc_index.search(title=query, limit=limit)
     except Exception as e:
         logger.debug(f"[Questions] 相关文档推荐失败: {e}")
         return []
@@ -140,6 +141,17 @@ def extract_question_keywords(questions: list[dict]) -> list[str]:
             if len(keyword) >= 2:
                 keywords.add(keyword)
     return sorted(keywords)
+
+
+def _search_accepts_team_id(doc_index: Any) -> bool:
+    search = getattr(doc_index, "search", None)
+    if not callable(search):
+        return False
+    try:
+        signature = inspect.signature(search)
+    except (TypeError, ValueError):
+        return False
+    return "team_id" in signature.parameters
 
 
 def parse_resolve_args(rest: str) -> tuple[str, str]:

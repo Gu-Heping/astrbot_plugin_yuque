@@ -89,7 +89,7 @@ class PushNotifier:
             encoding="utf-8"
         )
 
-    def get_diff(self, doc_id: int, current_commit: str, doc_path: str) -> tuple[str, bool]:
+    def get_diff(self, doc_id: object, current_commit: str, doc_path: str) -> tuple[str, bool]:
         """获取与上次推送的 diff
 
         Args:
@@ -293,7 +293,7 @@ class PushNotifier:
 
         return "\n".join(lines)
 
-    def mark_pushed(self, doc_id: int, commit: str):
+    def mark_pushed(self, doc_id: object, commit: str):
         """标记已推送
 
         Args:

@@ -11,7 +11,9 @@ class _Registry:
         self.teams = {team.team_id: team for team in teams}
 
     def get(self, team_id="default"):
-        return self.teams.get(team_id) or self.teams["default"]
+        if not team_id:
+            return self.teams["default"]
+        return self.teams.get(team_id)
 
 
 class _Client:
@@ -33,12 +35,20 @@ def test_team_client_manager_uses_legacy_credentials_for_default_team():
     )
 
     first = manager.get()
-    second = manager.get("missing")
 
-    assert first is second
     assert first.token == "legacy-token"
     assert first.base_url == "https://legacy.example/api/v2"
     assert manager.cached_team_ids == ("default",)
+
+
+def test_team_client_manager_rejects_unknown_non_empty_team_id():
+    manager = TeamClientManager(
+        _Registry([Team.default(yuque_token="legacy")]),
+        client_factory=_Client,
+    )
+
+    with pytest.raises(ValueError, match="unknown team_id"):
+        manager.get("missing")
 
 
 def test_team_client_manager_caches_non_default_team_client():

@@ -61,15 +61,21 @@ def _repo_dir_from_rel_path(rel_path: str, repos: dict[str, dict]) -> str:
     parts = [part for part in rel_path.replace("\\", "/").split("/") if part]
     if not parts:
         return ""
-    repo_names = {
-        key
-        for key, repo in repos.items()
-        if key and key in {str(repo.get("name") or ""), str(repo.get("namespace") or "")}
+    team_ids = {
+        str(repo.get("team_id") or DEFAULT_TEAM_ID)
+        for repo in repos.values()
+        if isinstance(repo, dict)
     }
-    if parts[0] in repo_names or len(parts) == 1:
-        return parts[0]
-    if len(parts) >= 2:
+    if len(parts) >= 3 and parts[0] in team_ids and parts[0] != DEFAULT_TEAM_ID:
         return parts[1]
+    if len(parts) >= 2 and parts[0] in team_ids and parts[0] != DEFAULT_TEAM_ID:
+        return parts[1]
+    if len(parts) >= 2:
+        namespaced = f"{parts[0]}/{parts[1]}"
+        if namespaced in repos:
+            return parts[0]
+    if len(parts) == 1 or not repos:
+        return parts[0]
     return parts[0]
 
 

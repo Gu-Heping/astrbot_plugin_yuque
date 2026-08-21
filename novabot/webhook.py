@@ -525,8 +525,9 @@ class WebhookHandler:
             return None
 
         try:
+            scoped_doc_id = scoped_document_id(detail.get("team_id") or DEFAULT_TEAM_ID, doc_id)
             # 1. 获取 diff
-            diff, is_first_push = self.push_notifier.get_diff(doc_id, commit_hash, rel_path)
+            diff, is_first_push = self.push_notifier.get_diff(scoped_doc_id, commit_hash, rel_path)
             logger.info(f"[Push] diff 长度: {len(diff)} 字符, 首次推送: {is_first_push}")
 
             # 2. 预处理检查（首次推送跳过预处理）
@@ -589,7 +590,7 @@ class WebhookHandler:
                 # 6. 推送给订阅者
                 await self.push_notifier.notify_subscribers(doc_info, summary)
                 # 7. 记录推送
-                self.push_notifier.mark_pushed(doc_id, commit_hash)
+                self.push_notifier.mark_pushed(scoped_doc_id, commit_hash)
                 return {"pushed": True, "summary": summary}
             else:
                 logger.info(f"[Push] LLM 判断不推送: {summary.get('reason', '')}")

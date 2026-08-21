@@ -105,8 +105,8 @@ class ChunkStore:
         )
 
     def save_document_chunks(self, document_id: str, chunks: list[Chunk]) -> None:
-        conn = self._ensure_open()
-        with self._lock, conn:
+        with self._lock:
+            conn = self._ensure_open()
             conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
             conn.executemany(
                 """
@@ -138,24 +138,26 @@ class ChunkStore:
                 ],
             )
             self._bump_version(conn)
+            conn.commit()
 
     def delete_document(self, document_id: str) -> int:
-        conn = self._ensure_open()
-        with self._lock, conn:
+        with self._lock:
+            conn = self._ensure_open()
             cur = conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
             if cur.rowcount:
                 self._bump_version(conn)
+            conn.commit()
             return cur.rowcount
 
     def all_chunks(self) -> list[Chunk]:
-        conn = self._ensure_open()
         with self._lock:
+            conn = self._ensure_open()
             rows = conn.execute("SELECT * FROM chunks ORDER BY document_id, chunk_index").fetchall()
         return [self._row_to_chunk(row) for row in rows]
 
     def get_document_chunks(self, document_id: str) -> list[Chunk]:
-        conn = self._ensure_open()
         with self._lock:
+            conn = self._ensure_open()
             rows = conn.execute(
                 "SELECT * FROM chunks WHERE document_id=? ORDER BY chunk_index",
                 (document_id,),
@@ -163,27 +165,64 @@ class ChunkStore:
         return [self._row_to_chunk(row) for row in rows]
 
     def clear(self) -> None:
-        conn = self._ensure_open()
-        with self._lock, conn:
+        with self._lock:
+            conn = self._ensure_open()
             conn.execute("DELETE FROM chunks")
             self._bump_version(conn)
+            conn.commit()
+
+    def replace_all_chunks(self, chunks: list[Chunk]) -> None:
+        with self._lock:
+            conn = self._ensure_open()
+            conn.execute("DELETE FROM chunks")
+            conn.executemany(
+                """
+                INSERT INTO chunks
+                (chunk_id, document_id, chunk_index, content, content_hash, title,
+                 team_id, team_name, repository, namespace, slug, file_path,
+                 source_url, author, updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        c.chunk_id,
+                        c.document_id,
+                        c.chunk_index,
+                        c.content,
+                        c.content_hash,
+                        c.title,
+                        c.team_id,
+                        c.team_name,
+                        c.repository,
+                        c.namespace,
+                        c.slug,
+                        c.file_path,
+                        c.source_url,
+                        c.author,
+                        c.updated_at,
+                    )
+                    for c in chunks
+                ],
+            )
+            self._bump_version(conn)
+            conn.commit()
 
     def chunk_count(self) -> int:
-        conn = self._ensure_open()
         with self._lock:
+            conn = self._ensure_open()
             row = conn.execute("SELECT count(*) FROM chunks").fetchone()
         return int(row[0]) if row else 0
 
     def content_signature(self) -> str:
-        conn = self._ensure_open()
         with self._lock:
+            conn = self._ensure_open()
             rows = conn.execute("SELECT content_hash FROM chunks ORDER BY chunk_id").fetchall()
         combined = "".join(row[0] for row in rows)
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()
 
     def version(self) -> int:
-        conn = self._ensure_open()
         with self._lock:
+            conn = self._ensure_open()
             row = conn.execute("SELECT value FROM chunk_meta WHERE key='version'").fetchone()
         return int(row[0]) if row else 0
 

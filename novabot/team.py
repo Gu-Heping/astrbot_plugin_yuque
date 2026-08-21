@@ -81,12 +81,14 @@ class TeamRegistry:
             )
         return teams
 
-    def get(self, team_id: str = DEFAULT_TEAM_ID) -> Team:
+    def get(self, team_id: str = DEFAULT_TEAM_ID) -> Team | None:
+        if not team_id:
+            return self._teams[DEFAULT_TEAM_ID]
         team = self._teams.get(team_id)
         if team:
             return team
-        logger.warning(f"[TeamRegistry] 未找到团队 {team_id}，回退到默认团队")
-        return self._teams[DEFAULT_TEAM_ID]
+        logger.error(f"[TeamRegistry] 未找到团队 {team_id}")
+        return None
 
     def list_enabled(self) -> list[Team]:
         return [team for team in self._teams.values() if team.enabled]

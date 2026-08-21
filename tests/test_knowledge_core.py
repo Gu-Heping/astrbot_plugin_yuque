@@ -1,5 +1,7 @@
-import pytest
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from novabot.chunk_store import ChunkStore
 from novabot.chunking import split_markdown
@@ -130,6 +132,31 @@ async def test_knowledge_core_filters_scope_before_keyword_truncation(tmp_path):
     results = await core.search("部署说明", scope={"team_id": "nova"}, top_k=1)
 
     assert [result.chunk.team_id for result in results] == ["nova"]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_core_concurrent_searches_share_complete_keyword_index(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    store.save_document_chunks(
+        "nova:1",
+        split_markdown(
+            "nova:1",
+            "# 并发检索\n\nNova 并发检索内容",
+            title="并发检索",
+            team_id="nova",
+            team_name="NOVA",
+            size=220,
+            overlap=40,
+        ),
+    )
+    core = KnowledgeCore(store, keyword_index=ChunkKeywordIndex())
+
+    results = await asyncio.gather(
+        core.search("并发检索", scope={"team_id": "nova"}, top_k=1),
+        core.search("并发检索", scope={"team_id": "nova"}, top_k=1),
+    )
+
+    assert all(batch and batch[0].chunk.document_id == "nova:1" for batch in results)
 
 
 def test_chunk_store_can_be_read_from_worker_thread(tmp_path):

@@ -22,9 +22,12 @@ id: 1
     chunks_b = split_markdown("1", body, title="指南", team_id="nova", team_name="NOVA", size=220, overlap=40)
 
     assert [c.chunk_id for c in chunks_a] == [c.chunk_id for c in chunks_b]
+    combined = "\n".join(chunk.content for chunk in chunks_a)
     assert chunks_a[0].team_id == "nova"
-    assert "作者" not in chunks_a[0].content
-    assert "入门" in chunks_a[0].content
+    assert "---" not in combined
+    assert "id: 1" not in combined
+    assert "作者" not in combined
+    assert "入门" in combined
 
 
 def test_split_markdown_long_block_does_not_drop_text_between_boundary_and_step():

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from novabot.chunk_store import ChunkStore
+from novabot.chunking import split_markdown
 from novabot.models import Team
 from novabot.sync_workflow import (
     _parse_git_status_files,
@@ -12,6 +14,7 @@ from novabot.sync_workflow import (
     commit_sync_changes,
     mark_sync_failed,
     refresh_collaboration_artifacts,
+    run_post_sync_workflow,
     run_background_sync_pipeline,
     select_member_sync_team,
     select_sync_teams,
@@ -169,6 +172,37 @@ def test_mark_sync_failed_clears_volatile_progress_fields():
     assert "chunk_progress" not in storage.state
     assert "rag_progress" not in storage.state
     assert storage.state["last_sync"] == "2026-01-01T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_post_sync_keeps_active_chunk_index_when_rebuild_has_errors(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    docs_dir.mkdir()
+    (docs_dir / "工程.md").write_text("# 新文档\n\n这次构建会因为 chunk_size 无效而失败。", encoding="utf-8")
+    store = ChunkStore(tmp_path / "chunks.db")
+    store.save_document_chunks(
+        "old",
+        split_markdown("old", "# 旧文档\n\n应该保留的旧 chunk。", size=220, overlap=40),
+    )
+    storage = _Storage({})
+
+    await run_post_sync_workflow(
+        result={"docs": 1},
+        rag=None,
+        docs_dir=docs_dir,
+        storage=storage,
+        collaboration_manager=None,
+        trajectory_manager=None,
+        update_collaboration=lambda: None,
+        init_trajectories=lambda: None,
+        chunk_store=store,
+        chunk_size=100,
+        chunk_overlap=40,
+    )
+
+    chunks = store.get_document_chunks("old")
+    assert len(chunks) == 1
+    assert "应该保留" in chunks[0].content
 
 
 def test_select_member_sync_team_prefers_default_when_available():

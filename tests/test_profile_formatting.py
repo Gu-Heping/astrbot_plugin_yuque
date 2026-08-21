@@ -103,6 +103,23 @@ def test_format_profile_view_defaults_unknown_interest_to_beginner():
     assert "• 知识库: 暂无" in text
 
 
+def test_format_profile_view_treats_scalar_interest_as_one_skill():
+    text = format_profile_view(
+        binding={"yuque_login": "alice", "yuque_name": "Alice"},
+        profile={
+            "profile": {
+                "interests": "Python",
+                "skills": {"Python": "advanced"},
+                "level": "advanced",
+            },
+            "stats": {},
+        },
+    )
+
+    assert "• Python (高级)" in text
+    assert "• P (" not in text
+
+
 def test_format_generated_profile_summary_renders_refresh_result():
     text = format_generated_profile_summary(
         {

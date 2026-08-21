@@ -40,6 +40,15 @@ class _DocIndex:
         return [{"title": "爬虫登录指南", "author": "Alice"}]
 
 
+class _TeamDocIndex:
+    def __init__(self):
+        self.query = None
+
+    def search(self, title, limit, team_id=None):
+        self.query = (title, limit, team_id)
+        return [{"title": "团队文档", "author": "Alice"}]
+
+
 def test_extract_questions_content_keeps_full_tail():
     assert extract_questions_content("/questions resolve q_1 已解决了", "") == "resolve q_1 已解决了"
     assert extract_questions_content("/questions", "frequent") == "frequent"
@@ -90,6 +99,14 @@ def test_related_doc_search_uses_question_keywords():
     assert docs == [{"title": "爬虫登录指南", "author": "Alice"}]
     assert doc_index.query[1] == 3
     assert extract_question_keywords(_questions())
+
+
+def test_related_doc_search_passes_team_id_when_supported():
+    doc_index = _TeamDocIndex()
+
+    find_related_docs_for_questions(doc_index, _questions(), team_id="other")
+
+    assert doc_index.query[2] == "other"
 
 
 def test_resolve_parsing_and_formatting():

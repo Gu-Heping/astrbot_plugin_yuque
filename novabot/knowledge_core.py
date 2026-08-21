@@ -34,8 +34,13 @@ class KnowledgeCore:
         self.vector_search = vector_search
         self.reliable_threshold = reliable_threshold
         self._keyword_version: int | None = None
+        self._keyword_lock = asyncio.Lock()
 
     async def _ensure_keyword_index(self) -> None:
+        async with self._keyword_lock:
+            await self._ensure_keyword_index_locked()
+
+    async def _ensure_keyword_index_locked(self) -> None:
         version = await asyncio.to_thread(self.chunk_store.version)
         if version == self._keyword_version:
             return
@@ -53,8 +58,9 @@ class KnowledgeCore:
         resolved_scope = (
             scope if isinstance(scope, RetrievalScope) else RetrievalScope.from_dict(scope)
         )
-        await self._ensure_keyword_index()
-        keyword_results = self._keyword_results(query, top_k * 4, resolved_scope)
+        async with self._keyword_lock:
+            await self._ensure_keyword_index_locked()
+            keyword_results = self._keyword_results(query, top_k * 4, resolved_scope)
         vector_results: list[RetrievalResult] = []
         if self.vector_search is not None:
             vector_results = await self.vector_search(query, top_k * 4, resolved_scope)

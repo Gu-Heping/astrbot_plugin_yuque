@@ -151,3 +151,26 @@ title: 部署说明
 
     assert chunks[0].team_id == "other"
     assert chunks[0].repository == "工程"
+
+
+def test_chunk_indexer_keeps_first_segment_for_nested_doc_without_repo_cache(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    repo_dir = docs_dir / "工程" / "指南"
+    repo_dir.mkdir(parents=True)
+    (repo_dir / "部署.md").write_text(
+        """---
+id: 42
+title: 部署说明
+---
+
+默认团队嵌套路径内容。
+""",
+        encoding="utf-8",
+    )
+    store = ChunkStore(tmp_path / "chunks.db")
+
+    rebuild_chunk_index_from_sync(docs_dir=docs_dir, chunk_store=store)
+    chunks = store.get_document_chunks("42")
+
+    assert chunks[0].team_id == "default"
+    assert chunks[0].repository == "工程"

@@ -127,6 +127,31 @@ async def _ok_push(*args, **kwargs):
     return {"pushed": False}
 
 
+class _PushNotifier:
+    def __init__(self):
+        self.diff_ids = []
+        self.pushed_ids = []
+
+    def should_enable(self):
+        return True
+
+    def get_diff(self, doc_id, current_commit, doc_path):
+        self.diff_ids.append(doc_id)
+        return "diff content with enough text", False
+
+    def pre_check(self, diff, is_first_push=False):
+        return False, ""
+
+    async def agent_should_push(self, doc_info, content, is_first_push=False):
+        return True, {"highlights": ["更新"], "reason": ""}
+
+    async def notify_subscribers(self, doc_info, summary):
+        return None
+
+    def mark_pushed(self, doc_id, commit):
+        self.pushed_ids.append(doc_id)
+
+
 def test_webhook_get_client_for_team_is_backward_compatible(tmp_path):
     store = ChunkStore(tmp_path / "chunks.db")
     handler = _handler(tmp_path, store)
@@ -182,6 +207,40 @@ def test_webhook_doc_change_uses_team_specific_client(tmp_path):
     assert requested_team_ids[0] == "other"
     assert result["path"] == "other/工程/部署说明.md"
     assert (docs_dir / "other" / "工程" / "部署说明.md").exists()
+
+
+def test_webhook_push_state_is_team_scoped(tmp_path):
+    import asyncio
+
+    push_notifier = _PushNotifier()
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        push_notifier=push_notifier,
+    )
+    handler.docs_dir.mkdir()
+
+    async def run_pushes():
+        await handler._handle_push(
+            42,
+            "a" * 40,
+            "工程/默认.md",
+            {"title": "默认", "team_id": "default", "book": {"name": "工程"}},
+        )
+        await handler._handle_push(
+            42,
+            "b" * 40,
+            "other/工程/其他.md",
+            {"title": "其他", "team_id": "other", "book": {"name": "工程"}},
+        )
+
+    asyncio.run(run_pushes())
+
+    assert push_notifier.diff_ids == ["42", "other:42"]
+    assert push_notifier.pushed_ids == ["42", "other:42"]
 
 
 def test_webhook_updates_and_deletes_chunk_index(tmp_path):
