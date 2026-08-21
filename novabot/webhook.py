@@ -64,19 +64,17 @@ async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
         return _doc_locks[doc_id]
 
 
-def _callable_accepts_team_id(callback: Callable[..., YuqueClient]) -> bool:
+def _client_callback_mode(callback: Callable[..., YuqueClient]) -> str:
     try:
         signature = inspect.signature(callback)
     except (TypeError, ValueError):
-        return True
-    parameters = list(signature.parameters.values())
-    return any(
-        parameter.kind is inspect.Parameter.VAR_POSITIONAL
-        or parameter.kind is inspect.Parameter.VAR_KEYWORD
-        or parameter.default is not inspect.Parameter.empty
-        or parameter.name == "team_id"
-        for parameter in parameters
-    )
+        return "keyword"
+    for parameter in signature.parameters.values():
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            return "keyword"
+        if parameter.name == "team_id":
+            return "keyword"
+    return "none"
 
 
 class WebhookHandler:
@@ -123,11 +121,11 @@ class WebhookHandler:
         self.trajectory_manager = trajectory_manager
         self.chunk_store = chunk_store
         self.cache_clear_callback = cache_clear_callback
-        self._get_client_accepts_team_id = _callable_accepts_team_id(get_client)
+        self._get_client_call_mode = _client_callback_mode(get_client)
 
     def _get_client_for_team(self, team_id: str = DEFAULT_TEAM_ID) -> YuqueClient:
-        if self._get_client_accepts_team_id:
-            return self.get_client(team_id)
+        if self._get_client_call_mode == "keyword":
+            return self.get_client(team_id=team_id)
         return self.get_client()
 
     def _match_editor_name(self, detail: dict) -> Optional[str]:

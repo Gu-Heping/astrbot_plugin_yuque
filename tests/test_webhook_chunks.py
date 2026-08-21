@@ -182,6 +182,63 @@ def test_webhook_get_client_for_team_does_not_swallow_internal_type_error(tmp_pa
     assert calls == ["other"]
 
 
+def test_webhook_get_client_for_team_supports_keyword_only_callback(tmp_path):
+    calls = []
+
+    def get_client(*, team_id="default"):
+        calls.append(team_id)
+        return team_id
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    assert handler._get_client_for_team("other") == "other"
+    assert calls == ["other"]
+
+
+def test_webhook_get_client_for_team_supports_kwargs_callback(tmp_path):
+    calls = []
+
+    def get_client(**kwargs):
+        calls.append(kwargs)
+        return kwargs.get("team_id")
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    assert handler._get_client_for_team("other") == "other"
+    assert calls == [{"team_id": "other"}]
+
+
+def test_webhook_get_client_for_team_does_not_bind_team_id_to_unrelated_parameter(tmp_path):
+    calls = []
+
+    def get_client(config=None):
+        calls.append(config)
+        return "legacy"
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    assert handler._get_client_for_team("other") == "legacy"
+    assert calls == [None]
+
+
 async def _run_doc_change(handler):
     return await handler._handle_doc_change(
         {
