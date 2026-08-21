@@ -49,6 +49,15 @@ class _TeamDocIndex:
         return [{"title": "团队文档", "author": "Alice"}]
 
 
+class _KwargsDocIndex:
+    def __init__(self):
+        self.query = None
+
+    def search(self, **kwargs):
+        self.query = kwargs
+        return [{"title": "kwargs 团队文档", "author": "Alice"}]
+
+
 def test_extract_questions_content_keeps_full_tail():
     assert extract_questions_content("/questions resolve q_1 已解决了", "") == "resolve q_1 已解决了"
     assert extract_questions_content("/questions", "frequent") == "frequent"
@@ -107,6 +116,24 @@ def test_related_doc_search_passes_team_id_when_supported():
     find_related_docs_for_questions(doc_index, _questions(), team_id="other")
 
     assert doc_index.query[2] == "other"
+
+
+def test_related_doc_search_returns_empty_when_team_id_is_unsupported():
+    doc_index = _DocIndex()
+
+    docs = find_related_docs_for_questions(doc_index, _questions(), team_id="other")
+
+    assert docs == []
+    assert doc_index.query is None
+
+
+def test_related_doc_search_treats_kwargs_signature_as_team_aware():
+    doc_index = _KwargsDocIndex()
+
+    docs = find_related_docs_for_questions(doc_index, _questions(), team_id="other")
+
+    assert docs == [{"title": "kwargs 团队文档", "author": "Alice"}]
+    assert doc_index.query["team_id"] == "other"
 
 
 def test_resolve_parsing_and_formatting():

@@ -61,14 +61,7 @@ def _repo_dir_from_rel_path(rel_path: str, repos: dict[str, dict]) -> str:
     parts = [part for part in rel_path.replace("\\", "/").split("/") if part]
     if not parts:
         return ""
-    team_ids = {
-        str(repo.get("team_id") or DEFAULT_TEAM_ID)
-        for repo in repos.values()
-        if isinstance(repo, dict)
-    }
-    if len(parts) >= 3 and parts[0] in team_ids and parts[0] != DEFAULT_TEAM_ID:
-        return parts[1]
-    if len(parts) >= 2 and parts[0] in team_ids and parts[0] != DEFAULT_TEAM_ID:
+    if len(parts) >= 2 and _matches_team_repo_prefix(parts[0], parts[1], repos):
         return parts[1]
     if len(parts) >= 2:
         namespaced = f"{parts[0]}/{parts[1]}"
@@ -77,6 +70,25 @@ def _repo_dir_from_rel_path(rel_path: str, repos: dict[str, dict]) -> str:
     if len(parts) == 1 or not repos:
         return parts[0]
     return parts[0]
+
+
+def _matches_team_repo_prefix(team_id: str, repo_dir: str, repos: dict[str, dict]) -> bool:
+    if not team_id or team_id == DEFAULT_TEAM_ID:
+        return False
+    seen_repo_ids: set[int] = set()
+    for repo in repos.values():
+        if not isinstance(repo, dict) or id(repo) in seen_repo_ids:
+            continue
+        seen_repo_ids.add(id(repo))
+        if str(repo.get("team_id") or DEFAULT_TEAM_ID) != team_id:
+            continue
+        if repo_dir in {
+            str(repo.get("name") or ""),
+            str(repo.get("slug") or ""),
+            str(repo.get("namespace") or "").replace("/", "_"),
+        }:
+            return True
+    return False
 
 
 def rebuild_chunk_index_from_sync(

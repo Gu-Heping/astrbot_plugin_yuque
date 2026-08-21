@@ -1,3 +1,5 @@
+import pytest
+
 from novabot.chunk_store import ChunkStore
 from novabot.chunking import split_markdown
 from novabot.doc_index import DocIndex
@@ -157,6 +159,27 @@ def test_webhook_get_client_for_team_is_backward_compatible(tmp_path):
     handler = _handler(tmp_path, store)
 
     assert handler._get_client_for_team("other") is None
+
+
+def test_webhook_get_client_for_team_does_not_swallow_internal_type_error(tmp_path):
+    calls = []
+
+    def get_client(team_id="default"):
+        calls.append(team_id)
+        raise TypeError("client factory misconfigured")
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    with pytest.raises(TypeError, match="misconfigured"):
+        handler._get_client_for_team("other")
+
+    assert calls == ["other"]
 
 
 async def _run_doc_change(handler):

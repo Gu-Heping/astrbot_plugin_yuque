@@ -5,6 +5,7 @@ NovaBot Webhook 处理器
 """
 
 import asyncio
+import inspect
 import json
 import re
 from pathlib import Path
@@ -63,6 +64,21 @@ async def _get_doc_lock(doc_id: int) -> asyncio.Lock:
         return _doc_locks[doc_id]
 
 
+def _callable_accepts_team_id(callback: Callable[..., YuqueClient]) -> bool:
+    try:
+        signature = inspect.signature(callback)
+    except (TypeError, ValueError):
+        return True
+    parameters = list(signature.parameters.values())
+    return any(
+        parameter.kind is inspect.Parameter.VAR_POSITIONAL
+        or parameter.kind is inspect.Parameter.VAR_KEYWORD
+        or parameter.default is not inspect.Parameter.empty
+        or parameter.name == "team_id"
+        for parameter in parameters
+    )
+
+
 class WebhookHandler:
     """语雀 Webhook 处理器"""
 
@@ -107,12 +123,12 @@ class WebhookHandler:
         self.trajectory_manager = trajectory_manager
         self.chunk_store = chunk_store
         self.cache_clear_callback = cache_clear_callback
+        self._get_client_accepts_team_id = _callable_accepts_team_id(get_client)
 
     def _get_client_for_team(self, team_id: str = DEFAULT_TEAM_ID) -> YuqueClient:
-        try:
+        if self._get_client_accepts_team_id:
             return self.get_client(team_id)
-        except TypeError:
-            return self.get_client()
+        return self.get_client()
 
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）

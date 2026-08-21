@@ -126,7 +126,9 @@ def find_related_docs_for_questions(
         if not keywords:
             return []
         query = " ".join(keywords[:3])
-        if team_id and _search_accepts_team_id(doc_index):
+        if team_id:
+            if not _search_accepts_team_id(doc_index):
+                return []
             return doc_index.search(title=query, team_id=team_id, limit=limit)
         return doc_index.search(title=query, limit=limit)
     except Exception as e:
@@ -151,7 +153,10 @@ def _search_accepts_team_id(doc_index: Any) -> bool:
         signature = inspect.signature(search)
     except (TypeError, ValueError):
         return False
-    return "team_id" in signature.parameters
+    return "team_id" in signature.parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
 
 
 def parse_resolve_args(rest: str) -> tuple[str, str]:

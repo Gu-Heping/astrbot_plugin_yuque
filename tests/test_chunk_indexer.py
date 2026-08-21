@@ -174,3 +174,35 @@ title: 部署说明
 
     assert chunks[0].team_id == "default"
     assert chunks[0].repository == "工程"
+
+
+def test_chunk_indexer_does_not_treat_default_repo_name_as_team_prefix(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    repo_dir = docs_dir / "other" / "指南"
+    repo_dir.mkdir(parents=True)
+    (docs_dir / ".repos.json").write_text(
+        """
+        [
+          {"team_id":"default","team_name":"NOVA","name":"other","namespace":"nova/other"},
+          {"team_id":"other","team_name":"Other","name":"工程","namespace":"other/eng"}
+        ]
+        """,
+        encoding="utf-8",
+    )
+    (repo_dir / "部署.md").write_text(
+        """---
+id: 42
+title: 部署说明
+---
+
+默认团队仓库名与非默认 team_id 冲突。
+""",
+        encoding="utf-8",
+    )
+    store = ChunkStore(tmp_path / "chunks.db")
+
+    rebuild_chunk_index_from_sync(docs_dir=docs_dir, chunk_store=store)
+    chunks = store.get_document_chunks("42")
+
+    assert chunks[0].team_id == "default"
+    assert chunks[0].repository == "other"
