@@ -4,29 +4,109 @@ NovaBot - NOVA 社团智能助手
 """
 
 import asyncio
-from datetime import datetime
 from typing import Optional
 
 from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.provider import LLMResponse, ProviderRequest
+from astrbot.api.provider import LLMResponse
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 from pathlib import Path as PathlibPath
 
-from .novabot import RAGEngine, YuqueClient, sync_all_repos, Storage, ProfileGenerator, WebhookHandler, PartnerMatcher, format_partner_result, LearningPathRecommender, format_learning_path
-from .novabot.profile import format_domain_assessment
+from .novabot import RAGEngine, YuqueClient, Storage, ProfileGenerator, WebhookHandler, PartnerMatcher, LearningPathRecommender, format_learning_path, ChunkStore, KnowledgeCore
+from .novabot.profile import (
+    assess_user_domain,
+    format_profile_view,
+    get_profile_docs,
+    refresh_user_profile,
+)
 from .novabot.subscribe import SubscriptionManager, format_subscription_list
 from .novabot.push_notifier import PushNotifier
 from .novabot.weekly import WeeklyReporter
 from .novabot.search_log import SearchLogger
-from .novabot.knowledge_gap import LearningGapAnalyzer, format_gap_report
+from .novabot.knowledge_gap import LearningGapAnalyzer
 from .novabot.token_monitor import TokenMonitor
 from .novabot.token_limiter import TokenLimiter
 from .novabot.ask_box import AskBoxManager
 from .novabot.agent import NovaBotAgent
-from .novabot.sync_workflow import run_post_sync_workflow
+from .novabot.sync_workflow import (
+    mark_sync_failed,
+    refresh_collaboration_artifacts,
+    run_background_sync_pipeline,
+    select_member_sync_team,
+    select_sync_teams,
+    sync_team_members,
+)
+from .novabot.sync_coordinator import syncable_teams
+from .novabot.sync_status import format_sync_already_running, format_sync_started, format_sync_status
+from .novabot.rag_adapter import RagVectorSearchAdapter
+from .novabot.team import TeamRegistry, normalize_yuque_base_url
+from .novabot.team_clients import TeamClientManager
+from .novabot.help_text import format_help_text
+from .novabot.rag_commands import RagCommandContext, handle_rag_command
+from .novabot.card_commands import generate_card_command, validate_card_request
+from .novabot.gap_commands import analyze_gap_command, validate_gap_request
+from .novabot.weekly_commands import handle_weekly_command
+from .novabot.community_artifacts import (
+    init_member_trajectories_from_docs,
+    update_collaboration_network_from_docs,
+)
+from .novabot.account_binding import bind_yuque_account, unbind_yuque_account
+from .novabot.collab_commands import (
+    build_collab_find_query,
+    collab_usage_for_find,
+    extract_collab_content,
+    format_collaborators,
+    format_potential_collaborators,
+)
+from .novabot.memory_commands import (
+    analyze_memory_with_llm,
+    build_memory_overview,
+    extract_memory_search_keyword,
+    format_memory_clear_result,
+    format_memory_search_results,
+    format_recent_memory,
+    format_unknown_memory_action,
+    resolve_bound_memory_user,
+)
+from .novabot.partner_commands import (
+    build_partner_agent_query,
+    find_partner_fallback,
+    partner_missing_profile_message,
+)
+from .novabot.progress_commands import (
+    analyze_progress_with_llm,
+    build_progress_overview,
+    extract_progress_content,
+    format_domain_progress,
+    format_progress_overview_without_analysis,
+    progress_usage_for_add,
+    progress_usage_for_level,
+    record_progress_milestone,
+    set_progress_level,
+)
+from .novabot.questions_commands import (
+    extract_questions_content,
+    find_related_docs_for_questions,
+    format_all_questions,
+    format_frequent_questions,
+    format_resolve_question_result,
+    format_unknown_questions_action,
+    format_unresolved_questions,
+    parse_resolve_args,
+    questions_usage_for_resolve,
+)
+from .novabot.trajectory_commands import (
+    analyze_trajectory_with_llm,
+    build_trajectory_topic_query,
+    extract_trajectory_content,
+    find_member_id_by_name,
+    format_member_trajectory,
+    format_topic_fallback,
+    should_analyze_trajectory,
+    trajectory_usage_for_topic,
+)
 from .novabot.tools import ALL_TOOLS
 from .novabot.knowledge_base import KnowledgeBaseManager
 from .novabot.memory import ConversationMemory, MemberTrajectory, CollaborationNetwork
@@ -47,7 +127,9 @@ class NovaBotPlugin(Star):
 
         # 配置
         self.yuque_token = config.get("yuque_token", "")
-        self.yuque_base_url = config.get("yuque_base_url", "https://www.yuque.com/api/v2")
+        self.yuque_base_url = normalize_yuque_base_url(
+            config.get("yuque_base_url", "https://www.yuque.com/api/v2")
+        )
         self.embedding_api_key = config.get("embedding_api_key", "")
         self.embedding_base_url = config.get("embedding_base_url", "")
         self.embedding_model = config.get("embedding_model", "text-embedding-3-small")
@@ -79,6 +161,7 @@ class NovaBotPlugin(Star):
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
+        self.team_registry = TeamRegistry(config)
         self.memory_manager = ConversationMemory(self.storage.data_dir)  # 长期记忆
         self.trajectory_manager = MemberTrajectory(self.storage.data_dir)  # 成员轨迹
         self.collaboration_manager = CollaborationNetwork(self.storage.data_dir)  # 协作网络
@@ -86,7 +169,11 @@ class NovaBotPlugin(Star):
             self.storage.data_dir,
             daily_limit=config.get("token_daily_limit", 50000),
         )  # Token 限流
-        self.client: Optional[YuqueClient] = None
+        self.yuque_clients = TeamClientManager(
+            self.team_registry,
+            legacy_token=self.yuque_token,
+            legacy_base_url=self.yuque_base_url,
+        )
         self.path_recommender: Optional[LearningPathRecommender] = None
         self.gap_analyzer: Optional[LearningGapAnalyzer] = None
         self.kb_manager: Optional[KnowledgeBaseManager] = None
@@ -100,6 +187,8 @@ class NovaBotPlugin(Star):
         self._webhook_started: bool = False  # 标记服务是否已启动
         self._sync_lock = asyncio.Lock()  # 保护同步操作，防止并发
         self._doc_index = None  # 懒加载的 DocIndex
+        self.chunk_store = ChunkStore(self.storage.data_dir / "chunk_index.db")
+        self.knowledge_core: Optional[KnowledgeCore] = None
 
         # RAG
         self.rag: Optional[RAGEngine] = None
@@ -134,6 +223,11 @@ class NovaBotPlugin(Star):
                     logger.info("RAG 数据库已重置")
             except Exception as e:
                 logger.error(f"RAG 引擎初始化失败: {e}")
+
+        self.knowledge_core = KnowledgeCore(
+            self.chunk_store,
+            vector_search=RagVectorSearchAdapter(self.rag, self.chunk_store) if self.rag else None,
+        )
 
         # 初始化学习路径推荐器（依赖 RAG）
         self.path_recommender = LearningPathRecommender(self.storage, self.rag, self.token_monitor)
@@ -358,6 +452,7 @@ class NovaBotPlugin(Star):
             subscription_manager=self.subscription_manager,
             storage=self.storage,
             trajectory_manager=self.trajectory_manager,
+            chunk_store=self.chunk_store,
             cache_clear_callback=self.rag.clear_cache if self.rag else None,
         )
         logger.info("[Webhook] Webhook 应用设置完成")
@@ -412,6 +507,12 @@ class NovaBotPlugin(Star):
                 self._doc_index.close()
             except Exception as e:
                 logger.debug(f"[DocIndex] 关闭连接: {e}")
+
+        if self.chunk_store:
+            try:
+                self.chunk_store.close()
+            except Exception as e:
+                logger.debug(f"[ChunkStore] 关闭连接: {e}")
 
         logger.info("NovaBot 插件已卸载")
 
@@ -503,16 +604,12 @@ class NovaBotPlugin(Star):
 
         logger.info(f"LLM 工具注册完成: {', '.join(t.name for t in ALL_TOOLS)}")
 
-    def _get_client(self) -> YuqueClient:
+    def _get_client(self, team_id: str = "default") -> YuqueClient:
         """获取语雀客户端（懒加载）"""
-        if self.client is None:
-            self.client = YuqueClient(self.yuque_token, self.yuque_base_url)
-        return self.client
+        return self.yuque_clients.get(team_id)
 
     async def _close_client(self):
-        if self.client:
-            await self.client.close()
-            self.client = None
+        await self.yuque_clients.close_all()
 
     # ========== LLM 钩子 ==========
 
@@ -545,8 +642,6 @@ class NovaBotPlugin(Star):
                     output_tokens = getattr(usage, "completion_tokens", 0) or 0
 
             if input_tokens > 0 or output_tokens > 0:
-                total_tokens = input_tokens + output_tokens
-
                 # 记录到 Token 监控
                 self.token_monitor.log_usage(
                     feature="chat",
@@ -696,289 +791,120 @@ class NovaBotPlugin(Star):
 
     @filter.command("sync")
     @filter.permission_type(filter.PermissionType.ADMIN)
-    async def sync_cmd(self, event: AstrMessageEvent, action: str = ""):
+    async def sync_cmd(self, event: AstrMessageEvent, action: str = "", team_id: str = ""):
         """同步语雀知识库
 
         用法:
-        - /sync - 同步所有知识库（后台运行）
-        - /sync members - 同步团队成员
+        - /sync - 同步全部已启用团队知识库（后台运行）
+        - /sync <team_id> 或 /sync team <team_id> - 同步指定团队
+        - /sync members [team_id] - 同步团队成员
         - /sync status - 查看同步状态/进度
         """
-        if not self.yuque_token:
+        requested_sync_team_id = ""
+        action_lower = action.lower()
+        if action_lower == "team":
+            requested_sync_team_id = team_id.strip()
+        elif action_lower not in ("", "members", "status", "collab"):
+            requested_sync_team_id = action.strip()
+
+        if action_lower == "status":
+            state = self.storage.load_sync_state()
+            yield event.plain_result(format_sync_status(state))
+            return
+
+        await self.team_registry.discover_pending()
+        sync_teams, sync_error = select_sync_teams(
+            self.team_registry.list_enabled(),
+            requested_team_id=requested_sync_team_id,
+        )
+        if sync_error:
+            yield event.plain_result(sync_error)
+            return
+        all_sync_teams = syncable_teams(self.team_registry.list_enabled())
+        if not all_sync_teams:
             yield event.plain_result("❌ 未配置语雀 Token")
             return
 
         # 同步团队成员
-        if action.lower() == "members":
-            yield event.plain_result("🔄 同步团队成员...")
+        if action_lower == "members":
+            selected_team, error = select_member_sync_team(
+                self.team_registry.list_enabled(),
+                requested_team_id=team_id,
+            )
+            if error:
+                yield event.plain_result(error)
+                return
 
-            client = self._get_client()
+            yield event.plain_result(
+                f"🔄 同步团队成员... ({selected_team.name}, team_id={selected_team.team_id})"
+            )
+
+            client = self._get_client(selected_team.team_id)
             try:
-                user_info = await client.get_user()
-                if user_info.get("type") != "Group":
-                    yield event.plain_result("⚠️ 非团队 Token，跳过成员同步")
-                    return
-
-                group_id = user_info.get("id")
-                members_raw = await client.get_group_members(group_id)
-
-                members = {}
-                for item in members_raw:
-                    user = item.get("user", {})
-                    uid = user.get("id") or item.get("user_id")
-                    if uid:
-                        members[str(uid)] = {
-                            "name": user.get("name", ""),
-                            "login": user.get("login", "")
-                        }
-
-                if members:
-                    self.storage.save_members(members)
-                    yield event.plain_result(
-                        f"✅ 团队成员同步完成\n"
-                        f"共 {len(members)} 人\n"
-                        f"使用 /bind <用户名> 绑定账号"
-                    )
-                else:
-                    yield event.plain_result("⚠️ 未获取到成员，请检查 Token 权限")
+                yield event.plain_result(
+                    await sync_team_members(client=client, storage=self.storage, team=selected_team)
+                )
             except Exception as e:
                 logger.error(f"同步团队成员失败: {e}")
                 yield event.plain_result(f"❌ 同步失败: {e}")
             return
 
-        # 查看状态
-        if action.lower() == "status":
-            state = self.storage.load_sync_state()
-
-            # 检查是否正在同步
-            if state.get("in_progress") and state.get("progress"):
-                p = state["progress"]
-                yield event.plain_result(
-                    f"⏳ 同步进行中\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"进度: {p['current']}/{p['total']}\n"
-                    f"当前: {p['current_repo']}\n\n"
-                    f"使用 /sync status 刷新进度"
-                )
-                return
-
-            # 检查是否正在 RAG 索引
-            if state.get("status") == "rag_indexing" and state.get("rag_progress"):
-                rp = state["rag_progress"]
-                yield event.plain_result(
-                    f"⏳ RAG 索引进行中\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"进度: {rp['current']}/{rp['total']}\n\n"
-                    f"（Embedding API 调用较慢，请耐心等待）\n"
-                    f"使用 /sync status 刷新进度"
-                )
-                return
-
-            if state.get("last_sync"):
-                lines = [
-                    f"📊 同步状态",
-                    "━━━━━━━━━━━━━━━",
-                    f"上次同步: {state['last_sync'][:19]}",
-                    f"知识库数: {state.get('repos_count', 0)}",
-                    f"文档总数: {state.get('docs_count', 0)}",
-                    f"Token 类型: {state.get('token_type', '未知')}",
-                ]
-                yield event.plain_result("\n".join(lines))
-            else:
-                yield event.plain_result("尚未同步，使用 /sync 开始")
-            return
-
         # 手动更新协作网络和成员轨迹
-        if action.lower() == "collab":
-            results = []
-
-            # 更新协作网络
-            if self.collaboration_manager:
-                try:
-                    self._update_collaboration_network()
-                    stats = self.collaboration_manager.get_network_stats()
-                    results.append(f"协作关系: {stats.get('total_collaborations', 0)} 条")
-                    results.append(f"参与成员: {stats.get('total_members', 0)} 人")
-                except Exception as e:
-                    logger.error(f"[Sync] 更新协作网络失败: {e}", exc_info=True)
-                    results.append(f"协作网络更新失败: {e}")
-
-            # 初始化成员轨迹
-            if self.trajectory_manager:
-                try:
-                    self._init_member_trajectories()
-                    active_members = self.trajectory_manager.get_all_active_members(days=30)
-                    results.append(f"成员轨迹: {len(active_members)} 人有活动记录")
-                except Exception as e:
-                    logger.error(f"[Sync] 初始化轨迹失败: {e}", exc_info=True)
-                    results.append(f"轨迹初始化失败: {e}")
-
-            if results:
-                yield event.plain_result(
-                    f"✅ 数据初始化完成\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    + "\n".join(results)
-                )
-            else:
-                yield event.plain_result("❌ 数据系统未初始化")
-            return
-
-        # 检查是否已在同步（使用锁保护）
-        state = self.storage.load_sync_state()
-        if self._sync_lock.locked():
-            p = state.get("progress", {})
+        if action_lower == "collab":
             yield event.plain_result(
-                f"⏳ 同步已在进行中\n"
-                f"进度: {p.get('current', 0)}/{p.get('total', 0)}\n"
-                f"使用 /sync status 查看进度"
-            )
-            return
-
-        # 启动后台同步
-        asyncio.create_task(self._background_sync())
-        yield event.plain_result(
-            "🔄 同步已启动（后台运行）\n"
-            "使用 /sync status 查看进度"
-        )
-
-    async def _background_sync(self):
-        """后台同步任务"""
-        # 使用锁保护，防止并发同步
-        async with self._sync_lock:
-            client = self._get_client()
-            try:
-                # 标记开始
-                state = self.storage.load_sync_state()
-                state["in_progress"] = True
-                self.storage.save_sync_state(state)
-
-                # 使用新模块同步
-                members = self.storage.load_members()
-                result = await sync_all_repos(
-                    client=client,
-                    output_dir=self.storage.docs_dir,
-                    members=members,
-                    progress_callback=self.storage.update_progress,
-                )
-
-                # 更新同步状态
-                from datetime import timezone
-                state = {
-                    "last_sync": datetime.now(timezone.utc).isoformat(),
-                    "repos_count": result.get("repos_count", 0) if result else 0,
-                    "docs_count": result.get("docs", 0) if result else 0,
-                    "token_type": result.get("token_type", "未知") if result else "未知",
-                    "in_progress": False,
-                    "progress": None
-                }
-                self.storage.save_sync_state(state)
-
-                await run_post_sync_workflow(
-                    result=result or {},
-                    rag=self.rag,
-                    docs_dir=self.storage.docs_dir,
-                    storage=self.storage,
+                refresh_collaboration_artifacts(
                     collaboration_manager=self.collaboration_manager,
                     trajectory_manager=self.trajectory_manager,
                     update_collaboration=self._update_collaboration_network,
                     init_trajectories=self._init_member_trajectories,
                 )
+            )
+            return
 
-                docs_count = result.get("docs", 0) if result else 0
-                removed_count = result.get("removed", 0) if result else 0
-                logger.info(f"后台同步完成: {docs_count} 篇文档, 清理 {removed_count} 个孤儿文件")
+        # 检查是否已在同步（使用锁保护）
+        state = self.storage.load_sync_state()
+        if self._sync_lock.locked():
+            yield event.plain_result(format_sync_already_running(state))
+            return
 
-                # Git commit（如果启用）
-                if self.config.get("git_enabled", True):
-                    from .novabot.git_ops import GitOps
-                    git = GitOps(self.storage.docs_dir)
-                    if git.is_git_repo() and git.has_user_identity():
-                        # 获取所有变更的文件
-                        import subprocess
-                        try:
-                            status_result = subprocess.run(
-                                ["git", "status", "--porcelain"],
-                                cwd=self.storage.docs_dir,
-                                capture_output=True,
-                                text=True,
-                            )
-                            changed_files = [
-                                line[3:] for line in status_result.stdout.strip().split("\n")
-                                if line.strip()
-                            ]
-                            if changed_files:
-                                commit_msg = f"sync: 同步 {docs_count} 篇文档"
-                                if removed_count > 0:
-                                    commit_msg += f", 清理 {removed_count} 个文件"
-                                git.add_commit(changed_files, commit_msg)
-                        except Exception as e:
-                            logger.warning(f"[Sync] Git commit 失败: {e}")
+        # 启动后台同步
+        asyncio.create_task(self._background_sync(requested_team_id=requested_sync_team_id))
+        yield event.plain_result(format_sync_started(len(sync_teams), team_id=requested_sync_team_id))
+
+    async def _background_sync(self, requested_team_id: str = ""):
+        """后台同步任务"""
+        # 使用锁保护，防止并发同步
+        async with self._sync_lock:
+            try:
+                await run_background_sync_pipeline(
+                    team_registry=self.team_registry,
+                    storage=self.storage,
+                    docs_dir=self.storage.docs_dir,
+                    rag=self.rag,
+                    collaboration_manager=self.collaboration_manager,
+                    trajectory_manager=self.trajectory_manager,
+                    update_collaboration=self._update_collaboration_network,
+                    init_trajectories=self._init_member_trajectories,
+                    chunk_store=self.chunk_store,
+                    yuque_base_url=self.yuque_base_url,
+                    chunk_size=self.config.get("knowledge_chunk_size", 1200),
+                    chunk_overlap=self.config.get("knowledge_chunk_overlap", 180),
+                    git_enabled=self.config.get("git_enabled", True),
+                    requested_team_id=requested_team_id,
+                )
 
             except Exception as e:
                 logger.error(f"后台同步失败: {e}", exc_info=True)
-                # 标记同步结束
-                state = self.storage.load_sync_state()
-                state["in_progress"] = False
-                state["progress"] = None
-                state.pop("status", None)
-                state.pop("rag_progress", None)
-                self.storage.save_sync_state(state)
+                mark_sync_failed(self.storage)
 
     def _update_collaboration_network(self):
         """从文档元数据更新协作网络
 
         根据知识库贡献者建立协作关系。
         """
-        if not self.collaboration_manager:
-            return
-
-        doc_index = self._get_doc_index()
-        if not doc_index:
-            logger.warning("[Collaboration] 文档索引未初始化")
-            return
-
-        # 获取所有文档
-        try:
-            docs = doc_index.get_all_docs()
-        except Exception as e:
-            logger.error(f"[Collaboration] 获取文档列表失败: {e}")
-            return
-
-        # 按知识库分组，收集贡献者
-        repo_contributors: dict = {}  # {book_name: set(creator_ids)}
-
-        for doc in docs:
-            book_name = doc.get("book_name", "")
-            creator_id = doc.get("creator_id")
-
-            if not book_name or not creator_id:
-                continue
-
-            if book_name not in repo_contributors:
-                repo_contributors[book_name] = set()
-            repo_contributors[book_name].add(str(creator_id))
-
-        # 更新协作网络
-        total_repos = 0
-        total_relations = 0
-
-        for book_name, contributors in repo_contributors.items():
-            if len(contributors) < 2:
-                # 只有一个贡献者，无需建立协作关系
-                continue
-
-            # 记录知识库贡献者（会自动建立协作关系）
-            self.collaboration_manager.add_repo_contributors(
-                book_name, list(contributors)
-            )
-            total_repos += 1
-            # 计算关系数：n 个贡献者两两组合
-            n = len(contributors)
-            total_relations += n * (n - 1) // 2
-
-        logger.info(
-            f"[Collaboration] 协作网络更新完成: "
-            f"{total_repos} 个知识库, {total_relations} 条关系"
+        update_collaboration_network_from_docs(
+            doc_index=self._get_doc_index(),
+            collaboration_manager=self.collaboration_manager,
         )
 
     def _init_member_trajectories(self):
@@ -986,82 +912,9 @@ class NovaBotPlugin(Star):
 
         为每个贡献者创建发布/更新文档的轨迹记录。
         """
-        if not self.trajectory_manager:
-            return
-
-        doc_index = self._get_doc_index()
-        if not doc_index:
-            logger.warning("[Trajectory] 文档索引未初始化")
-            return
-
-        # 获取所有文档
-        try:
-            docs = doc_index.get_all_docs()
-        except Exception as e:
-            logger.error(f"[Trajectory] 获取文档列表失败: {e}")
-            return
-
-        total_events = 0
-        member_docs: dict = {}  # {creator_id: [docs]}
-
-        # 按创建者分组
-        for doc in docs:
-            creator_id = doc.get("creator_id")
-            if not creator_id:
-                continue
-
-            creator_id = str(creator_id)
-            if creator_id not in member_docs:
-                member_docs[creator_id] = []
-            member_docs[creator_id].append(doc)
-
-        # 为每个成员创建轨迹
-        for creator_id, doc_list in member_docs.items():
-            # 按更新时间排序，取最近的 20 篇
-            doc_list.sort(key=lambda d: d.get("updated_at", ""), reverse=True)
-
-            for doc in doc_list[:20]:
-                title = doc.get("title", "")
-                book_name = doc.get("book_name", "")
-                created_at = doc.get("created_at", "")
-                updated_at = doc.get("updated_at", "")
-
-                # 判断是发布还是更新
-                # 如果创建时间和更新时间相同（或非常接近），则是发布
-                # 否则是更新
-                if created_at and updated_at:
-                    # 简单判断：如果创建时间和更新时间在同一个小时内，视为发布
-                    try:
-                        from datetime import datetime
-                        ct = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                        ut = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-                        # 时间差小于 1 小时视为发布
-                        if abs((ut - ct).total_seconds()) < 3600:
-                            event_type = "publish_doc"
-                            event_time = created_at
-                        else:
-                            event_type = "update_doc"
-                            event_time = updated_at
-                    except ValueError:
-                        event_type = "publish_doc"
-                        event_time = updated_at
-                else:
-                    event_type = "publish_doc"
-                    event_time = updated_at
-
-                self.trajectory_manager.record_event(
-                    member_id=creator_id,
-                    event_type=event_type,
-                    title=title,
-                    description=f"知识库: {book_name}",
-                    related_id=str(doc.get("yuque_id", "")),
-                    timestamp=event_time,  # 传入实际事件时间
-                )
-                total_events += 1
-
-        logger.info(
-            f"[Trajectory] 成员轨迹初始化完成: "
-            f"{len(member_docs)} 个成员, {total_events} 条轨迹"
+        init_member_trajectories_from_docs(
+            doc_index=self._get_doc_index(),
+            trajectory_manager=self.trajectory_manager,
         )
 
     @filter.command("bind")
@@ -1071,76 +924,15 @@ class NovaBotPlugin(Star):
         用法: /bind <用户名或 login>
         """
         platform_id = event.get_sender_id()
-
-        # 检查已有绑定
-        existing = self.storage.get_binding(platform_id)
-        if existing:
-            yield event.plain_result(
-                f"已绑定 @{existing['yuque_login']}\n"
-                f"使用 /unbind 解绑后重新绑定"
-            )
-            return
-
-        if not arg:
-            yield event.plain_result(
-                "请提供用户名:\n"
-                "/bind <用户名>\n\n"
-                "例如: /bind 张三"
-            )
-            return
-
-        # 输入长度限制
-        arg = arg.strip()
-        if len(arg) > 100:
-            yield event.plain_result("❌ 用户名过长（最多 100 字符）")
-            return
-
-        # 检查成员数据
-        members = self.storage.load_members()
-        if not members:
-            yield event.plain_result(
-                "❌ 团队成员未同步\n"
-                "请先执行 /sync members"
-            )
-            return
-
-        # 查找用户
-        matched = self.storage.find_member_by_name(arg)
-        if not matched:
-            sample = [info.get("name", "") for info in list(members.values())[:5]]
-            yield event.plain_result(
-                f"❌ 未找到「{arg}」\n"
-                f"成员示例: {', '.join(sample)}"
-            )
-            return
-
-        # 绑定
-        self.storage.add_binding(platform_id, {
-            "yuque_id": matched["id"],
-            "yuque_login": matched.get("login", ""),
-            "yuque_name": matched.get("name", ""),
-        })
-
         yield event.plain_result(
-            f"✅ 绑定成功\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"账号: @{matched.get('login', '')} ({matched.get('name', '')})\n"
-            f"\n"
-            f"💡 使用 /profile refresh 生成用户画像"
+            bind_yuque_account(storage=self.storage, platform_id=platform_id, query=arg)
         )
 
     @filter.command("unbind")
     async def unbind_cmd(self, event: AstrMessageEvent):
         """解除绑定"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("你还没有绑定账号")
-            return
-
-        self.storage.remove_binding(platform_id)
-        yield event.plain_result(f"✅ 已解除绑定 @{binding.get('yuque_login', '')}")
+        yield event.plain_result(unbind_yuque_account(storage=self.storage, platform_id=platform_id))
 
     @filter.command("profile")
     async def profile_cmd(self, event: AstrMessageEvent, action: str = "", domain: str = ""):
@@ -1165,21 +957,24 @@ class NovaBotPlugin(Star):
 
         # 领域评估
         if action.lower() == "assess" and domain:
-            docs = self.storage.get_docs_by_author(yuque_name, yuque_id)
+            docs = get_profile_docs(storage=self.storage, binding=binding)
             if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
                 return
-
             try:
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if not provider:
                     yield event.plain_result("❌ LLM 未配置，请先配置模型 Provider")
                     return
-
                 yield event.plain_result(f"🔍 正在评估你在「{domain}」领域的学习情况...")
-
-                assessment = await self.profile_gen.assess_domain_level(docs, domain, provider)
-                result = format_domain_assessment(assessment)
+                _, result = await assess_user_domain(
+                    storage=self.storage,
+                    profile_generator=self.profile_gen,
+                    binding=binding,
+                    domain=domain,
+                    provider=provider,
+                    docs=docs,
+                )
                 yield event.plain_result(result)
 
             except Exception as e:
@@ -1189,39 +984,24 @@ class NovaBotPlugin(Star):
 
         # 刷新画像（使用 LLM 深度分析）
         if action.lower() == "refresh":
-            # 获取文档（优先通过 yuque_id 精确匹配）
-            docs = self.storage.get_docs_by_author(yuque_name, yuque_id)
+            docs = get_profile_docs(storage=self.storage, binding=binding)
             if not docs:
                 yield event.plain_result("⚠️ 未找到你的文档，请先执行 /sync 同步")
                 return
-
-            # 获取 LLM Provider
             try:
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if not provider:
                     yield event.plain_result("❌ LLM 未配置，请先配置模型 Provider")
                     return
-
                 yield event.plain_result(f"🔍 正在分析 {len(docs)} 篇文档...")
-
-                # 使用 LLM 生成画像
-                profile = await self.profile_gen.generate_with_llm(docs, provider)
-                self.storage.save_profile(yuque_id, profile)
-
-                level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-                p = profile.get("profile", {})
-                skills = p.get("skills", {})
-                skill_lines = [f"• {k} ({level_map.get(v, v)})" for k, v in skills.items()]
-
-                yield event.plain_result(
-                    f"✅ 画像已生成\n"
-                    f"━━━━━━━━━━━━━━━\n"
-                    f"兴趣: {', '.join(p.get('interests', []))}\n"
-                    f"水平: {level_map.get(p.get('level', ''), '未知')}\n"
-                    f"标签: {', '.join(p.get('tags', []))}\n"
-                    f"\n"
-                    f"📝 {p.get('summary', '')}"
+                _, result = await refresh_user_profile(
+                    storage=self.storage,
+                    profile_generator=self.profile_gen,
+                    binding=binding,
+                    provider=provider,
+                    docs=docs,
                 )
+                yield event.plain_result(result)
             except Exception as e:
                 logger.error(f"生成画像失败: {e}", exc_info=True)
                 yield event.plain_result(f"❌ 生成失败: {e}")
@@ -1229,95 +1009,11 @@ class NovaBotPlugin(Star):
 
         # 显示画像
         profile = self.storage.load_profile(yuque_id)
-        level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-
-        if profile:
-            p = profile.get("profile", {})
-            stats = profile.get("stats", {})
-
-            # 构建技能显示
-            skills = p.get("skills", {})
-            skill_lines = []
-
-            for interest in p.get("interests", []):
-                # 精确匹配
-                skill_level = skills.get(interest)
-                if skill_level:
-                    skill_lines.append(f"• {interest} ({level_map.get(skill_level, '入门')})")
-                    continue
-
-                # 模糊匹配：检查 skills 中是否有包含兴趣关键词的 key
-                interest_lower = interest.lower()
-                matched = False
-                for skill_name, level in skills.items():
-                    skill_lower = skill_name.lower()
-                    # 双向包含匹配
-                    if interest_lower in skill_lower or skill_lower in interest_lower:
-                        skill_lines.append(f"• {interest} ({level_map.get(level, '入门')})")
-                        matched = True
-                        break
-
-                if not matched:
-                    # 没有匹配到，显示默认值
-                    skill_lines.append(f"• {interest} (入门)")
-
-            # 构建知识库显示
-            repos = stats.get("repos", [])
-            repos_str = ", ".join(repos[:3])
-            if len(repos) > 3:
-                repos_str += f" 等 {len(repos)} 个"
-
-            lines = [
-                f"📋 用户画像",
-                f"━━━━━━━━━━━━━━━",
-                f"账号: @{yuque_login} ({yuque_name})",
-                "",
-                f"🎯 兴趣领域",
-            ]
-            if skill_lines:
-                lines.extend(skill_lines)
-            else:
-                lines.append("暂无数据")
-
-            # 标签
-            tags = p.get("tags", [])
-            if tags:
-                lines.extend(["", f"🏷️ 标签", f"• {' • '.join(tags)}"])
-
-            lines.extend([
-                "",
-                f"📊 统计",
-                f"• 文档数: {stats.get('docs_count', 0)} 篇",
-                f"• 知识库: {repos_str or '暂无'}",
-                f"• 整体水平: {level_map.get(p.get('level', ''), '未知')}",
-            ])
-
-            # 概括
-            summary = p.get("summary", "")
-            if summary:
-                lines.extend(["", f"📝 {summary}"])
-
-            lines.extend(["", f"💡 使用 /profile refresh 重新分析"])
-
-            yield event.plain_result("\n".join(lines))
-        else:
-            yield event.plain_result(
-                f"📋 用户画像\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"账号: @{yuque_login} ({yuque_name})\n"
-                f"\n"
-                f"画像未生成\n"
-                f"使用 /profile refresh 生成画像"
-            )
+        yield event.plain_result(format_profile_view(binding=binding, profile=profile))
 
     @filter.command("partner")
     async def partner_cmd(self, event: AstrMessageEvent, topic: str = ""):
-        """伙伴推荐
-
-        用法:
-        - /partner - 查看推荐（所有兴趣）
-        - /partner 爬虫 - 查找某主题的学习伙伴/导师
-        """
+        """伙伴推荐"""
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
 
@@ -1326,46 +1022,28 @@ class NovaBotPlugin(Star):
             return
 
         yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
 
         # 检查画像
         profile = self.storage.load_profile(yuque_id)
         if not profile:
-            yield event.plain_result(
-                "⚠️ 你还没有画像\n"
-                "使用 /profile refresh 生成画像后再来找我推荐伙伴"
-            )
+            yield event.plain_result(partner_missing_profile_message())
             return
 
-        # 使用 Agent 智能推荐（调用 PartnerRecommendTool 工具）
         try:
             yield event.plain_result("🔍 正在分析推荐...")
-
-            from .novabot.llm_utils import sanitize_user_input
-            safe_topic = sanitize_user_input(topic, max_length=100) if topic else ""
-
-            # 构建请求，让 Agent 理解用户需求
-            if safe_topic:
-                agent_query = f"我想找一个在「{safe_topic}」领域的学习伙伴或导师"
-            else:
-                agent_query = "请根据我的兴趣推荐学习伙伴或导师"
-
-            response = await self.agent.handle_message(event, agent_query)
+            response = await self.agent.handle_message(event, build_partner_agent_query(topic))
             yield event.plain_result(response)
 
         except Exception as e:
             logger.error(f"[Partner] Agent 处理失败: {e}", exc_info=True)
-            # 回退到基础规则匹配输出
-            partners = self.partner_matcher.find_partners(yuque_id, topic if topic else None)
-            mentors = self.partner_matcher.find_mentors(yuque_id, topic if topic else None)
-            if partners or mentors:
-                result = format_partner_result(partners, mentors, topic if topic else None, storage=self.storage)
-                yield event.plain_result(result)
-            else:
-                if topic:
-                    yield event.plain_result(f"未找到「{topic}」相关的学习伙伴")
-                else:
-                    yield event.plain_result("暂无匹配的学习伙伴")
+            yield event.plain_result(
+                find_partner_fallback(
+                    matcher=self.partner_matcher,
+                    storage=self.storage,
+                    yuque_id=yuque_id,
+                    topic=topic,
+                )
+            )
 
     async def _recommend_answerers(self, question: str) -> str:
         """根据问题推荐潜在回答者
@@ -1461,497 +1139,6 @@ class NovaBotPlugin(Star):
         except Exception as e:
             logger.debug(f"[Ask] 推荐回答者失败: {e}")
             return ""
-
-    def _format_collab_result(self, topic: str, potential: list[dict]) -> str:
-        """格式化协作伙伴推荐结果（基础版）
-
-        Args:
-            topic: 主题
-            potential: 潜在协作伙伴列表
-
-        Returns:
-            格式化的文本
-        """
-        lines = [f"【「{topic}」领域潜在协作伙伴】\n"]
-        members = self.storage.load_members()
-
-        for p in potential[:5]:
-            partner_id = p.get("member_id", "")
-            member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
-            partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
-            partner_login = member_info.get("login", "") if member_info else ""
-            score = p.get("match_score", 0)
-            reasons = p.get("match_reasons", [])
-
-            lines.append(f"👤 {partner_name}（匹配度 {score:.0%}）")
-
-            for reason in reasons:
-                lines.append(f"   ✓ {reason}")
-
-            # 相关文档
-            if self._get_doc_index():
-                try:
-                    docs = self._get_doc_index().search(title=topic, limit=5)
-                    partner_docs = []
-                    for doc in docs:
-                        doc_author = str(doc.get("creator_id") or doc.get("author", ""))
-                        if doc_author == partner_id or doc.get("author") == partner_name:
-                            partner_docs.append(doc.get("title", ""))
-                    if partner_docs:
-                        lines.append(f"   📄 相关文档：{partner_docs[0][:25]}...")
-                except Exception:
-                    pass
-
-            if partner_login:
-                lines.append(f"   🔗 https://www.yuque.com/{partner_login}")
-
-            lines.append("")
-
-        lines.append("💡 提示：可以在群里 @对方 讨论，或通过语雀主页私信联系")
-        return "\n".join(lines)
-
-    async def _enhance_collab_with_llm(
-        self,
-        provider,
-        user_name: str,
-        topic: str,
-        potential: list[dict],
-    ) -> str:
-        """使用 LLM 增强协作伙伴推荐
-
-        Args:
-            provider: LLM Provider
-            user_name: 用户名
-            topic: 主题
-            potential: 潜在协作伙伴列表
-
-        Returns:
-            增强的推荐文本
-        """
-        from .novabot.llm_utils import call_llm, sanitize_user_input
-
-        safe_topic = sanitize_user_input(topic, max_length=100)
-        safe_user_name = sanitize_user_input(user_name, max_length=50)
-
-        members = self.storage.load_members()
-
-        # 构建候选信息
-        candidates_info = []
-        for i, p in enumerate(potential[:5], 1):
-            partner_id = p.get("member_id", "")
-            member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
-            partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
-            score = p.get("match_score", 0)
-            reasons = p.get("match_reasons", [])
-
-            safe_name = sanitize_user_input(partner_name, max_length=50)
-            candidates_info.append(
-                f"{i}. {safe_name}（匹配度 {score:.0%}）\n"
-                f"   原因：{', '.join(reasons[:2]) if reasons else '相关领域活跃'}"
-            )
-
-        prompt = f"""你是一个协作伙伴推荐助手。请根据以下信息，为用户生成个性化的协作伙伴推荐报告。
-
-## 用户信息
-- 姓名：{safe_user_name}
-- 查找主题：{safe_topic}
-
-## 推荐的协作伙伴
-{chr(10).join(candidates_info)}
-
-## 输出要求
-
-请生成一份简洁的推荐报告，包含：
-
-1. **开篇**：一句话说明找到了什么
-
-2. **伙伴推荐**：
-   - 每个伙伴用 1-2 句话介绍
-   - 说明为什么推荐（匹配原因）
-   - 建议如何合作（一起做什么）
-
-3. **行动建议**：1-2 句话鼓励用户主动联系
-
-注意：
-- 语气简洁专业
-- 推荐理由要具体
-- 输出用中文，不要用 emoji"""
-
-        try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个协作伙伴推荐助手，善于给出简洁、有价值的推荐。",
-                require_json=False,
-                token_monitor=self.token_monitor,
-                feature="collab",
-            )
-            return result
-        except Exception as e:
-            logger.warning(f"[Collab] LLM 增强失败，回退到基础输出: {e}")
-            return self._format_collab_result(topic, potential)
-
-    async def _enhance_partner_with_llm(
-        self,
-        provider,
-        user_name: str,
-        user_profile: dict,
-        topic: str,
-        partners: list[dict],
-        mentors: list[dict],
-    ) -> str:
-        """使用 LLM 增强伙伴推荐输出
-
-        Args:
-            provider: LLM Provider
-            user_name: 用户名
-            user_profile: 用户画像
-            topic: 主题
-            partners: 学习伙伴列表
-            mentors: 导师列表
-
-        Returns:
-            增强的推荐文本
-        """
-        from .novabot.llm_utils import call_llm, sanitize_user_input
-
-        # 构建用户画像摘要
-        p = user_profile.get("profile", {})
-        user_interests = ", ".join(p.get("interests", []))
-        user_level = p.get("level", "beginner")
-
-        level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-
-        # 清理用户输入，防止 prompt 注入
-        safe_user_name = sanitize_user_input(user_name, max_length=50)
-        safe_user_interests = sanitize_user_input(user_interests, max_length=200)
-        safe_topic = sanitize_user_input(topic, max_length=100) if topic else ""
-
-        # 构建候选信息
-        partners_info = []
-        for i, partner in enumerate(partners[:3], 1):
-            name = partner.get("name", "未知")
-            common = ", ".join(partner.get("common_interests", []))
-            level = level_map.get(partner.get("level", ""), "入门")
-            partners_info.append(f"{i}. {name} - 水平：{level}，共同兴趣：{common or '无'}")
-
-        mentors_info = []
-        for i, mentor in enumerate(mentors[:2], 1):
-            name = mentor.get("name", "未知")
-            level = level_map.get(mentor.get("topic_level", ""), "入门")
-            docs = mentor.get("related_docs", [])
-            mentors_info.append(f"{i}. {name} - 水平：{level}，相关文档：{docs[0] if docs else '无'}")
-
-        prompt = f"""你是一个学习伙伴推荐助手。请根据以下信息，为用户生成个性化的推荐报告。
-
-## 用户信息
-- 姓名：{safe_user_name}
-- 兴趣领域：{safe_user_interests}
-- 整体水平：{level_map.get(user_level, user_level)}
-{"- 查找主题：" + safe_topic if safe_topic else ""}
-
-## 推荐的学习伙伴（水平相近，可以互相学习）
-{chr(10).join(partners_info) if partners_info else "暂无"}
-
-## 推荐的导师（经验更丰富，可以请教问题）
-{chr(10).join(mentors_info) if mentors_info else "暂无"}
-
-## 输出要求
-
-请生成一份友好的推荐报告，包含：
-
-1. **开篇**：简要说明为用户找到了什么（1句话）
-
-2. **学习伙伴推荐**：
-   - 每个伙伴用 2-3 句话介绍
-   - 说明为什么推荐（共同兴趣、水平匹配等）
-   - 给出互动建议（可以一起做什么）
-
-3. **导师推荐**（如有）：
-   - 简要介绍导师优势
-   - 建议请教什么问题
-
-4. **行动建议**：1-2 句话鼓励用户主动联系
-
-注意：
-- 语气温暖友好，像学长/学姐在介绍朋友
-- 推荐理由要具体，不要空泛
-- 如果有共同兴趣，特别强调
-- 输出用中文，不要用 emoji"""
-
-        try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个学习伙伴推荐助手，善于给出个性化、有温度的推荐。",
-                require_json=False,  # 不需要 JSON，直接返回文本
-                token_monitor=self.token_monitor,
-                feature="partner",
-            )
-
-            return result
-
-        except Exception as e:
-            logger.warning(f"[Partner] LLM 增强失败，回退到基础输出: {e}")
-            return format_partner_result(partners, mentors, topic, storage=self.storage)
-
-    async def _analyze_progress_with_llm(
-        self,
-        provider,
-        user_name: str,
-        progress: dict,
-    ) -> str:
-        """使用 LLM 分析学习进度趋势
-
-        Args:
-            provider: LLM Provider
-            user_name: 用户名
-            progress: 学习进度数据
-
-        Returns:
-            分析报告文本
-        """
-        from .novabot.llm_utils import call_llm, sanitize_user_input
-
-        # 清理用户输入
-        safe_user_name = sanitize_user_input(user_name, max_length=50)
-
-        level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-
-        # 构建进度摘要（清理领域名称）
-        domains_info = []
-        for domain, data in list(progress.items())[:10]:  # 限制领域数量
-            safe_domain = sanitize_user_input(domain, max_length=50)
-            level = level_map.get(data.get("level", ""), "入门")
-            milestones = data.get("milestones", [])
-            last_active = sanitize_user_input(data.get("last_active", "未知"), max_length=20)
-            domains_info.append(
-                f"- {safe_domain}: {level}，{len(milestones)} 个里程碑，最近活跃：{last_active}"
-            )
-
-        prompt = f"""你是一个学习进度分析师。请根据以下学习数据，分析用户的学习状态并给出建议。
-
-## 用户
-{safe_user_name}
-
-## 学习进度数据
-{chr(10).join(domains_info)}
-
-## 分析任务
-
-请输出一份简洁的分析报告，包含：
-
-1. **学习画像总结**（2-3 句话）
-   - 用户主要在学习哪些领域？
-   - 整体学习进度如何？
-
-2. **趋势分析**
-   - 哪些领域学得比较好？
-   - 哪些领域可能需要更多关注？
-
-3. **下一步建议**（2-3 条）
-   - 具体的学习建议
-   - 可以尝试的新方向
-
-注意：
-- 语气友好，像学长/学姐在给建议
-- 建议要具体，不要太笼统
-- 如果用户学习领域较少，鼓励探索新领域
-- 输出用中文，简洁明了"""
-
-        try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个学习进度分析师，善于发现学习模式并给出实用建议。",
-                require_json=False,
-                token_monitor=self.token_monitor,
-                feature="progress",
-            )
-            return result
-        except Exception as e:
-            logger.warning(f"[Progress] LLM 分析失败: {e}")
-            # 回退到基础输出
-            lines = [f"📊 {user_name} 的学习进度", "━━━━━━━━━━━━━━━━━━━━"]
-            for domain_name, data in progress.items():
-                level = level_map.get(data.get("level", "beginner"), "入门")
-                milestones_count = len(data.get("milestones", []))
-                lines.append(f"• {domain_name}: {level} ({milestones_count} 个里程碑)")
-            lines.append("\n使用 /progress <领域> 查看详情")
-            return "\n".join(lines)
-
-    async def _analyze_trajectory_with_llm(
-        self,
-        provider,
-        user_name: str,
-        trajectory: list[dict],
-    ) -> str:
-        """使用 LLM 分析活动轨迹
-
-        Args:
-            provider: LLM Provider
-            user_name: 用户名
-            trajectory: 活动轨迹数据
-
-        Returns:
-            分析报告文本
-        """
-        from .novabot.llm_utils import call_llm, sanitize_user_input
-
-        # 清理用户输入
-        safe_user_name = sanitize_user_input(user_name, max_length=50)
-
-        # 构建活动摘要（清理活动信息）
-        events_info = []
-        event_types: dict[str, int] = {}
-        for evt in trajectory[:15]:
-            event_name = sanitize_user_input(evt.get("event_name", "活动"), max_length=30)
-            title = sanitize_user_input(evt.get("title", ""), max_length=50)
-            timestamp = evt.get("timestamp", "")[:10] if evt.get("timestamp") else ""
-            events_info.append(f"- [{timestamp}] {event_name}：{title[:40]}")
-            event_types[event_name] = event_types.get(event_name, 0) + 1
-
-        # 统计活动类型
-        type_summary = ", ".join([f"{k}×{v}" for k, v in list(event_types.items())[:5]])
-
-        prompt = f"""你是一个学习活动分析师。请根据用户的活动轨迹，分析他们的学习状态。
-
-## 用户
-{safe_user_name}
-
-## 最近活动记录（共 {len(trajectory)} 条）
-{chr(10).join(events_info)}
-
-## 活动类型统计
-{type_summary}
-
-## 分析任务
-
-请输出一份简洁的活动分析，包含：
-
-1. **活动画像**（2-3 句话）
-   - 用户主要在做什么类型的事情？
-   - 活动频率如何？
-
-2. **兴趣领域**
-   - 从活动标题中识别用户关注的技术/知识领域
-   - 列出 2-3 个主要领域
-
-3. **学习建议**（1-2 条）
-   - 基于活动模式，给出下一步学习建议
-   - 或建议探索的新方向
-
-注意：
-- 语气友好，像学长/学姐在分析
-- 从活动标题中推断技术领域时要合理
-- 如果活动较少，鼓励用户多记录学习过程
-- 输出用中文，简洁明了"""
-
-        try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个学习活动分析师，善于从活动记录中发现学习模式。",
-                require_json=False,
-                token_monitor=self.token_monitor,
-                feature="trajectory",
-            )
-            return result
-        except Exception as e:
-            logger.warning(f"[Trajectory] LLM 分析失败: {e}")
-            # 回退到基础输出
-            lines = [f"【{user_name} 最近活动】"]
-            for evt in trajectory[:10]:
-                timestamp = evt.get("timestamp", "")
-                if timestamp:
-                    try:
-                        dt = datetime.fromisoformat(timestamp)
-                        date_str = dt.strftime("%m-%d")
-                    except ValueError:
-                        date_str = timestamp[:10]
-                else:
-                    date_str = "未知"
-                event_name = evt.get("event_name", "活动")
-                title = evt.get("title", "")
-                lines.append(f"• {date_str} - {event_name}：{title[:30]}")
-            return "\n".join(lines)
-
-    async def _analyze_memory_with_llm(
-        self,
-        provider,
-        user_name: str,
-        sessions: list[dict],
-    ) -> str:
-        """使用 LLM 分析对话模式
-
-        Args:
-            provider: LLM Provider
-            user_name: 用户名
-            sessions: 会话列表
-
-        Returns:
-            分析报告文本
-        """
-        from .novabot.llm_utils import call_llm, sanitize_user_input
-
-        safe_user_name = sanitize_user_input(user_name, max_length=50)
-
-        # 构建会话摘要
-        sessions_info = []
-        for session in sessions[:5]:
-            summary = sanitize_user_input(session.get("summary", "无摘要"), max_length=100)
-            started_at = session.get("started_at", "")[:10] if session.get("started_at") else ""
-            sessions_info.append(f"- [{started_at}] {summary}")
-
-        prompt = f"""你是一个对话分析师。请根据用户的对话历史，分析他们的学习模式和兴趣。
-
-## 用户
-{safe_user_name}
-
-## 最近对话记录（共 {len(sessions)} 条）
-{chr(10).join(sessions_info)}
-
-## 分析任务
-
-请输出一份简洁的分析，包含：
-
-1. **对话画像**（1-2 句话）
-   - 用户主要关心什么？
-   - 提问频率如何？
-
-2. **兴趣领域**
-   - 从对话摘要中识别用户关注的技术/知识领域
-   - 列出 2-3 个主要领域
-
-3. **建议**（1-2 条）
-   - 基于对话内容，给出学习或探索建议
-
-注意：
-- 语气友好
-- 输出用中文，简洁明了"""
-
-        try:
-            result = await call_llm(
-                provider=provider,
-                prompt=prompt,
-                system_prompt="你是一个对话分析师，善于从对话记录中发现用户兴趣。",
-                require_json=False,
-                token_monitor=self.token_monitor,
-                feature="memory",
-            )
-            return result
-        except Exception as e:
-            logger.warning(f"[Memory] LLM 分析失败: {e}")
-            # 回退到基础输出
-            return (
-                f"🧠 {safe_user_name} 的记忆概览\n"
-                f"━━━━━━━━━━━━━━━━━━━━\n"
-                f"• 总会话数: {len(sessions)}\n\n"
-                f"指令:\n"
-                f"  /memory recent - 最近对话\n"
-                f"  /memory search <关键词> - 搜索\n"
-                f"  /memory clear - 清除记忆"
-            )
 
     @filter.command("path")
     async def path_cmd(self, event: AstrMessageEvent, domain: str = ""):
@@ -2103,67 +1290,23 @@ class NovaBotPlugin(Star):
         - /rag search <关键词> - 搜索
         - /rag rebuild - 重建索引
         """
-        if not self.rag:
-            yield event.plain_result("❌ RAG 未初始化，请配置 embedding_api_key")
-            return
-
-        if action.lower() == "status":
-            try:
-                stats = self.rag.get_stats()
-                yield event.plain_result(
-                    f"📊 RAG 状态\n"
-                    f"模型: {self.embedding_model}\n"
-                    f"文档数: {stats.get('docs_count', 0)}"
-                )
-            except Exception as e:
-                logger.error(f"获取 RAG 状态失败: {e}")
-                yield event.plain_result(f"⚠️ RAG 状态异常: {e}")
-            return
-
-        if action.lower() == "search" and query:
-            try:
-                results = self.rag.search(query, k=5)
-                # 记录搜索日志
-                self.search_logger.log_search(
-                    query=query,
-                    results_count=len(results),
-                    search_type="rag",
-                    user_id=event.get_sender_id(),
-                )
-                if not results:
-                    yield event.plain_result(f"未找到相关文档: {query}")
-                    return
-
-                lines = [f"🔍 搜索: {query}", "━━━━━━━━━━━━━━━"]
-                for i, doc in enumerate(results, 1):
-                    lines.append(f"{i}. {doc['title']}")
-                    lines.append(f"   {doc['content'][:80]}...")
-
-                yield event.plain_result("\n".join(lines))
-            except Exception as e:
-                logger.error(f"RAG 搜索失败: {e}")
-                yield event.plain_result(f"❌ 搜索失败: {e}")
-            return
-
-        if action.lower() == "rebuild":
-            try:
-                yield event.plain_result("🔄 重建 RAG 索引...")
-                if not self.rag.clear():
-                    yield event.plain_result("❌ 清空向量库失败")
-                    return
-                indexed = self.rag.index_from_sync(str(self.storage.docs_dir))
-                yield event.plain_result(f"✅ 重建完成，索引 {indexed} 篇文档")
-            except Exception as e:
-                logger.error(f"RAG 重建失败: {e}", exc_info=True)
-                yield event.plain_result(f"❌ 重建失败: {e}")
-            return
-
-        yield event.plain_result(
-            "📚 RAG 检索\n"
-            "• /rag status - 状态\n"
-            "• /rag search <关键词> - 搜索\n"
-            "• /rag rebuild - 重建索引"
+        context = RagCommandContext(
+            rag=self.rag,
+            docs_dir=self.storage.docs_dir,
+            embedding_model=self.embedding_model,
+            search_logger=self.search_logger,
         )
+        try:
+            for message in handle_rag_command(
+                context,
+                action=action,
+                query=query,
+                user_id=event.get_sender_id(),
+            ):
+                yield event.plain_result(message)
+        except Exception as e:
+            logger.error(f"RAG 命令失败: {e}", exc_info=True)
+            yield event.plain_result(f"❌ RAG 命令失败: {e}")
 
     @filter.command("webhook")
     async def webhook_cmd(self, event: AstrMessageEvent):
@@ -2200,48 +1343,21 @@ class NovaBotPlugin(Star):
         """生成本周知识周报或导出按周原始数据。"""
         try:
             docs_dir = self.storage.docs_dir
-
-            # 获取 DocIndex 实例
             doc_index = self._get_doc_index()
-
             reporter = WeeklyReporter(docs_dir, doc_index=doc_index)
-
-            # 导出全部文档按周原始统计 CSV
-            if action.lower() in ("raw", "export"):
-                export_dir = self.storage.data_dir / "exports"
-                csv_path, row_count = reporter.export_weekly_raw_csv(export_dir)
-
-                # 优先尝试直接发送文件；不支持时回退为返回本地路径
-                sent = await self._try_send_file(event, csv_path)
-                if sent:
-                    yield event.plain_result(
-                        f"✅ 已导出按周原始数据\n"
-                        f"记录周数: {row_count}\n"
-                        f"文件名: {csv_path.name}"
-                    )
-                else:
-                    yield event.plain_result(
-                        f"✅ 已导出按周原始数据（当前平台不支持直接发文件）\n"
-                        f"记录周数: {row_count}\n"
-                        f"文件路径: {csv_path}"
-                    )
-                return
-
-            # 尝试获取 LLM Provider
             umo = event.unified_msg_origin
             prov_id = await self.context.get_current_chat_provider_id(umo)
-
-            if prov_id:
-                prov = self.context.get_provider_by_id(prov_id)
-                report = await reporter.generate_weekly_report_with_llm(
-                    provider=prov,
-                    token_monitor=self.token_monitor,
-                )
-            else:
-                # 无 LLM 时回退到纯统计
-                report = reporter.generate_weekly_report()
-
-            yield event.plain_result(report)
+            provider = self.context.get_provider_by_id(prov_id) if prov_id else None
+            messages = await handle_weekly_command(
+                reporter=reporter,
+                action=action,
+                export_dir=self.storage.data_dir / "exports",
+                provider=provider,
+                token_monitor=self.token_monitor,
+                send_file=lambda path: self._try_send_file(event, path),
+            )
+            for message in messages:
+                yield event.plain_result(message)
         except Exception as e:
             logger.error(f"生成周报失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 生成周报失败: {e}")
@@ -2277,38 +1393,25 @@ class NovaBotPlugin(Star):
         如果不指定领域，会根据用户画像自动推断
         """
         try:
-            # 检查用户是否绑定
             platform_id = event.get_sender_id()
-            binding = self.storage.get_binding(platform_id)
-
-            if not binding:
-                yield event.plain_result(
-                    "❌ 请先绑定语雀账号\n"
-                    "使用 /bind <语雀用户名> 绑定后，才能分析你的学习缺口。"
-                )
-                return
-
-            yuque_id = binding.get("yuque_id")
-            if not yuque_id:
-                yield event.plain_result("❌ 绑定信息异常，请重新绑定")
-                return
-
-            # 获取 LLM Provider
             provider = self.context.get_using_provider(umo=event.unified_msg_origin)
-            if not provider:
-                yield event.plain_result("❌ LLM 未配置，无法分析")
+            yuque_id, error = validate_gap_request(
+                storage=self.storage,
+                platform_id=platform_id,
+                provider=provider,
+            )
+            if error:
+                yield event.plain_result(error)
                 return
 
             yield event.plain_result("📊 正在分析你的学习缺口...")
-
-            # 执行分析
-            gap = await self.gap_analyzer.analyze(
+            result = await analyze_gap_command(
+                analyzer=self.gap_analyzer,
                 yuque_id=yuque_id,
-                target_domain=target_domain or None,
+                target_domain=target_domain,
                 provider=provider,
             )
-
-            yield event.plain_result(format_gap_report(gap))
+            yield event.plain_result(result)
 
         except Exception as e:
             logger.error(f"学习缺口分析失败: {e}", exc_info=True)
@@ -2321,29 +1424,22 @@ class NovaBotPlugin(Star):
         用法: /card <主题>
         例如: /card 爬虫
         """
-        if not topic:
-            yield event.plain_result("用法: /card <主题>\n例如: /card 爬虫")
-            return
-
         try:
             # 获取 LLM Provider
             provider = self.context.get_using_provider(umo=event.unified_msg_origin)
-            if not provider:
-                yield event.plain_result("❌ LLM 未配置，无法生成知识卡片")
-                return
-
-            if not self.rag:
-                yield event.plain_result("❌ RAG 引擎未初始化，请先执行 /sync")
+            error = validate_card_request(topic, provider, self.rag)
+            if error:
+                yield event.plain_result(error)
                 return
 
             yield event.plain_result(f"📚 正在生成「{topic}」知识卡片...")
-
-            from .novabot.knowledge_card import KnowledgeCardGenerator, format_knowledge_card
-
-            generator = KnowledgeCardGenerator(self.rag, self.token_monitor)
-            card = await generator.generate(topic, provider)
-
-            yield event.plain_result(format_knowledge_card(card))
+            result = await generate_card_command(
+                topic=topic,
+                provider=provider,
+                rag=self.rag,
+                token_monitor=self.token_monitor,
+            )
+            yield event.plain_result(result)
 
         except Exception as e:
             logger.error(f"知识卡片生成失败: {e}", exc_info=True)
@@ -2611,7 +1707,7 @@ class NovaBotPlugin(Star):
                             )
                             chain = MessageChain().message(notify_msg)
                             await self.context.send_message(umo, chain)
-                            logger.info(f"[AskBox] 已通知提问者")
+                            logger.info("[AskBox] 已通知提问者")
                         except Exception as e:
                             logger.error(f"[AskBox] 通知提问者失败: {e}")
 
@@ -2733,8 +1829,10 @@ class NovaBotPlugin(Star):
                     return
 
                 yield event.plain_result(f"🔍 正在生成「{kb_name}」新人导航...")
+                guide_info = self.kb_manager.get_kb_info(kb_name)
+                guide_team_id = str(guide_info.get("team_id") or "") if guide_info else ""
                 guide = await self.kb_manager.get_kb_guide(
-                    kb_name, self.context, event, self.token_monitor
+                    kb_name, self.context, event, self.token_monitor, team_id=guide_team_id or None
                 )
                 if not guide:
                     yield event.plain_result(f"❌ 未找到知识库「{kb_name}」")
@@ -2754,7 +1852,11 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /kb updates <知识库> [天数]")
                     return
 
-                result = self.kb_manager.format_kb_updates(kb_name, days)
+                update_info = self.kb_manager.get_kb_info(kb_name)
+                update_team_id = str(update_info.get("team_id") or "") if update_info else ""
+                result = self.kb_manager.format_kb_updates(
+                    kb_name, days, team_id=update_team_id or None
+                )
                 yield event.plain_result(result)
                 return
 
@@ -2802,10 +1904,11 @@ class NovaBotPlugin(Star):
 
             # 找到匹配的知识库，提取查询部分
             query = content[len(matched_name):].strip()
+            matched_team_id = str(matched_kb.get("team_id") or "default")
 
             if not query:
                 # 只有知识库名，显示概览
-                info = self.kb_manager.get_kb_info(matched_name)
+                info = self.kb_manager.get_kb_info(matched_name, team_id=matched_team_id)
                 if not info:
                     yield event.plain_result(f"❌ 未找到知识库「{matched_name}」")
                     return
@@ -2814,9 +1917,9 @@ class NovaBotPlugin(Star):
                 return
 
             # 有查询内容，执行范围检索
-            logger.info(f"[KB] 知识库: {matched_name}, 查询: {query}")
+            logger.info(f"[KB] 知识库: {matched_name}, team_id={matched_team_id}, 查询: {query}")
 
-            results = self.kb_manager.search_in_kb(matched_name, query, k=5)
+            results = self.kb_manager.search_in_kb(matched_name, query, k=5, team_id=matched_team_id)
             if not results:
                 yield event.plain_result(f"在「{matched_name}」中未找到相关内容")
                 return
@@ -2841,256 +1944,65 @@ class NovaBotPlugin(Star):
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
-        yield event.plain_result(
-            "🤖 NovaBot - NOVA 社团智能助手\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            "💬 自然语言交互\n"
-            "  直接说话即可，例如：\n"
-            "  \"帮我找爬虫教程\"\n"
-            "  \"我想学 Python\"\n"
-            "  \"社团有哪些作者\"\n"
-            "\n"
-            "📖 知识库\n"
-            "  /kb - 列出知识库\n"
-            "  /kb <知识库> - 查看概览\n"
-            "  /kb <知识库> <问题> - 范围检索\n"
-            "  /kb guide <知识库> - 新人导航\n"
-            "  /kb updates <知识库> [天数] - 更新感知\n"
-            "\n"
-            "📖 同步（管理员）\n"
-            "  /sync - 同步知识库\n"
-            "  /sync members - 同步成员\n"
-            "  /sync status - 同步状态\n"
-            "  /sync collab - 更新协作网络\n"
-            "  /rag search <关键词> - 语义搜索\n"
-            "  /webhook - Webhook 服务状态\n"
-            "\n"
-            "👤 账号\n"
-            "  /bind <用户名> - 绑定账号\n"
-            "  /unbind - 解除绑定\n"
-            "  /profile - 查看画像\n"
-            "  /profile refresh - 刷新画像\n"
-            "  /profile assess <领域> - 领域评估\n"
-            "  /persona - 人设偏好设置\n"
-            "\n"
-            "👥 伙伴与学习\n"
-            "  /partner - 学习伙伴推荐\n"
-            "  /partner <主题> - 按主题推荐\n"
-            "  /path <领域> - 学习路径推荐\n"
-            "  /card <主题> - 知识卡片\n"
-            "\n"
-            "🔔 订阅\n"
-            "  /subscribe - 查看订阅\n"
-            "  /subscribe repo <知识库> - 订阅知识库\n"
-            "  /subscribe author <作者> - 订阅作者\n"
-            "  /unsubscribe <ID> - 取消订阅\n"
-            "\n"
-            "📊 分析\n"
-            "  /weekly - 本周知识周报（管理员）\n"
-            "  /weekly raw - 导出按周原始统计 CSV（管理员）\n"
-            "  /gap - 知识缺口分析\n"
-            "  /tokens - Token 消耗统计\n"
-            "\n"
-            "💬 知识问答\n"
-            "  /ask <问题> - 提问（需绑定）\n"
-            "  /ask list - 查看问题列表\n"
-            "  /ask view <ID> - 查看详情\n"
-            "  /ask answer <ID> <回答> - 回答（需绑定）\n"
-            "  /ask like <问题ID> <回答ID> - 点赞\n"
-            "  /ask mine - 我的问题\n"
-            "  /ask delete <ID> - 删除我的问题\n"
-            "  /askreset - 重置提问箱（管理员）\n"
-            "\n"
-            "🧠 记忆\n"
-            "  /memory - 查看记忆概览\n"
-            "  /memory recent - 最近对话\n"
-            "  /memory search <关键词> - 搜索对话\n"
-            "  /memory clear - 清除记忆\n"
-            "\n"
-            "📈 学习进度\n"
-            "  /progress - 查看学习进度\n"
-            "  /progress <领域> - 查看指定领域\n"
-            "  /progress add <领域> <事件> - 添加里程碑\n"
-            "\n"
-            "❓ 问题档案\n"
-            "  /questions - 未解决的问题\n"
-            "  /questions all - 所有问题\n"
-            "  /questions frequent - 反复出现的问题\n"
-            "  /questions resolve <ID> - 标记已解决\n"
-            "\n"
-            "👣 成员轨迹\n"
-            "  /trajectory - 查看自己的活动轨迹\n"
-            "  /trajectory <成员名> - 查看指定成员轨迹\n"
-            "  /trajectory topic <主题> - 主题相关活动\n"
-            "\n"
-            "🤝 协作网络\n"
-            "  /collab - 查看自己的协作伙伴\n"
-            "  /collab <成员名> - 查看指定成员协作伙伴\n"
-            "  /collab find <主题> - 寻找协作伙伴\n"
-            "\n"
-            "  /novabot - 帮助"
-        )
+        yield event.plain_result(format_help_text())
 
     @filter.command("memory")
     async def memory_cmd(self, event: AstrMessageEvent, action: str = "", keyword: str = ""):
-        """记忆管理
-
-        用法:
-        - /memory - 查看记忆概览
-        - /memory recent - 最近对话
-        - /memory search <关键词> - 搜索对话
-        - /memory clear - 清除记忆
-        """
+        """记忆管理"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("请先绑定账号：/bind <用户名>")
+        memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
+        if error:
+            yield event.plain_result(error)
             return
 
-        yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
-
-        if not yuque_id:
-            yield event.plain_result("绑定信息异常，请重新绑定")
-            return
-
-        # 检查记忆管理器
         if not self.memory_manager:
             yield event.plain_result("长期记忆系统未初始化")
             return
 
-        user_id = str(yuque_id)
+        user_id = memory_user.user_id
+        yuque_name = memory_user.yuque_name
 
         try:
-            # 无参数：显示概览
             if not action:
-                stats = self.memory_manager.get_user_stats(user_id)
-                total_sessions = stats.get('total_sessions', 0)
-                total_messages = stats.get('total_messages', 0)
-                recent_7_days = stats.get('recent_7_days', 0)
-
-                lines = [
-                    f"🧠 {yuque_name} 的记忆概览",
-                    "━━━━━━━━━━━━━━━━━━━━",
-                    f"• 总会话数: {total_sessions}",
-                    f"• 总消息数: {total_messages}",
-                    f"• 近7天活跃: {recent_7_days} 次",
-                ]
-
-                # 如果有足够的会话，尝试用 LLM 分析兴趣模式
-                if total_sessions >= 3:
+                overview = build_memory_overview(self.memory_manager, user_id, yuque_name)
+                if overview.sessions_for_analysis:
                     provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                     if provider:
-                        sessions = self.memory_manager.get_recent_sessions(user_id, limit=5)
-                        if sessions:
-                            lines.append("\n🔍 正在分析对话模式...")
-                            yield event.plain_result("\n".join(lines))
-
-                            analysis = await self._analyze_memory_with_llm(
-                                provider=provider,
-                                user_name=yuque_name,
-                                sessions=sessions,
-                            )
-                            yield event.plain_result(analysis)
-                            return
-
-                lines.append("\n指令:")
-                lines.append("  /memory recent - 最近对话")
-                lines.append("  /memory search <关键词> - 搜索")
-                lines.append("  /memory clear - 清除记忆")
-                yield event.plain_result("\n".join(lines))
+                        yield event.plain_result(overview.text)
+                        analysis = await analyze_memory_with_llm(
+                            provider=provider,
+                            user_name=yuque_name,
+                            sessions=overview.sessions_for_analysis,
+                            token_monitor=self.token_monitor,
+                        )
+                        yield event.plain_result(analysis)
+                        return
+                yield event.plain_result(overview.text)
                 return
 
             action_lower = action.lower()
 
-            # 最近对话
             if action_lower == "recent":
                 sessions = self.memory_manager.get_recent_sessions(user_id, limit=10)
-                if not sessions:
-                    yield event.plain_result("暂无对话历史")
-                    return
-
-                lines = [f"📋 {yuque_name} 的最近对话", "━━━━━━━━━━━━━━━━━━━━"]
-                for session in sessions:
-                    from datetime import datetime
-                    started_at = session.get("started_at", "")
-                    if started_at:
-                        try:
-                            dt = datetime.fromisoformat(started_at)
-                            date_str = dt.strftime("%m-%d %H:%M")
-                        except ValueError:
-                            date_str = started_at[:10]
-                    else:
-                        date_str = "未知日期"
-
-                    summary = session.get("summary", "无摘要")
-                    sid = session.get("session_id", "")
-                    lines.append(f"• [{date_str}] {summary}")
-
-                lines.append(f"\n共 {len(sessions)} 条对话记录")
-                lines.append("💡 可以直接问我「上次我们聊了什么」")
-                yield event.plain_result("\n".join(lines))
+                yield event.plain_result(format_recent_memory(yuque_name, sessions))
                 return
 
-            # 搜索对话
             if action_lower == "search":
-                # 从消息中提取关键词（AstrBot 只传第一个参数）
-                msg = event.message_str.strip()
-                import re
-                match = re.search(r'memory\s+search\s+(.+)$', msg, re.IGNORECASE)
-                if match:
-                    search_keyword = match.group(1).strip()
-                else:
-                    search_keyword = keyword
-
+                search_keyword = extract_memory_search_keyword(event.message_str, keyword)
                 if not search_keyword:
                     yield event.plain_result("用法: /memory search <关键词>")
                     return
 
                 results = self.memory_manager.search_conversations(user_id, search_keyword, limit=10)
-                if not results:
-                    yield event.plain_result(f"未找到包含「{search_keyword}」的对话")
-                    return
-
-                lines = [f"🔍 搜索「{search_keyword}」的结果", "━━━━━━━━━━━━━━━━━━━━"]
-                for r in results:
-                    from datetime import datetime
-                    started_at = r.get("started_at", "")
-                    if started_at:
-                        try:
-                            dt = datetime.fromisoformat(started_at)
-                            date_str = dt.strftime("%m-%d %H:%M")
-                        except ValueError:
-                            date_str = started_at[:10]
-                    else:
-                        date_str = "未知日期"
-
-                    summary = r.get("summary", "")
-                    lines.append(f"• [{date_str}] {summary}")
-
-                lines.append(f"\n找到 {len(results)} 条相关对话")
-                yield event.plain_result("\n".join(lines))
+                yield event.plain_result(format_memory_search_results(search_keyword, results))
                 return
 
-            # 清除记忆
             if action_lower == "clear":
                 success = self.memory_manager.clear_user_memory(user_id)
-                if success:
-                    yield event.plain_result(f"✅ 已清除 {yuque_name} 的记忆")
-                else:
-                    yield event.plain_result("❌ 清除失败，请稍后重试")
+                yield event.plain_result(format_memory_clear_result(yuque_name, success))
                 return
 
-            # 未知操作
-            yield event.plain_result(
-                f"未知操作: {action}\n"
-                f"用法:\n"
-                f"  /memory - 概览\n"
-                f"  /memory recent - 最近对话\n"
-                f"  /memory search <关键词> - 搜索\n"
-                f"  /memory clear - 清除"
-            )
+            yield event.plain_result(format_unknown_memory_action(action))
 
         except Exception as e:
             logger.error(f"[Memory] 操作失败: {e}", exc_info=True)
@@ -3098,176 +2010,70 @@ class NovaBotPlugin(Star):
 
     @filter.command("progress")
     async def progress_cmd(self, event: AstrMessageEvent, args: str = ""):
-        """学习进度管理
-
-        用法:
-        - /progress - 查看所有领域进度
-        - /progress <领域> - 查看指定领域进度
-        - /progress add <领域> <事件> - 添加里程碑
-        - /progress level <领域> <等级> - 设置等级(beginner/intermediate/advanced)
-        """
+        """学习进度管理"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("请先绑定账号：/bind <用户名>")
+        memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
+        if error:
+            yield event.plain_result(error)
             return
 
-        yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
-
-        if not yuque_id:
-            yield event.plain_result("绑定信息异常，请重新绑定")
-            return
-
-        # 检查记忆管理器
         if not self.memory_manager:
             yield event.plain_result("长期记忆系统未初始化")
             return
 
-        user_id = str(yuque_id)
-
-        # 从消息中解析完整参数
-        msg = event.message_str.strip()
-        import re
-        progress_match = re.search(r'progress\s+(.+)$', msg, re.IGNORECASE)
-        if progress_match:
-            content = progress_match.group(1).strip()
-        else:
-            content = args.strip()
+        user_id = memory_user.user_id
+        yuque_name = memory_user.yuque_name
+        content = extract_progress_content(event.message_str, args)
 
         try:
-            # 无参数：显示所有领域进度
             if not content:
-                progress = self.memory_manager.get_learning_progress(user_id)
-
-                if not progress:
-                    yield event.plain_result(
-                        f"📊 {yuque_name} 的学习进度\n"
-                        f"━━━━━━━━━━━━━━━━━━━━\n"
-                        f"暂无学习记录\n\n"
-                        f"用法:\n"
-                        f"  /progress add <领域> <事件> - 添加里程碑\n"
-                        f"  /progress level <领域> <等级> - 设置等级"
-                    )
+                overview = build_progress_overview(self.memory_manager, user_id, yuque_name)
+                if not overview.progress_for_analysis:
+                    yield event.plain_result(overview.text)
                     return
-
-                level_map = {
-                    "beginner": "入门",
-                    "intermediate": "进阶",
-                    "advanced": "高级",
-                }
-
-                lines = [f"📊 {yuque_name} 的学习进度", "━━━━━━━━━━━━━━━━━━━━"]
-                for domain_name, data in progress.items():
-                    level = data.get("level", "beginner")
-                    milestones_count = len(data.get("milestones", []))
-                    last_active = data.get("last_active", "无")
-
-                    lines.append(
-                        f"• {domain_name}: {level_map.get(level, level)} "
-                        f"({milestones_count} 个里程碑)"
-                    )
-
-                # 尝试使用 LLM 分析学习趋势
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
-                if provider and len(progress) > 0:
-                    lines.append("\n🔍 正在分析学习趋势...")
-                    yield event.plain_result("\n".join(lines))
-
-                    analysis = await self._analyze_progress_with_llm(
+                if provider:
+                    yield event.plain_result(overview.text)
+                    analysis = await analyze_progress_with_llm(
                         provider=provider,
                         user_name=yuque_name,
-                        progress=progress,
+                        progress=overview.progress_for_analysis,
+                        token_monitor=self.token_monitor,
                     )
                     yield event.plain_result(analysis)
                 else:
-                    lines.append("\n使用 /progress <领域> 查看详情")
-                    yield event.plain_result("\n".join(lines))
+                    yield event.plain_result(
+                        format_progress_overview_without_analysis(
+                            yuque_name,
+                            overview.progress_for_analysis,
+                        )
+                    )
                 return
 
             parts = content.split(maxsplit=2)
             action = parts[0].lower() if parts else ""
 
-            # 添加里程碑
             if action == "add":
                 if len(parts) < 3:
-                    yield event.plain_result("用法: /progress add <领域> <事件>\n例如: /progress add 爬虫 完成基础教程")
+                    yield event.plain_result(progress_usage_for_add())
                     return
-
-                domain = parts[1]
-                event_desc = parts[2]
-
-                success = self.memory_manager.add_learning_milestone(
-                    user_id=user_id,
-                    domain=domain,
-                    event=event_desc,
+                yield event.plain_result(
+                    record_progress_milestone(self.memory_manager, user_id, parts[1], parts[2])
                 )
-
-                if success:
-                    yield event.plain_result(f"✅ 已记录里程碑：{domain} - {event_desc}")
-                else:
-                    yield event.plain_result("❌ 记录失败")
                 return
 
-            # 设置等级
             if action == "level":
                 if len(parts) < 3:
-                    yield event.plain_result(
-                        "用法: /progress level <领域> <等级>\n"
-                        "等级: beginner(入门) / intermediate(进阶) / advanced(高级)"
-                    )
+                    yield event.plain_result(progress_usage_for_level())
                     return
-
-                domain = parts[1]
-                level = parts[2].lower()
-
-                if level not in ("beginner", "intermediate", "advanced"):
-                    yield event.plain_result("等级必须是: beginner / intermediate / advanced")
-                    return
-
-                success = self.memory_manager.update_learning_level(user_id, domain, level)
-                if success:
-                    level_map = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
-                    yield event.plain_result(f"✅ 已设置「{domain}」等级为 {level_map.get(level, level)}")
-                else:
-                    yield event.plain_result("❌ 设置失败")
+                yield event.plain_result(
+                    set_progress_level(self.memory_manager, user_id, parts[1], parts[2].lower())
+                )
                 return
 
-            # 查看指定领域
             domain = content.strip()
             progress = self.memory_manager.get_learning_progress(user_id, domain)
-
-            level_map = {
-                "beginner": "入门",
-                "intermediate": "进阶",
-                "advanced": "高级",
-            }
-
-            milestones = progress.get("milestones", [])
-            level = progress.get("level", "beginner")
-            next_step = progress.get("next_step")
-
-            lines = [
-                f"📊 {yuque_name} 的「{domain}」学习进度",
-                "━━━━━━━━━━━━━━━━━━━━",
-                f"等级: {level_map.get(level, level)}",
-            ]
-
-            if milestones:
-                lines.append(f"\n里程碑 ({len(milestones)} 个):")
-                for m in milestones[-10:]:
-                    date = m.get("date", "")
-                    event_desc = m.get("event", "")
-                    lines.append(f"• {date} - {event_desc}")
-            else:
-                lines.append("\n暂无里程碑记录")
-
-            if next_step:
-                lines.append(f"\n下一步建议: {next_step}")
-
-            lines.append("\n用法: /progress add <领域> <事件>")
-            yield event.plain_result("\n".join(lines))
+            yield event.plain_result(format_domain_progress(yuque_name, domain, progress))
 
         except Exception as e:
             logger.error(f"[Progress] 操作失败: {e}", exc_info=True)
@@ -3275,199 +2081,55 @@ class NovaBotPlugin(Star):
 
     @filter.command("questions")
     async def questions_cmd(self, event: AstrMessageEvent, args: str = ""):
-        """问题档案管理
-
-        用法:
-        - /questions - 查看未解决的问题
-        - /questions all - 查看所有问题
-        - /questions resolve <ID> - 标记问题已解决
-        - /questions frequent - 查看反复出现的问题
-        """
+        """问题档案管理"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("请先绑定账号：/bind <用户名>")
+        memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
+        if error:
+            yield event.plain_result(error)
             return
 
-        yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
-
-        if not yuque_id:
-            yield event.plain_result("绑定信息异常，请重新绑定")
-            return
-
-        # 检查记忆管理器
         if not self.memory_manager:
             yield event.plain_result("长期记忆系统未初始化")
             return
 
-        user_id = str(yuque_id)
-
-        # 从消息中解析参数
-        msg = event.message_str.strip()
-        import re
-        questions_match = re.search(r'questions\s+(.+)$', msg, re.IGNORECASE)
-        if questions_match:
-            content = questions_match.group(1).strip()
-        else:
-            content = args.strip()
+        user_id = memory_user.user_id
+        yuque_name = memory_user.yuque_name
+        content = extract_questions_content(event.message_str, args)
 
         try:
-            # 无参数：显示未解决的问题
             if not content:
                 questions = self.memory_manager.get_unresolved_questions(user_id)
-
-                if not questions:
-                    yield event.plain_result(
-                        f"🎉 {yuque_name} 没有未解决的问题！\n\n"
-                        f"用法:\n"
-                        f"  /questions all - 查看所有问题\n"
-                        f"  /questions frequent - 反复出现的问题"
-                    )
-                    return
-
-                lines = [
-                    f"❓ {yuque_name} 的未解决问题 ({len(questions)} 个)",
-                    "━━━━━━━━━━━━━━━━━━━━",
-                ]
-
-                for q in questions:
-                    question_text = q.get("question", "")
-                    ask_count = q.get("ask_count", 1)
-                    qid = q.get("question_id", "")
-
-                    lines.append(f"• [{qid}] {question_text}")
-                    if ask_count > 1:
-                        lines.append(f"  (问过 {ask_count} 次)")
-
-                lines.append("\n使用 /questions resolve <ID> 标记已解决")
-                yield event.plain_result("\n".join(lines))
+                yield event.plain_result(format_unresolved_questions(yuque_name, questions))
                 return
 
             parts = content.split(maxsplit=1)
             action = parts[0].lower() if parts else ""
 
-            # 查看所有问题
             if action == "all":
                 questions = self.memory_manager.get_all_questions(user_id)
-
-                if not questions:
-                    yield event.plain_result(f"{yuque_name} 暂无问题记录")
-                    return
-
                 stats = self.memory_manager.get_question_stats(user_id)
-
-                lines = [
-                    f"📋 {yuque_name} 的问题档案",
-                    "━━━━━━━━━━━━━━━━━━━━",
-                    f"总计: {stats['total']} | 已解决: {stats['resolved']} | 未解决: {stats['unresolved']}",
-                    "",
-                ]
-
-                for q in questions[:20]:  # 最多显示 20 个
-                    question_text = q.get("question", "")
-                    ask_count = q.get("ask_count", 1)
-                    resolved = q.get("resolved", False)
-                    qid = q.get("question_id", "")
-
-                    status = "✅" if resolved else "❓"
-                    count_str = f" (×{ask_count})" if ask_count > 1 else ""
-                    lines.append(f"{status} [{qid}] {question_text}{count_str}")
-
-                if len(questions) > 20:
-                    lines.append(f"\n... 还有 {len(questions) - 20} 个问题")
-
-                yield event.plain_result("\n".join(lines))
+                yield event.plain_result(format_all_questions(yuque_name, questions, stats))
                 return
 
-            # 反复出现的问题
             if action == "frequent":
                 questions = self.memory_manager.get_frequent_questions(user_id, min_ask_count=2)
-
-                if not questions:
-                    yield event.plain_result(f"{yuque_name} 没有反复出现的问题")
-                    return
-
-                lines = [
-                    f"🔄 {yuque_name} 反复出现的问题 ({len(questions)} 个)",
-                    "━━━━━━━━━━━━━━━━━━━━",
-                ]
-
-                # 按问的次数排序
-                questions.sort(key=lambda q: q.get("ask_count", 1), reverse=True)
-
-                for q in questions:
-                    question_text = q.get("question", "")
-                    ask_count = q.get("ask_count", 1)
-                    resolved = q.get("resolved", False)
-                    qid = q.get("question_id", "")
-
-                    status = "✅" if resolved else "❓"
-                    lines.append(f"{status} [{qid}] {question_text} (问过 {ask_count} 次)")
-
-                # 智能建议
-                lines.append("")
-                lines.append("💡 建议：")
-                lines.append("• 这些反复出现的问题可能需要找导师帮忙")
-                lines.append("• 可以用 /partner 找相关领域的学习伙伴")
-                lines.append("• 或在群里 @相关成员 讨论")
-
-                # 尝试推荐相关文档
-                if self._get_doc_index() and questions:
-                    try:
-                        # 从问题中提取关键词
-                        import re
-                        all_keywords = set()
-                        for q in questions[:5]:
-                            kws = re.findall(r'[\u4e00-\u9fa5]+|[a-zA-Z]+', q.get("question", ""))
-                            all_keywords.update(k for k in kws if len(k) >= 2)
-
-                        if all_keywords:
-                            # 搜索相关文档
-                            docs = self._get_doc_index().search(
-                                title=" ".join(list(all_keywords)[:3]),
-                                limit=3
-                            )
-                            if docs:
-                                lines.append("\n📚 相关文档：")
-                                for doc in docs:
-                                    title = doc.get("title", "")
-                                    author = doc.get("author", "")
-                                    lines.append(f"• 《{title}》- {author}")
-                    except Exception:
-                        pass
-
-                yield event.plain_result("\n".join(lines))
+                related_docs = find_related_docs_for_questions(self._get_doc_index(), questions)
+                yield event.plain_result(format_frequent_questions(yuque_name, questions, related_docs))
                 return
 
-            # 标记问题已解决
             if action == "resolve":
                 if len(parts) < 2:
-                    yield event.plain_result("用法: /questions resolve <ID>\n例如: /questions resolve q_abc123")
+                    yield event.plain_result(questions_usage_for_resolve())
                     return
-
-                qid = parts[1].strip()
-                resolution = ""
-                if len(parts) > 2:
-                    resolution = parts[2]
-
+                qid, resolution = parse_resolve_args(parts[1])
+                if not qid:
+                    yield event.plain_result(questions_usage_for_resolve())
+                    return
                 success = self.memory_manager.resolve_question(user_id, qid, resolution)
-                if success:
-                    yield event.plain_result(f"✅ 问题 {qid} 已标记为已解决")
-                else:
-                    yield event.plain_result(f"❌ 未找到问题 {qid}")
+                yield event.plain_result(format_resolve_question_result(qid, success))
                 return
 
-            # 未知操作
-            yield event.plain_result(
-                f"未知操作: {action}\n"
-                f"用法:\n"
-                f"  /questions - 未解决的问题\n"
-                f"  /questions all - 所有问题\n"
-                f"  /questions frequent - 反复出现的问题\n"
-                f"  /questions resolve <ID> - 标记已解决"
-            )
+            yield event.plain_result(format_unknown_questions_action(action))
 
         except Exception as e:
             logger.error(f"[Questions] 操作失败: {e}", exc_info=True)
@@ -3479,156 +2141,77 @@ class NovaBotPlugin(Star):
 
     @filter.command("trajectory")
     async def trajectory_cmd(self, event: AstrMessageEvent, args: str = ""):
-        """成员轨迹查询
-
-        用法:
-        - /trajectory - 查看自己的活动轨迹
-        - /trajectory <成员名> - 查看指定成员的轨迹
-        - /trajectory topic <主题> - 查看某主题相关的活动
-        """
+        """成员轨迹查询"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("请先绑定账号：/bind <用户名>")
+        memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
+        if error:
+            yield event.plain_result(error)
             return
 
-        yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
-
-        if not yuque_id:
-            yield event.plain_result("绑定信息异常，请重新绑定")
-            return
-
-        # 检查轨迹管理器
         if not self.trajectory_manager:
             yield event.plain_result("成员轨迹系统未初始化")
             return
 
-        # 从消息中解析参数
-        msg = event.message_str.strip()
-        import re
-        trajectory_match = re.search(r'trajectory\s+(.+)$', msg, re.IGNORECASE)
-        if trajectory_match:
-            content = trajectory_match.group(1).strip()
-        else:
-            content = args.strip()
+        yuque_id = memory_user.user_id
+        yuque_name = memory_user.yuque_name
+        content = extract_trajectory_content(event.message_str, args)
 
         try:
-            # 主题搜索（使用 Agent 智能分析）
             if content.lower().startswith("topic "):
                 topic = content[6:].strip()
                 if not topic:
-                    yield event.plain_result("用法: /trajectory topic <主题>")
+                    yield event.plain_result(trajectory_usage_for_topic())
                     return
 
                 yield event.plain_result(f"🔍 正在搜索「{topic}」相关的成员活动...")
 
-                # 调用 Agent 智能分析（使用 GetMemberTrajectoryTool 工具）
                 try:
-                    from .novabot.llm_utils import sanitize_user_input
-                    safe_topic = sanitize_user_input(topic, max_length=100)
-                    agent_query = f"查看最近谁在做与「{safe_topic}」相关的事情"
-                    response = await self.agent.handle_message(event, agent_query)
+                    response = await self.agent.handle_message(
+                        event,
+                        build_trajectory_topic_query(topic),
+                    )
                     yield event.plain_result(response)
                 except Exception as e:
                     logger.error(f"[Trajectory] Agent 处理失败: {e}", exc_info=True)
-                    # 回退到基础输出
                     results = self.trajectory_manager.search_by_topic(topic, days=30)
-                    if not results:
-                        yield event.plain_result(f"最近 30 天没有成员在做「{topic}」相关的事情")
-                        return
-
-                    lines = [f"【与「{topic}」相关的成员活动】\n"]
-                    members = self.storage.load_members()
-                    for result in results[:5]:
-                        member_id = result.get("member_id", "")
-                        member_info = members.get(member_id) or members.get(int(member_id) if member_id.isdigit() else None)
-                        member_name = (member_info.get("name") or member_info.get("login") or member_id) if member_info else member_id
-                        match_count = result.get("match_count", 0)
-                        events = result.get("matching_events", [])[:3]
-                        stats = result.get("stats", {})
-
-                        lines.append(f"👤 {member_name}（{match_count} 次相关活动）")
-                        for evt in events:
-                            event_name = evt.get("event_name", "")
-                            title = evt.get("title", "")
-                            lines.append(f"   • {event_name}：{title[:25]}...")
-
-                        doc_count = stats.get("doc_count", 0)
-                        if doc_count:
-                            lines.append(f"   📄 共 {doc_count} 篇相关文档")
-
-                        lines.append("")
-
-                    lines.append("💡 提示：可以主动联系他们请教问题")
-                    yield event.plain_result("\n".join(lines))
+                    yield event.plain_result(
+                        format_topic_fallback(topic, results, self.storage.load_members())
+                    )
                 return
 
-            # 查看指定成员的轨迹
             if content:
-                # 尝试从成员缓存中查找
-                member_id = None
                 members = self.storage.load_members()
-                for uid, info in members.items():
-                    name = info.get("name", "")
-                    login = info.get("login", "")
-                    if content in [name, login, name.lower(), login.lower()]:
-                        member_id = str(uid)
-                        break
-
+                member_id = find_member_id_by_name(members, content)
                 if not member_id:
                     yield event.plain_result(f"未找到成员「{content}」")
                     return
-
                 trajectory = self.trajectory_manager.get_trajectory(member_id, days=30)
                 target_name = content
             else:
-                # 查看自己的轨迹
-                user_id = str(yuque_id)
-                trajectory = self.trajectory_manager.get_trajectory(user_id, days=30)
+                trajectory = self.trajectory_manager.get_trajectory(yuque_id, days=30)
                 target_name = yuque_name
+                member_id = yuque_id
 
             if not trajectory:
                 yield event.plain_result(f"「{target_name}」最近 30 天暂无活动记录")
                 return
 
-            lines = [f"【{target_name} 最近活动】"]
-            for evt in trajectory[:10]:
-                timestamp = evt.get("timestamp", "")
-                if timestamp:
-                    try:
-                        dt = datetime.fromisoformat(timestamp)
-                        date_str = dt.strftime("%m-%d")
-                    except ValueError:
-                        date_str = timestamp[:10]
-                else:
-                    date_str = "未知"
-
-                event_name = evt.get("event_name", "活动")
-                title = evt.get("title", "")
-                lines.append(f"• {date_str} - {event_name}：{title[:30]}")
-
-            if len(trajectory) > 10:
-                lines.append(f"\n... 还有 {len(trajectory) - 10} 条记录")
-
-            # 如果是查看自己的轨迹，尝试用 LLM 分析活动模式
-            is_self = not content or str(yuque_id) == member_id
-            if is_self and len(trajectory) >= 3:
+            response = format_member_trajectory(target_name, trajectory)
+            is_self = not content or yuque_id == member_id
+            if should_analyze_trajectory(is_self, trajectory):
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if provider:
-                    lines.append("\n🔍 正在分析活动模式...")
-                    yield event.plain_result("\n".join(lines))
-
-                    analysis = await self._analyze_trajectory_with_llm(
+                    yield event.plain_result(response + "\n🔍 正在分析活动模式...")
+                    analysis = await analyze_trajectory_with_llm(
                         provider=provider,
                         user_name=target_name,
                         trajectory=trajectory,
+                        token_monitor=self.token_monitor,
                     )
                     yield event.plain_result(analysis)
                     return
 
-            yield event.plain_result("\n".join(lines))
+            yield event.plain_result(response)
 
         except Exception as e:
             logger.error(f"[Trajectory] 查询失败: {e}", exc_info=True)
@@ -3640,127 +2223,80 @@ class NovaBotPlugin(Star):
 
     @filter.command("collab")
     async def collab_cmd(self, event: AstrMessageEvent, args: str = ""):
-        """协作网络查询
-
-        用法:
-        - /collab - 查看自己的协作伙伴
-        - /collab <成员名> - 查看指定成员的协作伙伴
-        - /collab find <主题> - 寻找某主题的协作伙伴
-        """
+        """协作网络查询"""
         platform_id = event.get_sender_id()
-        binding = self.storage.get_binding(platform_id)
-
-        if not binding:
-            yield event.plain_result("请先绑定账号：/bind <用户名>")
+        memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
+        if error:
+            yield event.plain_result(error)
             return
 
-        yuque_id = binding.get("yuque_id")
-        yuque_name = binding.get("yuque_name", "未知")
-
-        if not yuque_id:
-            yield event.plain_result("绑定信息异常，请重新绑定")
-            return
-
-        # 检查协作网络管理器
         if not self.collaboration_manager:
             yield event.plain_result("协作网络系统未初始化")
             return
 
-        # 从消息中解析参数
-        msg = event.message_str.strip()
-        import re
-        collab_match = re.search(r'collab\s+(.+)$', msg, re.IGNORECASE)
-        if collab_match:
-            content = collab_match.group(1).strip()
-        else:
-            content = args.strip()
+        yuque_id = memory_user.user_id
+        yuque_name = memory_user.yuque_name
+        content = extract_collab_content(event.message_str, args)
 
         try:
-            # 寻找协作伙伴（使用 Agent 智能推荐）
             if content.lower().startswith("find "):
                 topic = content[5:].strip()
                 if not topic:
-                    yield event.plain_result("用法: /collab find <主题>")
+                    yield event.plain_result(collab_usage_for_find())
                     return
 
                 yield event.plain_result(f"🔍 正在寻找「{topic}」领域的协作伙伴...")
 
-                # 调用 Agent 智能推荐（使用 SmartCollaborationTool 工具）
-                # Agent 会自动调用工具获取数据并分析，给出个性化推荐
                 try:
-                    # 构建请求，让 Agent 理解用户需求
-                    from .novabot.llm_utils import sanitize_user_input
-                    safe_topic = sanitize_user_input(topic, max_length=100)
-                    agent_query = f"我想找一个在「{safe_topic}」领域有经验的协作伙伴，能帮我一起做项目或请教问题"
-                    response = await self.agent.handle_message(event, agent_query)
+                    response = await self.agent.handle_message(
+                        event,
+                        build_collab_find_query(topic),
+                    )
                     yield event.plain_result(response)
                 except Exception as e:
                     logger.error(f"[Collab] Agent 处理失败: {e}", exc_info=True)
-                    # 回退到基础规则匹配输出
-                    user_id = str(yuque_id)
                     potential = self.collaboration_manager.find_potential_collaborators(
-                        user_id,
+                        yuque_id,
                         topic=topic,
                         exclude_existing=True,
                         trajectory_manager=self.trajectory_manager,
                         doc_index=self._get_doc_index(),
                     )
                     if potential:
-                        yield event.plain_result(self._format_collab_result(topic, potential))
+                        yield event.plain_result(
+                            format_potential_collaborators(
+                                topic,
+                                potential,
+                                members=self.storage.load_members(),
+                                doc_index=self._get_doc_index(),
+                            )
+                        )
                     else:
                         yield event.plain_result(f"暂无「{topic}」领域的潜在协作伙伴推荐")
                 return
 
-            # 查看指定成员的协作伙伴
             if content:
-                member_id = None
                 members = self.storage.load_members()
-                for uid, info in members.items():
-                    name = info.get("name", "")
-                    login = info.get("login", "")
-                    if content in [name, login, name.lower(), login.lower()]:
-                        member_id = str(uid)
-                        break
-
+                member_id = find_member_id_by_name(members, content)
                 if not member_id:
                     yield event.plain_result(f"未找到成员「{content}」")
                     return
-
                 collaborators = self.collaboration_manager.get_collaborators(member_id)
                 target_name = content
             else:
-                # 查看自己的协作伙伴
-                user_id = str(yuque_id)
-                collaborators = self.collaboration_manager.get_collaborators(user_id)
+                member_id = yuque_id
+                collaborators = self.collaboration_manager.get_collaborators(yuque_id)
                 target_name = yuque_name
 
-            if not collaborators:
-                yield event.plain_result(f"「{target_name}」暂无协作记录")
-                return
-
-            lines = [f"【{target_name} 的协作伙伴】"]
-            members = self.storage.load_members()
-            for collab in collaborators[:10]:
-                partner_id = collab.get("member_id", "")
-                # 解析成员姓名
-                member_info = members.get(partner_id) or members.get(int(partner_id) if partner_id.isdigit() else None)
-                partner_name = (member_info.get("name") or member_info.get("login") or partner_id) if member_info else partner_id
-                strength = collab.get("strength", 0)
-                source_name = collab.get("source_name", "")
-                context = collab.get("context", "")
-
-                line = f"• {partner_name}（强度 {strength:.0%}，{source_name}"
-                if context:
-                    line += f"：{context}"
-                line += "）"
-                lines.append(line)
-
-            stats = self.collaboration_manager.get_member_stats(
-                member_id if content else str(yuque_id)
+            stats = self.collaboration_manager.get_member_stats(member_id)
+            yield event.plain_result(
+                format_collaborators(
+                    target_name,
+                    collaborators,
+                    stats=stats,
+                    members=self.storage.load_members(),
+                )
             )
-            lines.append(f"\n统计：{stats.get('collaborator_count', 0)} 位协作伙伴")
-
-            yield event.plain_result("\n".join(lines))
 
         except Exception as e:
             logger.error(f"[Collab] 查询失败: {e}", exc_info=True)

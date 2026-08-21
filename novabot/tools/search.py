@@ -2,10 +2,8 @@
 搜索相关工具：语义搜索、关键词搜索、文档读取、知识卡片
 """
 
-import json
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from astrbot.api import logger
@@ -15,6 +13,12 @@ from ..doc_utils import (
     doc_record_to_public_dict,
     parse_yuque_doc_url,
     read_document_content,
+)
+from ..evidence import (
+    evidence_from_document_content,
+    format_citations,
+    format_evidence_block,
+    select_grounding_evidence,
 )
 from .base import BaseTool
 
@@ -85,6 +89,7 @@ class ParseYuqueUrlTool(BaseTool):
             meta_lines = [
                 f"📄 《{pub['title']}》",
                 f"链接：{pub.get('url') or url}",
+                f"团队：{pub.get('team_name') or matched_row.get('team_name') or '未知'} ({pub.get('team_id') or matched_row.get('team_id') or 'default'})",
                 f"作者：{pub.get('author') or '未知'}",
                 f"知识库：{pub.get('book_name') or ''}",
                 f"创建：{pub.get('created_at') or '未知'}",
@@ -96,7 +101,14 @@ class ParseYuqueUrlTool(BaseTool):
                     f"正文：已返回 {content_info['returned_chars']}/{content_info['total_chars']} 字，"
                     f"继续阅读请调用 get_doc_details(path=\"{file_path}\", include_content=true, content_offset={content_info['next_offset']})"
                 )
-            meta_lines.extend(["", body])
+            evidence = [
+                evidence_from_document_content(
+                    {**matched_row, "url": pub.get("url") or url},
+                    body,
+                    evidence_id="E1",
+                )
+            ]
+            meta_lines.extend(["", format_evidence_block(evidence), "", format_citations(evidence), "", body])
             return "\n".join(meta_lines)
 
         except Exception as e:
@@ -121,29 +133,93 @@ class SearchKnowledgeBaseTool(BaseTool):
                 "type": "integer",
                 "description": "返回结果数量，默认 5",
                 "default": 5
+            },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID 过滤（可选）。不确定时留空。"
+            },
+            "repository": {
+                "type": "string",
+                "description": "知识库名称或 namespace 过滤（可选）"
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "目录路径过滤（可选），例如 指南/入门"
+            },
+            "author": {
+                "type": "string",
+                "description": "作者过滤（可选）"
+            },
+            "updated_after": {
+                "type": "string",
+                "description": "更新时间下限（可选，ISO 日期或 YYYY-MM-DD）"
+            },
+            "updated_before": {
+                "type": "string",
+                "description": "更新时间上限（可选，ISO 日期或 YYYY-MM-DD）"
             }
         },
         "required": ["query"]
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, query: str, top_k: int = 5) -> str:
-        if not self.plugin or not self.plugin.rag:
-            return "知识库未初始化，请检查 embedding 配置"
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        query: str,
+        top_k: int = 5,
+        team_id: str = "",
+        repository: str = "",
+        path_prefix: str = "",
+        author: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+    ) -> str:
+        if not self.plugin:
+            return "知识库未初始化"
 
         try:
-            results = self.plugin.rag.search(query, k=top_k)
+            scope = {
+                "team_id": team_id,
+                "repository": repository,
+                "path_prefix": path_prefix,
+                "author": author,
+                "updated_after": updated_after,
+                "updated_before": updated_before,
+            }
+            scoped = any(v for v in scope.values())
+            core = getattr(self.plugin, "knowledge_core", None)
+            chunk_store = getattr(self.plugin, "chunk_store", None)
+            if core and chunk_store and chunk_store.chunk_count() > 0:
+                results = await core.search(query, top_k=top_k, scope=scope)
+                if results or scoped:
+                    return self._format_core_results(query, results, scoped)
+
+            if not getattr(self.plugin, "rag", None):
+                return "知识库未初始化，请先执行 /sync 同步；如需语义检索，请检查 embedding 配置"
+
+            legacy_k = top_k * 5 if scoped else top_k
+            results = self.plugin.rag.search(
+                query,
+                k=legacy_k,
+                book_filter=repository or None,
+            )
+            if scoped:
+                results = self._filter_legacy_rag_results(results, scope)[:top_k]
             if not results:
-                return f"【搜索结果】知识库中未找到与「{query}」相关的内容。请尝试其他关键词，或告知用户知识库中暂无相关信息。"
+                scope_hint = "（指定范围内）" if scoped else ""
+                return f"【搜索结果】{scope_hint}知识库中未找到与「{query}」相关的内容。请尝试其他关键词，或告知用户知识库中暂无相关信息。"
 
             output = [f"🔍 语义搜索结果（共 {len(results)} 条）：\n"]
-            output.append("⚠️ 注意：以下内容来自知识库搜索，请根据实际相关性判断是否使用，不要编造不存在的文档。\n")
+            output.append("⚠️ 注意：以下内容来自旧 RAG 文档级搜索，请根据实际相关性判断是否使用，不要编造不存在的文档。\n")
             for i, r in enumerate(results, 1):
                 title = r.get("title", "未知")
                 author = r.get("author", "")
                 book = r.get("book_name", "")
                 content = r.get("content", "")[:500]  # 增加到 500 字符
                 output.append(f"【{i}】{title}" + (f" (by {author})" if author else ""))
+                if r.get("team_name") or r.get("team_id"):
+                    output.append(f"    团队: {r.get('team_name') or r.get('team_id')} ({r.get('team_id') or 'unknown'})")
                 if book:
                     output.append(f"    📚 知识库: {book}")
                 output.append(f"    内容片段: {content}...")
@@ -153,6 +229,84 @@ class SearchKnowledgeBaseTool(BaseTool):
             return "\n".join(output)
         except Exception as e:
             return f"搜索失败: {e}"
+
+    def _format_core_results(self, query: str, results: list, scoped: bool) -> str:
+        if not results:
+            scope_hint = "（指定范围内）" if scoped else ""
+            return f"【知识检索】{scope_hint}未找到与「{query}」相关的可靠片段。请尝试放宽团队/知识库/路径/作者/时间范围。"
+
+        evidence = select_grounding_evidence(results, max_evidence=5)
+        output = [format_evidence_block(evidence), "", format_citations(evidence), ""]
+        output.append(f"🔍 候选检索结果（chunk，{len(results)} 条）：\n")
+        output.append("⚠️ 知识事实回答只能使用上方 Grounding Evidence；候选结果仅用于判断是否需要继续检索或阅读原文。\n")
+        for i, item in enumerate(results, 1):
+            chunk = item.chunk
+            methods = ",".join(item.methods) or "unknown"
+            output.append(f"【{i}】{chunk.title or '未知'}")
+            output.append(
+                f"    reliable={str(item.reliable).lower()} score={item.score:.3f} methods={methods}"
+            )
+            if chunk.team_name or chunk.team_id:
+                output.append(f"    团队: {chunk.team_name} ({chunk.team_id})")
+            if chunk.repository:
+                output.append(f"    知识库: {chunk.repository}")
+            if chunk.author:
+                output.append(f"    作者: {chunk.author}")
+            if chunk.file_path:
+                output.append(f"    路径: {chunk.file_path}")
+            if chunk.source_url:
+                output.append(f"    链接: {chunk.source_url}")
+            output.append(f"    内容片段: {chunk.content[:700]}...")
+            output.append("")
+        output.append("💡 如果 Grounding Evidence 为空，请说明知识库中暂未找到可靠内容，不要编造。")
+        return "\n".join(output)
+
+    def _filter_legacy_rag_results(self, results: list[dict], scope: dict) -> list[dict]:
+        filtered = []
+        for result in results:
+            if not self._legacy_rag_result_matches_scope(result, scope):
+                continue
+            filtered.append(result)
+        return filtered
+
+    @staticmethod
+    def _legacy_rag_result_matches_scope(result: dict, scope: dict) -> bool:
+        team_id = str(scope.get("team_id") or "").strip()
+        if team_id and str(result.get("team_id") or "default") != team_id:
+            return False
+
+        repository = str(scope.get("repository") or "").strip().casefold()
+        if repository:
+            repo_text = " ".join(
+                str(result.get(key) or "") for key in ("book_name", "source")
+            ).casefold()
+            if repository not in repo_text:
+                return False
+
+        author = str(scope.get("author") or "").strip().casefold()
+        if author and author not in str(result.get("author") or "").casefold():
+            return False
+
+        path_prefix = str(scope.get("path_prefix") or "").strip().casefold()
+        if path_prefix:
+            path_text = " ".join(
+                str(result.get(key) or "") for key in ("file_path", "source")
+            ).casefold()
+            if path_prefix not in path_text:
+                return False
+
+        if scope.get("updated_after") or scope.get("updated_before"):
+            # Legacy RAG documents historically do not carry updated_at. Avoid leaking
+            # out-of-scope facts when a time filter cannot be proven.
+            updated_at = str(result.get("updated_at") or "").strip()
+            if not updated_at:
+                return False
+            if scope.get("updated_after") and updated_at < str(scope["updated_after"]):
+                return False
+            if scope.get("updated_before") and updated_at > str(scope["updated_before"]):
+                return False
+
+        return True
 
 
 @dataclass
@@ -172,6 +326,26 @@ class GrepLocalDocsTool(BaseTool):
                 "type": "string",
                 "description": "知识库名称过滤（可选），只搜索该知识库"
             },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID 过滤（可选）"
+            },
+            "path_prefix": {
+                "type": "string",
+                "description": "路径前缀/片段过滤（可选）"
+            },
+            "author": {
+                "type": "string",
+                "description": "作者过滤（可选）"
+            },
+            "updated_after": {
+                "type": "string",
+                "description": "更新时间下界（可选）"
+            },
+            "updated_before": {
+                "type": "string",
+                "description": "更新时间上界（可选）"
+            },
             "max_results": {
                 "type": "integer",
                 "description": "最大返回结果数，默认 10",
@@ -182,7 +356,18 @@ class GrepLocalDocsTool(BaseTool):
     })
     plugin: Any = None
 
-    async def run(self, event: AstrMessageEvent, keyword: str, repo_filter: str = "", max_results: int = 10) -> str:
+    async def run(
+        self,
+        event: AstrMessageEvent,
+        keyword: str,
+        repo_filter: str = "",
+        max_results: int = 10,
+        team_id: str = "",
+        path_prefix: str = "",
+        author: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+    ) -> str:
         docs_dir = self.get_docs_dir()
         if not docs_dir.exists():
             return "文档目录不存在，请先执行 /sync 同步"
@@ -191,8 +376,21 @@ class GrepLocalDocsTool(BaseTool):
         pattern = re.compile(re.escape(keyword), re.IGNORECASE)
 
         # 确定搜索范围
+        allowed_paths = self._scoped_grep_paths(
+            team_id=team_id,
+            repo_filter=repo_filter,
+            path_prefix=path_prefix,
+            author=author,
+            updated_after=updated_after,
+            updated_before=updated_before,
+        )
+        if allowed_paths is not None and not allowed_paths:
+            return f"【关键词搜索】指定范围内没有可搜索文档（筛选: {self._grep_filter_summary(team_id, repo_filter, path_prefix, author, updated_after, updated_before)}）"
+
         search_dirs = []
-        if repo_filter:
+        if allowed_paths is not None:
+            search_dirs = [docs_dir]
+        elif repo_filter:
             for d in docs_dir.iterdir():
                 if d.is_dir() and repo_filter.lower() in d.name.lower():
                     search_dirs.append(d)
@@ -204,6 +402,9 @@ class GrepLocalDocsTool(BaseTool):
         for search_dir in search_dirs:
             for md_file in search_dir.rglob("*.md"):
                 try:
+                    rel_posix = str(md_file.relative_to(docs_dir)).replace("\\", "/")
+                    if allowed_paths is not None and rel_posix not in allowed_paths:
+                        continue
                     content = md_file.read_text(encoding="utf-8")
                     matches = list(pattern.finditer(content))
                     if matches:
@@ -230,7 +431,7 @@ class GrepLocalDocsTool(BaseTool):
                         results.append({
                             "title": title,
                             "repo": repo_name,
-                            "path": str(rel_path),
+                            "path": str(rel_path).replace("\\", "/"),
                             "count": len(matches),
                             "contexts": contexts
                         })
@@ -238,7 +439,9 @@ class GrepLocalDocsTool(BaseTool):
                     continue
 
         if not results:
-            filter_hint = f"（在「{repo_filter}」中）" if repo_filter else ""
+            filter_hint = f"（筛选: {self._grep_filter_summary(team_id, repo_filter, path_prefix, author, updated_after, updated_before)}）" if any(
+                (team_id, repo_filter, path_prefix, author, updated_after, updated_before)
+            ) else ""
             return f"【关键词搜索】未找到包含「{keyword}」的文档{filter_hint}。请告知用户知识库中暂无相关内容，不要编造答案。"
 
         # 按匹配数排序
@@ -255,6 +458,59 @@ class GrepLocalDocsTool(BaseTool):
 
         output.append("💡 提示: 使用 read_doc(path) 读取完整文档内容。回答时请基于实际搜索结果，不要编造不存在的文档。")
         return "\n".join(output)
+
+    def _scoped_grep_paths(
+        self,
+        *,
+        team_id: str = "",
+        repo_filter: str = "",
+        path_prefix: str = "",
+        author: str = "",
+        updated_after: str = "",
+        updated_before: str = "",
+    ) -> set[str] | None:
+        has_strict_scope = any((team_id, path_prefix, author, updated_after, updated_before))
+        if not has_strict_scope and not repo_filter:
+            return None
+        doc_index = self.get_doc_index()
+        if not doc_index:
+            return set() if has_strict_scope else None
+        rows = doc_index.search(
+            team_id=team_id or None,
+            book=repo_filter or None,
+            path_prefix=path_prefix or None,
+            author=author or None,
+            updated_after=updated_after or None,
+            updated_before=updated_before or None,
+            limit=10000,
+        )
+        return {
+            str(row.get("file_path") or "").replace("\\", "/")
+            for row in rows
+            if row.get("file_path")
+        }
+
+    @staticmethod
+    def _grep_filter_summary(
+        team_id: str,
+        repo_filter: str,
+        path_prefix: str,
+        author: str,
+        updated_after: str,
+        updated_before: str,
+    ) -> str:
+        parts = []
+        for label, value in (
+            ("team_id", team_id),
+            ("知识库", repo_filter),
+            ("路径", path_prefix),
+            ("作者", author),
+            ("更新晚于", updated_after),
+            ("更新早于", updated_before),
+        ):
+            if value:
+                parts.append(f"{label}={value}")
+        return ", ".join(parts) if parts else "无"
 
 
 @dataclass
@@ -316,6 +572,18 @@ class ReadDocTool(BaseTool):
                 info = read_document_content(
                     doc_file, offset=offset, limit=safe_limit, strip_metadata=True
                 )
+                doc_row = self._find_doc_row(path)
+                evidence_doc = doc_row or {
+                    "title": doc_file.stem,
+                    "file_path": path,
+                }
+                evidence = [
+                    evidence_from_document_content(
+                        evidence_doc,
+                        info["content"],
+                        evidence_type="read_doc",
+                    )
+                ]
                 header = [f"📄 文档: {path}"]
                 if info.get("has_more"):
                     header.append(
@@ -324,8 +592,10 @@ class ReadDocTool(BaseTool):
                     )
                 elif info["total_chars"] > 0:
                     header.append(f"（全文共 {info['total_chars']} 字）")
-                header.append("")
-                return "\n".join(header) + info["content"]
+                header.extend(
+                    ["", format_evidence_block(evidence), "", info["content"], "", format_citations(evidence)]
+                )
+                return "\n".join(header)
 
             raw = doc_file.read_text(encoding="utf-8")
             total = len(raw)
@@ -338,6 +608,16 @@ class ReadDocTool(BaseTool):
             return "\n".join(lines)
         except Exception as e:
             return f"读取失败: {e}"
+
+    def _find_doc_row(self, path: str) -> dict | None:
+        doc_index = self.get_doc_index()
+        if not doc_index:
+            return None
+        try:
+            return doc_index.find_doc_by_file_path(path)
+        except Exception as e:
+            logger.warning(f"[read_doc] 查询文档元数据失败: {e}")
+            return None
 
 
 @dataclass

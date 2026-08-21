@@ -213,7 +213,7 @@ class TokenMonitor:
         """
         lines = []
         lines.append("📊 Token 消耗统计")
-        lines.append(f"📅 统计周期：最近 30 天")
+        lines.append("📅 统计周期：最近 30 天")
         lines.append("")
 
         if stats["call_count"] == 0:

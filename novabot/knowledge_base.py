@@ -41,7 +41,16 @@ class KnowledgeBaseManager:
         """
         return self.doc_index.list_books()
 
-    def get_kb_info(self, book_name: str) -> Optional[dict]:
+    def _match_book(self, book_name: str, team_id: str | None = None) -> Optional[dict]:
+        books = self.doc_index.list_books()
+        for book in books:
+            if team_id and str(book.get("team_id") or "default") != team_id:
+                continue
+            if book_name.lower() in book.get("book_name", "").lower():
+                return book
+        return None
+
+    def get_kb_info(self, book_name: str, team_id: str | None = None) -> Optional[dict]:
         """获取单个知识库概览
 
         Args:
@@ -57,24 +66,19 @@ class KnowledgeBaseManager:
                 latest_update: str,
             }
         """
-        # 模糊匹配知识库名
-        books = self.doc_index.list_books()
-        matched = None
-        for b in books:
-            if book_name.lower() in b.get("book_name", "").lower():
-                matched = b
-                break
+        matched = self._match_book(book_name, team_id=team_id)
 
         if not matched:
             return None
 
         book_name_actual = matched["book_name"]
+        matched_team_id = matched.get("team_id") or "default"
 
         # 获取贡献者
-        contributors = self.get_kb_contributors(book_name_actual)
+        contributors = self.get_kb_contributors(book_name_actual, team_id=matched_team_id)
 
         # 获取最近更新
-        recent_updates = self.get_kb_recent_updates(book_name_actual, limit=5)
+        recent_updates = self.get_kb_recent_updates(book_name_actual, limit=5, team_id=matched_team_id)
 
         # 最新更新时间
         latest_update = ""
@@ -83,6 +87,8 @@ class KnowledgeBaseManager:
 
         return {
             "book_name": book_name_actual,
+            "team_id": matched_team_id,
+            "team_name": matched.get("team_name", ""),
             "doc_count": matched.get("doc_count", 0),
             "total_words": matched.get("total_words", 0),
             "contributors": contributors,
@@ -90,7 +96,12 @@ class KnowledgeBaseManager:
             "latest_update": latest_update,
         }
 
-    def get_kb_contributors(self, book_name: str, limit: int = 10) -> list[dict]:
+    def get_kb_contributors(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: str | None = None,
+    ) -> list[dict]:
         """获取知识库贡献者
 
         Args:
@@ -100,9 +111,14 @@ class KnowledgeBaseManager:
         Returns:
             [{author, doc_count, total_words}, ...]
         """
-        return self.doc_index.get_kb_contributors(book_name, limit)
+        return self.doc_index.get_kb_contributors(book_name, limit, team_id=team_id)
 
-    def get_kb_recent_updates(self, book_name: str, limit: int = 10) -> list[dict]:
+    def get_kb_recent_updates(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: str | None = None,
+    ) -> list[dict]:
         """获取知识库最近更新
 
         Args:
@@ -112,9 +128,9 @@ class KnowledgeBaseManager:
         Returns:
             [{title, author, updated_at}, ...]
         """
-        return self.doc_index.get_kb_recent_updates(book_name, limit)
+        return self.doc_index.get_kb_recent_updates(book_name, limit, team_id=team_id)
 
-    def get_kb_structure(self, book_name: str) -> Optional[dict]:
+    def get_kb_structure(self, book_name: str, team_id: str | None = None) -> Optional[dict]:
         """获取知识库目录结构
 
         Args:
@@ -126,18 +142,13 @@ class KnowledgeBaseManager:
                 toc_tree: [{type, title, depth, children: [...]}],  # 树状结构
             }
         """
-        # 模糊匹配知识库名
-        books = self.doc_index.list_books()
-        matched = None
-        for b in books:
-            if book_name.lower() in b.get("book_name", "").lower():
-                matched = b
-                break
+        matched = self._match_book(book_name, team_id=team_id)
 
         if not matched:
             return None
 
         book_name_actual = matched["book_name"]
+        matched_team_id = matched.get("team_id") or "default"
 
         try:
             # 尝试从 .toc.json 读取 TOC 结构
@@ -145,7 +156,10 @@ class KnowledgeBaseManager:
             if self.docs_dir:
                 from .yuque_client import YuqueClient
                 dir_name = YuqueClient.slug_safe(book_name_actual)
-                toc_file = self.docs_dir / dir_name / ".toc.json"
+                if matched_team_id == "default":
+                    toc_file = self.docs_dir / dir_name / ".toc.json"
+                else:
+                    toc_file = self.docs_dir / matched_team_id / dir_name / ".toc.json"
 
                 if toc_file.exists():
                     toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
@@ -158,6 +172,8 @@ class KnowledgeBaseManager:
 
             return {
                 "book_name": book_name_actual,
+                "team_id": matched_team_id,
+                "team_name": matched.get("team_name", ""),
                 "toc_tree": toc_tree,
             }
 
@@ -197,7 +213,13 @@ class KnowledgeBaseManager:
 
         return tree
 
-    def search_in_kb(self, book_name: str, query: str, k: int = 5) -> list[dict]:
+    def search_in_kb(
+        self,
+        book_name: str,
+        query: str,
+        k: int = 5,
+        team_id: str | None = None,
+    ) -> list[dict]:
         """在指定知识库范围内检索
 
         Args:
@@ -211,9 +233,12 @@ class KnowledgeBaseManager:
         if not self.rag:
             return []
 
-        return self.rag.search(query, k=k, book_filter=book_name)
+        matched = self._match_book(book_name, team_id=team_id)
+        if not matched:
+            return []
+        return self.rag.search(query, k=k, book_filter=matched.get("book_name") or book_name)
 
-    def get_doc_content(self, book_name: str, title: str) -> Optional[dict]:
+    def get_doc_content(self, book_name: str, title: str, team_id: str | None = None) -> Optional[dict]:
         """获取文档完整内容
 
         Args:
@@ -229,19 +254,15 @@ class KnowledgeBaseManager:
 
         try:
 
-            # 模糊匹配知识库
-            books = self.doc_index.list_books()
-            matched_book = None
-            for b in books:
-                if book_name.lower() in b.get("book_name", "").lower():
-                    matched_book = b.get("book_name")
-                    break
+            matched = self._match_book(book_name, team_id=team_id)
 
-            if not matched_book:
+            if not matched:
                 return None
+            matched_book = matched.get("book_name", "")
+            matched_team_id = matched.get("team_id") or "default"
 
             # 模糊匹配标题
-            row = self.doc_index.find_doc_for_book_by_title(matched_book, title)
+            row = self.doc_index.find_doc_for_book_by_title(matched_book, title, team_id=matched_team_id)
             if not row:
                 return None
             file_path = row.get("file_path")
@@ -281,6 +302,8 @@ class KnowledgeBaseManager:
             return {
                 "title": row.get("title"),
                 "author": row.get("author"),
+                "team_id": row.get("team_id") or matched_team_id,
+                "team_name": row.get("team_name") or matched.get("team_name", ""),
                 "book_name": row.get("book_name"),
                 "content": content,
             }
@@ -396,7 +419,7 @@ class KnowledgeBaseManager:
         else:
             return "刚刚"
 
-    def get_kb_activity(self, book_name: str, days: int = 7) -> dict:
+    def get_kb_activity(self, book_name: str, days: int = 7, team_id: str | None = None) -> dict:
         """获取知识库活跃度统计
 
         Args:
@@ -412,7 +435,12 @@ class KnowledgeBaseManager:
             }
         """
         since = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        activity = self.doc_index.get_book_activity(book_name, since_date=since, limit=10)
+        activity = self.doc_index.get_book_activity(
+            book_name,
+            since_date=since,
+            limit=10,
+            team_id=team_id,
+        )
         return {
             "period_days": days,
             "docs_updated": activity.get("docs_updated", 0),
@@ -420,7 +448,12 @@ class KnowledgeBaseManager:
             "since_date": since,
         }
 
-    def get_kb_sample_docs(self, book_name: str, limit: int = 5) -> list[dict]:
+    def get_kb_sample_docs(
+        self,
+        book_name: str,
+        limit: int = 5,
+        team_id: str | None = None,
+    ) -> list[dict]:
         """获取知识库代表性文档（用于 Agent 分析）
 
         按字数排序，优先获取内容充实的文档。
@@ -444,6 +477,8 @@ class KnowledgeBaseManager:
             if len(sample_docs) >= limit:
                 break
             results = self.search_in_kb(book_name, kw, k=2)
+            if team_id:
+                results = [r for r in results if str(r.get("team_id") or "default") == team_id]
             for r in results:
                 title = r.get("title", "")
                 if title and title not in seen_titles:
@@ -454,12 +489,17 @@ class KnowledgeBaseManager:
         if len(sample_docs) < limit:
             try:
                 rows = self.doc_index.get_top_docs_by_word_count(
-                    book_name, limit=limit - len(sample_docs), min_words=100
+                    book_name,
+                    limit=limit - len(sample_docs),
+                    min_words=100,
+                    team_id=team_id,
                 )
                 for row in rows:
                     if row["title"] not in seen_titles:
                         # 通过 RAG 获取内容
                         results = self.search_in_kb(book_name, row["title"], k=1)
+                        if team_id:
+                            results = [r for r in results if str(r.get("team_id") or "default") == team_id]
                         if results:
                             sample_docs.append(results[0])
                             seen_titles.add(row["title"])
@@ -474,6 +514,7 @@ class KnowledgeBaseManager:
         context: "Context",
         event: Any = None,
         token_monitor: Optional["TokenMonitor"] = None,
+        team_id: str | None = None,
     ) -> Optional[dict]:
         """生成知识库新人导航
 
@@ -498,17 +539,18 @@ class KnowledgeBaseManager:
             }
         """
         # 1. 获取基础信息
-        info = self.get_kb_info(book_name)
+        info = self.get_kb_info(book_name, team_id=team_id)
         if not info:
             return None
 
         book_name_actual = info.get("book_name", book_name)
+        matched_team_id = info.get("team_id") or "default"
 
         # 2. 获取活跃度统计
-        activity = self.get_kb_activity(book_name_actual, days=7)
+        activity = self.get_kb_activity(book_name_actual, days=7, team_id=matched_team_id)
 
         # 3. 获取代表性文档
-        sample_docs = self.get_kb_sample_docs(book_name_actual, limit=5)
+        sample_docs = self.get_kb_sample_docs(book_name_actual, limit=5, team_id=matched_team_id)
 
         # 4. 调用 Agent 生成总结
         agent_summary = await self._call_agent_for_summary(
@@ -523,6 +565,8 @@ class KnowledgeBaseManager:
 
         return {
             "book_name": book_name_actual,
+            "team_id": matched_team_id,
+            "team_name": info.get("team_name", ""),
             "doc_count": info.get("doc_count", 0),
             "total_words": info.get("total_words", 0),
             "contributors": info.get("contributors", []),
@@ -780,7 +824,7 @@ class KnowledgeBaseManager:
 
         return "\n".join(lines)
 
-    def format_kb_updates(self, book_name: str, days: int = 7) -> str:
+    def format_kb_updates(self, book_name: str, days: int = 7, team_id: str | None = None) -> str:
         """格式化知识库更新感知输出
 
         Args:
@@ -790,24 +834,19 @@ class KnowledgeBaseManager:
         Returns:
             格式化的更新动态文本
         """
-        # 模糊匹配知识库
-        books = self.doc_index.list_books()
-        matched = None
-        for b in books:
-            if book_name.lower() in b.get("book_name", "").lower():
-                matched = b
-                break
+        matched = self._match_book(book_name, team_id=team_id)
 
         if not matched:
             return f"未找到知识库「{book_name}」"
 
         book_name_actual = matched["book_name"]
+        matched_team_id = matched.get("team_id") or "default"
 
         # 获取活跃度统计
-        activity = self.get_kb_activity(book_name_actual, days)
+        activity = self.get_kb_activity(book_name_actual, days, team_id=matched_team_id)
 
         # 获取最近更新
-        updates = self.get_kb_recent_updates(book_name_actual, limit=20)
+        updates = self.get_kb_recent_updates(book_name_actual, limit=20, team_id=matched_team_id)
 
         # 计算日期范围
         since_date = activity.get("since_date", "")

@@ -77,7 +77,7 @@ class SetPreferenceTool(BaseTool):
         # 更新偏好
         success = self.plugin.storage.update_preference(yuque_id, preference_type, value)
         if not success:
-            return f"设置失败，请检查偏好类型和值是否正确"
+            return "设置失败，请检查偏好类型和值是否正确"
 
         logger.info(f"[SetPreference] 用户 {binding.get('yuque_name')} 设置 {preference_type} = {value}")
 

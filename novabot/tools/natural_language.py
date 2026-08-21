@@ -4,9 +4,8 @@ NovaBot 自然语言交互工具
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
-from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 from .base import BaseTool

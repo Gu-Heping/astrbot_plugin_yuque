@@ -4,7 +4,6 @@ NovaBot 伙伴推荐模块
 """
 
 from datetime import datetime
-from pathlib import Path
 from typing import Optional
 
 from astrbot.api import logger
@@ -203,7 +202,6 @@ class PartnerMatcher:
             return []
 
         user_p = user_profile.get("profile", {})
-        user_interests = user_p.get("interests", [])
         user_level = user_p.get("level", "beginner")
         user_skills = user_p.get("skills", {})
 

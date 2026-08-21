@@ -8,7 +8,13 @@
     "description": "语雀 API 地址（私有化部署请修改）",
     "type": "string",
     "default": "https://www.yuque.com/api/v2",
-    "hint": "公有云使用默认值；私有化部署改为 your-org.yuque.com/api/v2"
+    "hint": "公有云使用默认值；也可填写 https://nova.yuque.com/ 这类 Web 地址，系统会规范化为 /api/v2"
+  },
+  "yuque_teams": {
+    "description": "多语雀团队配置（JSON，可选）",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用 yuque_token 作为默认团队。支持完整对象、{\"yuque_token\":\"xxx\"} token-only 对象，或直接写字符串 token；缺少 team_id/name 时启动或同步前自动发现"
   },
   "embedding_api_key": {
     "description": "Embedding API Key",
@@ -131,6 +137,18 @@
     "type": "int",
     "default": 300,
     "hint": "热门查询结果缓存时间，减少重复查询"
+  },
+  "knowledge_chunk_size": {
+    "description": "知识检索 Chunk 大小（字符数）",
+    "type": "int",
+    "default": 1200,
+    "hint": "用于 Multi-Team Knowledge Core 的本地 chunk 检索"
+  },
+  "knowledge_chunk_overlap": {
+    "description": "知识检索 Chunk 重叠大小（字符数）",
+    "type": "int",
+    "default": 180,
+    "hint": "需小于 chunk 大小的一半"
   },
   "webhook_queue_enabled": {
     "description": "启用 Webhook 队列处理",

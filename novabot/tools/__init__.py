@@ -11,7 +11,7 @@ from .search import (
     ParseYuqueUrlTool,
 )
 from .metadata import SearchDocsTool, ListAuthorsTool, DocStatsTool, GetDocDetailsTool
-from .repo import ListKnowledgeBasesTool, ListRepoDocsTool
+from .repo import ListKnowledgeBasesTool, ListRepoDocsTool, ListTeamsTool
 from .persona import SetPreferenceTool
 from .natural_language import (
     PartnerRecommendTool,
@@ -53,6 +53,7 @@ __all__ = [
     "DocStatsTool",
     "GetDocDetailsTool",
     # 知识库工具
+    "ListTeamsTool",
     "ListKnowledgeBasesTool",
     "ListRepoDocsTool",
     # 人格偏好工具
@@ -92,6 +93,7 @@ ALL_TOOLS = [
     ListAuthorsTool,
     DocStatsTool,
     GetDocDetailsTool,
+    ListTeamsTool,
     ListKnowledgeBasesTool,
     ListRepoDocsTool,
     SetPreferenceTool,

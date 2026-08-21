@@ -10,6 +10,12 @@ from typing import Dict, List, Optional
 
 from astrbot.api import logger
 
+from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
 
 class DocIndex:
     """文档元数据索引"""
@@ -39,10 +45,12 @@ class DocIndex:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS docs (
                     id INTEGER PRIMARY KEY,
-                    yuque_id INTEGER UNIQUE,
+                    yuque_id INTEGER,
                     title TEXT,
                     slug TEXT,
                     author TEXT,
+                    team_id TEXT DEFAULT 'default',
+                    team_name TEXT DEFAULT 'NOVA',
                     book_name TEXT,
                     book_namespace TEXT,
                     creator_id INTEGER,
@@ -54,18 +62,31 @@ class DocIndex:
                 )
             """)
 
-            # 兼容性：检查 creator_id 列是否存在
+            # 兼容性：检查新增列是否存在
             columns = conn.execute("PRAGMA table_info(docs)").fetchall()
             column_names = [col[1] for col in columns]
             if "creator_id" not in column_names:
                 logger.info("[DocIndex] 添加 creator_id 列")
                 conn.execute("ALTER TABLE docs ADD COLUMN creator_id INTEGER")
+            if "team_id" not in column_names:
+                logger.info("[DocIndex] 添加 team_id 列")
+                conn.execute("ALTER TABLE docs ADD COLUMN team_id TEXT DEFAULT 'default'")
+            if "team_name" not in column_names:
+                logger.info("[DocIndex] 添加 team_name 列")
+                conn.execute("ALTER TABLE docs ADD COLUMN team_name TEXT DEFAULT 'NOVA'")
+
+            self._ensure_team_yuque_identity(conn)
 
             # 创建索引
             conn.execute("CREATE INDEX IF NOT EXISTS idx_author ON docs(author)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_book ON docs(book_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_team ON docs(team_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_updated ON docs(updated_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_yuque_id ON docs(yuque_id)")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_team_yuque_unique "
+                "ON docs(team_id, yuque_id) WHERE yuque_id IS NOT NULL"
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_creator_id ON docs(creator_id)")
 
             conn.commit()
@@ -73,6 +94,68 @@ class DocIndex:
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 数据库初始化失败: {e}")
             raise
+
+    def _ensure_team_yuque_identity(self, conn: sqlite3.Connection) -> None:
+        """Migrate old yuque_id-global uniqueness to team-scoped identity."""
+
+        if not self._has_global_yuque_unique_index(conn):
+            return
+
+        logger.info("[DocIndex] 迁移 yuque_id 唯一约束为 team_id + yuque_id")
+        conn.commit()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("DROP TABLE IF EXISTS docs_new")
+            conn.execute("""
+                CREATE TABLE docs_new (
+                    id INTEGER PRIMARY KEY,
+                    yuque_id INTEGER,
+                    title TEXT,
+                    slug TEXT,
+                    author TEXT,
+                    team_id TEXT DEFAULT 'default',
+                    team_name TEXT DEFAULT 'NOVA',
+                    book_name TEXT,
+                    book_namespace TEXT,
+                    creator_id INTEGER,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    word_count INTEGER DEFAULT 0,
+                    file_path TEXT,
+                    indexed_at TEXT
+                )
+            """)
+            conn.execute("""
+                INSERT INTO docs_new
+                (id, yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace,
+                 creator_id, created_at, updated_at, word_count, file_path, indexed_at)
+                SELECT id, yuque_id, title, slug, author,
+                       COALESCE(team_id, 'default'), COALESCE(team_name, 'NOVA'),
+                       book_name, book_namespace, creator_id, created_at, updated_at,
+                       word_count, file_path, indexed_at
+                FROM docs
+            """)
+            conn.execute("DROP TABLE docs")
+            conn.execute("ALTER TABLE docs_new RENAME TO docs")
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+
+    def _has_global_yuque_unique_index(self, conn: sqlite3.Connection) -> bool:
+        for row in conn.execute("PRAGMA index_list(docs)").fetchall():
+            index_name = row[1]
+            is_unique = bool(row[2])
+            if not is_unique:
+                continue
+            columns = [
+                info[2]
+                for info in conn.execute(f"PRAGMA index_info({index_name})").fetchall()
+            ]
+            if columns == ["yuque_id"]:
+                return True
+        return False
 
     def clear(self):
         """清空索引"""
@@ -84,20 +167,38 @@ class DocIndex:
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 清空索引失败: {e}")
 
+    def clear_team(self, team_id: str) -> int:
+        """清空指定团队的索引记录，返回删除数量。"""
+        try:
+            conn = self._get_conn()
+            cursor = conn.execute(
+                "DELETE FROM docs WHERE COALESCE(team_id, ?) = ?",
+                (DEFAULT_TEAM_ID, team_id or DEFAULT_TEAM_ID),
+            )
+            conn.commit()
+            deleted = cursor.rowcount
+            logger.info(f"[DocIndex] 清空团队索引: team_id={team_id}, deleted={deleted}")
+            return deleted
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 清空团队索引失败: {e}")
+            return 0
+
     def add_doc(self, doc: Dict):
         """添加或更新文档"""
         try:
             conn = self._get_conn()
             conn.execute("""
                 INSERT OR REPLACE INTO docs
-                (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
+                (yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace, creator_id,
                  created_at, updated_at, word_count, file_path, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 doc.get("yuque_id"),
                 doc.get("title", ""),
                 doc.get("slug", ""),
                 doc.get("author", ""),
+                doc.get("team_id") or DEFAULT_TEAM_ID,
+                doc.get("team_name") or DEFAULT_TEAM_NAME,
                 doc.get("book_name", ""),
                 doc.get("book_namespace", ""),
                 doc.get("creator_id"),
@@ -111,7 +212,7 @@ class DocIndex:
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 添加文档失败: {e}")
 
-    def delete_doc(self, yuque_id: int) -> bool:
+    def delete_doc(self, yuque_id: int, team_id: Optional[str] = None) -> bool:
         """删除指定文档的索引记录
 
         Args:
@@ -122,25 +223,62 @@ class DocIndex:
         """
         try:
             conn = self._get_conn()
-            cursor = conn.execute("DELETE FROM docs WHERE yuque_id = ?", (yuque_id,))
+            if team_id:
+                cursor = conn.execute(
+                    "DELETE FROM docs WHERE yuque_id = ? AND team_id = ?",
+                    (yuque_id, team_id),
+                )
+            else:
+                cursor = conn.execute(
+                    "DELETE FROM docs WHERE yuque_id = ? AND COALESCE(team_id, ?) = ?",
+                    (yuque_id, DEFAULT_TEAM_ID, DEFAULT_TEAM_ID),
+                )
             conn.commit()
             deleted = cursor.rowcount > 0
             if deleted:
-                logger.info(f"[DocIndex] 删除文档索引: yuque_id={yuque_id}")
+                logger.info(f"[DocIndex] 删除文档索引: yuque_id={yuque_id}, team_id={team_id or DEFAULT_TEAM_ID}")
             return deleted
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 删除文档失败: {e}")
             return False
 
-    def get_doc_by_yuque_id(self, yuque_id: int) -> Optional[Dict]:
+    def get_doc_by_yuque_id(self, yuque_id: int, team_id: Optional[str] = None) -> Optional[Dict]:
         """根据语雀 ID 获取文档记录"""
         try:
             conn = self._get_conn()
-            row = conn.execute("SELECT * FROM docs WHERE yuque_id = ?", (yuque_id,)).fetchone()
+            if team_id:
+                row = conn.execute(
+                    "SELECT * FROM docs WHERE yuque_id = ? AND team_id = ?",
+                    (yuque_id, team_id),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT * FROM docs WHERE yuque_id = ? AND COALESCE(team_id, ?) = ?",
+                    (yuque_id, DEFAULT_TEAM_ID, DEFAULT_TEAM_ID),
+                ).fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 查询文档失败: {e}")
             return None
+
+    def find_docs_by_yuque_id(self, yuque_id: int, limit: int = 10) -> List[Dict]:
+        """按语雀 ID 查询所有团队的文档记录。"""
+        try:
+            conn = self._get_conn()
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM docs
+                WHERE yuque_id = ?
+                ORDER BY COALESCE(team_id, ?) ASC, updated_at DESC
+                LIMIT ?
+                """,
+                (yuque_id, DEFAULT_TEAM_ID, limit),
+            ).fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            logger.error(f"[DocIndex] 按语雀 ID 查询多团队文档失败: {e}")
+            return []
 
     def add_docs(self, docs: List[Dict]):
         """批量添加文档"""
@@ -152,15 +290,17 @@ class DocIndex:
             try:
                 conn.executemany("""
                     INSERT OR REPLACE INTO docs
-                    (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
+                    (yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace, creator_id,
                      created_at, updated_at, word_count, file_path, indexed_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     (
                         d.get("yuque_id"),
                         d.get("title", ""),
                         d.get("slug", ""),
                         d.get("author", ""),
+                        d.get("team_id") or DEFAULT_TEAM_ID,
+                        d.get("team_name") or DEFAULT_TEAM_NAME,
                         d.get("book_name", ""),
                         d.get("book_namespace", ""),
                         d.get("creator_id"),
@@ -182,14 +322,16 @@ class DocIndex:
                     try:
                         conn.execute("""
                             INSERT OR REPLACE INTO docs
-                            (yuque_id, title, slug, author, book_name, book_namespace, creator_id,
+                            (yuque_id, title, slug, author, team_id, team_name, book_name, book_namespace, creator_id,
                              created_at, updated_at, word_count, file_path, indexed_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             d.get("yuque_id"),
                             d.get("title", ""),
                             d.get("slug", ""),
                             d.get("author", ""),
+                            d.get("team_id") or DEFAULT_TEAM_ID,
+                            d.get("team_name") or DEFAULT_TEAM_NAME,
                             d.get("book_name", ""),
                             d.get("book_namespace", ""),
                             d.get("creator_id"),
@@ -212,6 +354,10 @@ class DocIndex:
         author: Optional[str] = None,
         book: Optional[str] = None,
         title: Optional[str] = None,
+        team_id: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
         order_by: str = "updated_at",
         limit: int = 20,
         offset: int = 0,
@@ -229,21 +375,15 @@ class DocIndex:
         try:
             conn = self._get_conn()
 
-            # 构建查询
-            conditions = []
-            params = []
-
-            if author:
-                conditions.append("author LIKE ?")
-                params.append(f"%{author}%")
-            if book:
-                conditions.append("book_name LIKE ?")
-                params.append(f"%{book}%")
-            if title:
-                conditions.append("title LIKE ?")
-                params.append(f"%{title}%")
-
-            where_clause = " AND ".join(conditions) if conditions else "1=1"
+            where_clause, params = self._build_doc_filters(
+                author=author,
+                book=book,
+                title=title,
+                team_id=team_id,
+                path_prefix=path_prefix,
+                updated_after=updated_after,
+                updated_before=updated_before,
+            )
 
             # 验证排序字段
             valid_orders = {"updated_at", "created_at", "word_count", "title"}
@@ -264,44 +404,119 @@ class DocIndex:
             logger.error(f"[DocIndex] 搜索失败: {e}")
             return []
 
-    def get_stats(self, author: Optional[str] = None) -> Dict:
+    def _build_doc_filters(
+        self,
+        *,
+        author: Optional[str] = None,
+        book: Optional[str] = None,
+        title: Optional[str] = None,
+        team_id: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
+    ) -> tuple[str, list]:
+        conditions = []
+        params = []
+
+        if author:
+            conditions.append("author LIKE ?")
+            params.append(f"%{author}%")
+        if team_id:
+            conditions.append("COALESCE(team_id, ?) = ?")
+            params.extend([DEFAULT_TEAM_ID, team_id])
+        if book:
+            conditions.append("book_name LIKE ?")
+            params.append(f"%{book}%")
+        if title:
+            conditions.append("title LIKE ?")
+            params.append(f"%{title}%")
+        if path_prefix:
+            normalized_prefix = path_prefix.strip("/\\")
+            conditions.append(
+                "("
+                "REPLACE(file_path, '\\', '/') = ? OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\' OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\' OR "
+                "REPLACE(file_path, '\\', '/') LIKE ? ESCAPE '\\'"
+                ")"
+            )
+            escaped = _escape_like(normalized_prefix)
+            params.extend(
+                [
+                    normalized_prefix,
+                    f"{escaped}/%",
+                    f"%/{escaped}",
+                    f"%/{escaped}/%",
+                ]
+            )
+        if updated_after:
+            conditions.append("updated_at >= ?")
+            params.append(updated_after)
+        if updated_before:
+            conditions.append("updated_at <= ?")
+            params.append(updated_before)
+
+        return " AND ".join(conditions) if conditions else "1=1", params
+
+    def get_stats(
+        self,
+        author: Optional[str] = None,
+        book: Optional[str] = None,
+        team_id: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
+    ) -> Dict:
         """获取统计信息"""
         try:
             conn = self._get_conn()
-
-            if author:
-                row = conn.execute("""
-                    SELECT
-                        COUNT(*) as doc_count,
-                        SUM(word_count) as total_words,
-                        COUNT(DISTINCT book_name) as book_count
-                    FROM docs WHERE author LIKE ?
-                """, (f"%{author}%",)).fetchone()
-            else:
-                row = conn.execute("""
-                    SELECT
-                        COUNT(*) as doc_count,
-                        SUM(word_count) as total_words,
-                        COUNT(DISTINCT book_name) as book_count
-                    FROM docs
-                """).fetchone()
+            where_clause, params = self._build_doc_filters(
+                author=author,
+                book=book,
+                team_id=team_id,
+                path_prefix=path_prefix,
+                updated_after=updated_after,
+                updated_before=updated_before,
+            )
+            row = conn.execute(f"""
+                SELECT
+                    COUNT(*) as doc_count,
+                    SUM(word_count) as total_words,
+                    COUNT(DISTINCT book_name) as book_count
+                FROM docs WHERE {where_clause}
+            """, params).fetchone()
 
             return dict(row) if row else {"doc_count": 0, "total_words": 0, "book_count": 0}
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 获取统计失败: {e}")
             return {"doc_count": 0, "total_words": 0, "book_count": 0}
 
-    def list_authors(self) -> List[Dict]:
+    def list_authors(
+        self,
+        *,
+        team_id: Optional[str] = None,
+        book: Optional[str] = None,
+        path_prefix: Optional[str] = None,
+        updated_after: Optional[str] = None,
+        updated_before: Optional[str] = None,
+    ) -> List[Dict]:
         """列出所有作者及其文档数"""
         try:
             conn = self._get_conn()
-            rows = conn.execute("""
+            where_clause, params = self._build_doc_filters(
+                book=book,
+                team_id=team_id,
+                path_prefix=path_prefix,
+                updated_after=updated_after,
+                updated_before=updated_before,
+            )
+            rows = conn.execute(f"""
                 SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
                 FROM docs
-                WHERE author != ''
+                WHERE author != '' AND {where_clause}
                 GROUP BY author
                 ORDER BY doc_count DESC
-            """).fetchall()
+            """, params).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 列出作者失败: {e}")
@@ -312,10 +527,10 @@ class DocIndex:
         try:
             conn = self._get_conn()
             rows = conn.execute("""
-                SELECT book_name, book_namespace, COUNT(*) as doc_count, SUM(word_count) as total_words
+                SELECT team_id, team_name, book_name, book_namespace, COUNT(*) as doc_count, SUM(word_count) as total_words
                 FROM docs
                 WHERE book_name != ''
-                GROUP BY book_name
+                GROUP BY team_id, book_name
                 ORDER BY doc_count DESC
             """).fetchall()
             return [dict(row) for row in rows]
@@ -470,7 +685,7 @@ class DocIndex:
         try:
             conn = self._get_conn()
             rows = conn.execute("""
-                SELECT yuque_id, title, author, book_name, book_namespace, creator_id,
+                SELECT yuque_id, title, author, team_id, team_name, book_name, book_namespace, creator_id,
                        created_at, updated_at, word_count, file_path
                 FROM docs
                 ORDER BY updated_at DESC
@@ -561,95 +776,123 @@ class DocIndex:
             logger.error(f"[DocIndex] 按作者查询文档失败: {e}")
             return []
 
-    def get_kb_contributors(self, book_name: str, limit: int = 10) -> List[Dict]:
+    def get_kb_contributors(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库贡献者统计"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(limit)
             rows = conn.execute(
-                """
+                f"""
                 SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
                 FROM docs
-                WHERE book_name = ? AND author != ''
+                WHERE {where_clause} AND author != ''
                 GROUP BY author
                 ORDER BY doc_count DESC
                 LIMIT ?
                 """,
-                (book_name, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 获取知识库贡献者失败: {e}")
             return []
 
-    def get_kb_recent_updates(self, book_name: str, limit: int = 10) -> List[Dict]:
+    def get_kb_recent_updates(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库最近更新"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(limit)
             rows = conn.execute(
-                """
-                SELECT title, author, updated_at
+                f"""
+                SELECT title, author, updated_at, team_id, team_name
                 FROM docs
-                WHERE book_name = ?
+                WHERE {where_clause}
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (book_name, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 获取知识库最近更新失败: {e}")
             return []
 
-    def find_doc_for_book_by_title(self, book_name: str, title_keyword: str) -> Optional[Dict]:
+    def find_doc_for_book_by_title(
+        self,
+        book_name: str,
+        title_keyword: str,
+        team_id: Optional[str] = None,
+    ) -> Optional[Dict]:
         """在知识库中按标题模糊匹配单篇文档"""
         if not book_name or not title_keyword:
             return None
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(f"%{title_keyword}%")
             row = conn.execute(
-                """
-                SELECT title, author, book_name, file_path
+                f"""
+                SELECT title, author, team_id, team_name, book_name, file_path
                 FROM docs
-                WHERE book_name = ? AND title LIKE ?
+                WHERE {where_clause} AND title LIKE ?
                 ORDER BY word_count DESC
                 LIMIT 1
                 """,
-                (book_name, f"%{title_keyword}%"),
+                params,
             ).fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 按标题匹配文档失败: {e}")
             return None
 
-    def get_book_activity(self, book_name: str, since_date: str, limit: int = 10) -> Dict:
+    def get_book_activity(
+        self,
+        book_name: str,
+        since_date: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> Dict:
         """获取指定知识库在时间区间内的活跃统计"""
         result = {"docs_updated": 0, "active_contributors": []}
         if not book_name or not since_date:
             return result
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
             docs_updated_row = conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) as count
                 FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?)
+                WHERE {where_clause} AND date(updated_at) >= date(?)
                 """,
-                (book_name, since_date),
+                [*params, since_date],
             ).fetchone()
             active_rows = conn.execute(
-                """
+                f"""
                 SELECT author, COUNT(*) as doc_count
                 FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?) AND author != ''
+                WHERE {where_clause} AND date(updated_at) >= date(?) AND author != ''
                 GROUP BY author
                 ORDER BY doc_count DESC
                 LIMIT ?
                 """,
-                (book_name, since_date, limit),
+                [*params, since_date, limit],
             ).fetchall()
             result["docs_updated"] = int(dict(docs_updated_row)["count"]) if docs_updated_row else 0
             result["active_contributors"] = [dict(row) for row in active_rows]
@@ -658,21 +901,29 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取知识库活跃度失败: {e}")
             return result
 
-    def get_top_docs_by_word_count(self, book_name: str, limit: int = 5, min_words: int = 100) -> List[Dict]:
+    def get_top_docs_by_word_count(
+        self,
+        book_name: str,
+        limit: int = 5,
+        min_words: int = 100,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库内字数最多的文档"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.extend([min_words, limit])
             rows = conn.execute(
-                """
+                f"""
                 SELECT title, author, word_count
                 FROM docs
-                WHERE book_name = ? AND word_count > ?
+                WHERE {where_clause} AND word_count > ?
                 ORDER BY word_count DESC
                 LIMIT ?
                 """,
-                (book_name, min_words, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:

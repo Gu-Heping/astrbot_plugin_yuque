@@ -121,7 +121,6 @@ class WeeklyReporter:
         if ranking:
             lines.append("📈 贡献排行（按变更量）")
             for i, item in enumerate(ranking[:5], 1):
-                total_changes = item["additions"] + item["deletions"]
                 lines.append(
                     f"{i}. {item['author']} - "
                     f"+{item['additions']}/-{item['deletions']} 行 "
@@ -186,16 +185,10 @@ class WeeklyReporter:
             # 使用 SQLite 数据
             hot_docs_text = self._format_sqlite_docs(doc_stats)
             authors_text = self._format_sqlite_authors(doc_stats)
-            total_new = doc_stats["total_new"]
-            total_updated = doc_stats["total_updated"]
-            total_words = doc_stats["total_words_new"]
         else:
             # 回退到 Git 数据
             hot_docs_text = self._format_hot_docs(activity["hot_files"])
             authors_text = self._format_authors_for_llm(activity["active_authors"])
-            total_new = 0
-            total_updated = len(activity["hot_files"])
-            total_words = 0
 
         total_additions = sum(r.get("additions", 0) for r in ranking) if ranking else 0
         total_deletions = sum(r.get("deletions", 0) for r in ranking) if ranking else 0

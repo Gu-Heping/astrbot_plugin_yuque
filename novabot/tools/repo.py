@@ -13,11 +13,11 @@ from .base import BaseTool
 
 
 @dataclass
-class ListKnowledgeBasesTool(BaseTool):
-    """列出知识库工具"""
+class ListTeamsTool(BaseTool):
+    """列出可检索团队工具"""
 
-    name: str = "list_knowledge_bases"
-    description: str = "列出 NOVA 社团所有语雀知识库。了解有哪些知识库可以帮助你决定去哪个知识库搜索。"
+    name: str = "list_teams"
+    description: str = "列出可检索语雀团队及其说明、同步状态和 team_id。用于在知识事实问答前决定检索范围。"
     parameters: dict = field(default_factory=lambda: {
         "type": "object",
         "properties": {},
@@ -26,6 +26,108 @@ class ListKnowledgeBasesTool(BaseTool):
     plugin: Any = None
 
     async def run(self, event: AstrMessageEvent) -> str:
+        teams = self._teams_from_registry()
+        repos_by_team = self._repos_by_team()
+        sync_state = self._sync_state()
+
+        if not teams and repos_by_team:
+            teams = [
+                {
+                    "team_id": team_id,
+                    "name": repos[0].get("team_name") or team_id,
+                    "description": "",
+                    "enabled": True,
+                }
+                for team_id, repos in repos_by_team.items()
+            ]
+
+        if not teams:
+            return "尚未配置或同步任何语雀团队。请先配置 yuque_token / yuque_teams 并执行 /sync。"
+
+        lines = ["👥 可检索团队列表:\n"]
+        for team in teams:
+            team_id = team["team_id"]
+            repos = repos_by_team.get(team_id, [])
+            team_state = (sync_state.get("teams") or {}).get(team_id, {})
+            lines.append(
+                f"• {team['name']} (team_id={team_id}, "
+                f"{'enabled' if team.get('enabled', True) else 'disabled'})"
+            )
+            if team.get("description"):
+                lines.append(f"  描述: {team['description']}")
+            lines.append(
+                "  同步: "
+                f"{team_state.get('repos_count', len(repos))} 个知识库, "
+                f"{team_state.get('docs_count', 0)} 篇文档"
+            )
+            if repos:
+                repo_names = [repo.get("name", "") for repo in repos[:5] if repo.get("name")]
+                lines.append(f"  知识库: {', '.join(repo_names)}")
+            lines.append(f"  scope: team_id={team_id}")
+        lines.append("\n💡 可继续调用 list_knowledge_bases(team_id=...) 查看该团队知识库。")
+        return "\n".join(lines)
+
+    def _teams_from_registry(self) -> list[dict]:
+        registry = getattr(self.plugin, "team_registry", None)
+        if not registry:
+            return []
+        list_enabled = getattr(registry, "list_enabled", None)
+        if not callable(list_enabled):
+            return []
+        return [
+            {
+                "team_id": str(getattr(team, "team_id", "default")),
+                "name": str(getattr(team, "name", "") or getattr(team, "team_id", "default")),
+                "description": str(getattr(team, "description", "") or ""),
+                "enabled": bool(getattr(team, "enabled", True)),
+            }
+            for team in list_enabled()
+        ]
+
+    def _repos_by_team(self) -> dict[str, list[dict]]:
+        repos_file = self.plugin.storage.data_dir / "yuque_repos.json"
+        if not repos_file.exists():
+            return {}
+        try:
+            repos = json.loads(repos_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning(f"读取知识库列表失败: {e}")
+            return {}
+        grouped: dict[str, list[dict]] = {}
+        for repo in repos if isinstance(repos, list) else []:
+            grouped.setdefault(str(repo.get("team_id") or "default"), []).append(repo)
+        return grouped
+
+    def _sync_state(self) -> dict:
+        loader = getattr(self.plugin.storage, "load_sync_state", None)
+        if not callable(loader):
+            return {}
+        try:
+            return loader() or {}
+        except Exception as e:
+            logger.debug(f"读取同步状态失败: {e}")
+            return {}
+
+
+@dataclass
+class ListKnowledgeBasesTool(BaseTool):
+    """列出知识库工具"""
+
+    name: str = "list_knowledge_bases"
+    description: str = "列出 NOVA 社团所有语雀团队与知识库。用于决定 search/grep/read_docs 的 team_id 和 repository 范围。"
+    parameters: dict = field(default_factory=lambda: {
+        "type": "object",
+        "properties": {
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID 过滤（可选）。不确定时留空以查看所有团队。"
+            }
+        },
+        "required": []
+    })
+    plugin: Any = None
+
+    async def run(self, event: AstrMessageEvent, team_id: str = "") -> str:
         repos_file = self.plugin.storage.data_dir / "yuque_repos.json"
         docs_dir = self.get_docs_dir()
 
@@ -33,25 +135,23 @@ class ListKnowledgeBasesTool(BaseTool):
         if repos_file.exists():
             try:
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
-                output = ["📚 NOVA 知识库列表:\n"]
-                for repo in repos:
-                    name = repo.get("name", "未知")
-                    desc = repo.get("description", "") or ""
-                    items = repo.get("items_count", 0)
-                    output.append(f"• {name} ({items} 篇文档)")
-                    if desc:
-                        output.append(f"  {desc[:50]}{'...' if len(desc) > 50 else ''}")
-                return "\n".join(output)
+                repos = [
+                    repo for repo in repos if not team_id or str(repo.get("team_id") or "default") == team_id
+                ]
+                if not repos:
+                    return f"未找到 team_id={team_id} 的知识库，请先执行 /sync 同步或放宽团队范围"
+                return _format_repos_for_scope(repos, team_id=team_id)
             except Exception as e:
                 logger.warning(f"读取知识库列表失败: {e}")
 
         # 备选：从目录结构读取
         if docs_dir.exists():
-            output = ["📚 NOVA 知识库列表:\n"]
-            for repo_dir in sorted(docs_dir.iterdir()):
-                if repo_dir.is_dir():
-                    md_count = len(list(repo_dir.glob("*.md")))
-                    output.append(f"• {repo_dir.name} ({md_count} 篇文档)")
+            output = ["📚 NOVA 知识库列表（目录推断）:\n"]
+            for repo_team_id, repo_dir in _iter_repo_dirs_from_fs(docs_dir, team_id=team_id):
+                md_count = len(list(repo_dir.glob("*.md")))
+                rel_path = repo_dir.relative_to(docs_dir).as_posix()
+                output.append(f"• {repo_dir.name} ({md_count} 篇文档)")
+                output.append(f"  scope: team_id={repo_team_id}, path_prefix={rel_path}")
             return "\n".join(output)
 
         return "知识库列表为空，请先执行 /sync 同步"
@@ -69,20 +169,24 @@ class ListRepoDocsTool(BaseTool):
             "repo_name": {
                 "type": "string",
                 "description": "知识库名称，如 'astrbot搭建'、'AI Agent试水'"
+            },
+            "team_id": {
+                "type": "string",
+                "description": "团队 ID（可选）。多团队同名知识库时用于精确选择。"
             }
         },
         "required": ["repo_name"]
     })
     plugin: Any = None
 
-    def _build_slug_path_maps(self, doc_index, book_name: str) -> tuple[dict, dict]:
+    def _build_slug_path_maps(self, doc_index, book_name: str, team_id: str = "") -> tuple[dict, dict]:
         """从索引构建 slug/title -> file_path 映射"""
         slug_map: dict[str, str] = {}
         title_map: dict[str, dict] = {}
         if not doc_index or not book_name:
             return slug_map, title_map
         try:
-            docs = doc_index.search(book=book_name, limit=500)
+            docs = doc_index.search(book=book_name, team_id=team_id or None, limit=500)
             for doc in docs:
                 slug = doc.get("slug", "")
                 title = doc.get("title", "")
@@ -164,7 +268,7 @@ class ListRepoDocsTool(BaseTool):
                 lines.extend(self._format_tree(node["children"], author_map, indent + "  "))
         return lines
 
-    async def run(self, event: AstrMessageEvent, repo_name: str) -> str:
+    async def run(self, event: AstrMessageEvent, repo_name: str, team_id: str = "") -> str:
         docs_dir = self.get_docs_dir()
         if not docs_dir.exists():
             return "文档目录不存在，请先执行 /sync 同步"
@@ -173,39 +277,66 @@ class ListRepoDocsTool(BaseTool):
         repos_file = docs_dir / ".repos.json"
         matched_dir = None
         matched_repo = None
-        matched_namespace = None
 
         if repos_file.exists():
             try:
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                cache_matches = []
                 for repo in repos:
+                    repo_team_id = str(repo.get("team_id") or "default")
+                    if team_id and repo_team_id != team_id:
+                        continue
                     name = repo.get("name", "")
                     ns = repo.get("namespace", "")
                     if repo_name.lower() in name.lower() or repo_name.lower() in ns.lower():
-                        matched_repo = repo
-                        matched_namespace = ns
-                        matched_dir = docs_dir / self._namespace_to_dirname(ns, name)
-                        break
+                        cache_matches.append(repo)
+                if len(cache_matches) > 1 and not team_id:
+                    choices = [_repo_scope_label(r) for r in cache_matches[:10]]
+                    return f"找到多个知识库「{repo_name}」，请指定 team_id:\n" + "\n".join(choices)
+                if cache_matches:
+                    matched_repo = cache_matches[0]
+                    matched_dir = docs_dir / self._repo_dir_for_repo(matched_repo)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(f"读取知识库列表失败: {e}")
 
         if not matched_dir:
             # 备选：从目录名模糊匹配
-            for d in docs_dir.iterdir():
-                if d.is_dir() and repo_name.lower() in d.name.lower():
-                    matched_dir = d
-                    break
+            matches = [
+                (repo_team_id, repo_dir)
+                for repo_team_id, repo_dir in _iter_repo_dirs_from_fs(docs_dir, team_id=team_id)
+                if repo_name.lower() in repo_dir.name.lower()
+            ]
+            if len(matches) > 1 and not team_id:
+                choices = [
+                    f"{repo_dir.name} (team_id={repo_team_id}, path_prefix={repo_dir.relative_to(docs_dir).as_posix()})"
+                    for repo_team_id, repo_dir in matches[:10]
+                ]
+                return f"找到多个知识库「{repo_name}」，请指定 team_id:\n" + "\n".join(choices)
+            if matches:
+                resolved_team_id, matched_dir = matches[0]
+                matched_repo = {
+                    "name": matched_dir.name,
+                    "team_id": resolved_team_id,
+                    "namespace": "",
+                }
 
         if not matched_dir:
             available = []
             if repos_file.exists():
                 try:
                     repos = json.loads(repos_file.read_text(encoding="utf-8"))
-                    available = [r.get("name", "") for r in repos[:10]]
+                    available = [
+                        _repo_scope_label(r)
+                        for r in repos
+                        if not team_id or str(r.get("team_id") or "default") == team_id
+                    ][:10]
                 except (json.JSONDecodeError, OSError) as e:
                     logger.debug(f"读取知识库列表失败: {e}")
             if not available:
-                available = [d.name for d in docs_dir.iterdir() if d.is_dir()][:10]
+                available = [
+                    f"{repo_dir.name} (team_id={repo_team_id})"
+                    for repo_team_id, repo_dir in _iter_repo_dirs_from_fs(docs_dir, team_id=team_id)
+                ][:10]
             return f"未找到知识库「{repo_name}」\n可用知识库: {', '.join(available)}"
 
         # 准备作者与 slug/path 映射（从 SQLite 索引）
@@ -214,9 +345,12 @@ class ListRepoDocsTool(BaseTool):
         title_map = {}
         doc_index = self.get_doc_index()
         book_name = matched_repo.get("name", "") if matched_repo else repo_name
+        resolved_team_id = str(matched_repo.get("team_id") or team_id or "") if matched_repo else team_id
         if doc_index:
             try:
-                slug_map, title_map = self._build_slug_path_maps(doc_index, book_name)
+                slug_map, title_map = self._build_slug_path_maps(
+                    doc_index, book_name, team_id=resolved_team_id
+                )
                 for title, info in title_map.items():
                     if info.get("author"):
                         author_map[title] = info["author"]
@@ -229,7 +363,11 @@ class ListRepoDocsTool(BaseTool):
             try:
                 toc_list = json.loads(toc_file.read_text(encoding="utf-8"))
                 tree = self._build_toc_tree(toc_list, slug_map=slug_map, title_map=title_map)
-                lines = [f"📖 {matched_repo.get('name', matched_dir.name) if matched_repo else matched_dir.name} 目录结构:\n"]
+                title = matched_repo.get("name", matched_dir.name) if matched_repo else matched_dir.name
+                lines = [f"📖 {title} 目录结构:\n"]
+                if matched_repo:
+                    lines.extend(_repo_scope_lines(matched_repo))
+                    lines.append("")
                 lines.extend(self._format_tree(tree, author_map))
                 doc_count = sum(1 for item in toc_list if item.get("type") == "DOC")
                 title_count = sum(1 for item in toc_list if item.get("type") == "TITLE")
@@ -263,3 +401,77 @@ class ListRepoDocsTool(BaseTool):
         if repo_name:
             return self.slug_safe(repo_name)
         return namespace.replace("/", "_")
+
+    def _repo_dir_for_repo(self, repo: dict) -> Any:
+        team_id = str(repo.get("team_id") or "default")
+        base = self.get_docs_dir()
+        if team_id != "default":
+            base = base / team_id
+        return base / self._namespace_to_dirname(repo.get("namespace", ""), repo.get("name", ""))
+
+
+def _format_repos_for_scope(repos: list[dict], team_id: str = "") -> str:
+    by_team: dict[str, list[dict]] = {}
+    for repo in repos:
+        by_team.setdefault(str(repo.get("team_id") or "default"), []).append(repo)
+
+    title = "📚 NOVA 知识库列表"
+    if team_id:
+        title += f"（team_id={team_id}）"
+    output = [f"{title}:\n"]
+    for current_team_id, team_repos in by_team.items():
+        team_name = team_repos[0].get("team_name") or current_team_id
+        output.append(f"团队: {team_name} (team_id={current_team_id})")
+        for repo in team_repos:
+            output.append(f"• {_repo_scope_label(repo)}")
+            output.extend(f"  {line}" for line in _repo_scope_lines(repo))
+            desc = repo.get("description", "") or ""
+            if desc:
+                output.append(f"  描述: {desc[:80]}{'...' if len(desc) > 80 else ''}")
+        output.append("")
+    output.append("💡 检索时可将 team_id 与 repository 一起传给 search_knowledge_base / grep_local_docs。")
+    return "\n".join(output).strip()
+
+
+def _repo_scope_label(repo: dict) -> str:
+    name = repo.get("name", "未知")
+    items = repo.get("items_count", 0)
+    team_id = repo.get("team_id") or "default"
+    return f"{name} ({items} 篇文档, team_id={team_id})"
+
+
+def _repo_scope_lines(repo: dict) -> list[str]:
+    lines = [
+        f"scope: team_id={repo.get('team_id') or 'default'}, repository={repo.get('name', '')}",
+    ]
+    namespace = repo.get("namespace") or ""
+    if namespace:
+        lines.append(f"namespace: {namespace}")
+    return lines
+
+
+def _iter_repo_dirs_from_fs(docs_dir, team_id: str = ""):
+    for root_dir in sorted(docs_dir.iterdir()):
+        if not root_dir.is_dir():
+            continue
+
+        if team_id and team_id != "default":
+            if root_dir.name != team_id:
+                continue
+            for nested in sorted(root_dir.iterdir()):
+                if nested.is_dir() and _looks_like_repo_dir(nested):
+                    yield team_id, nested
+            continue
+
+        if _looks_like_repo_dir(root_dir):
+            yield "default", root_dir
+            continue
+
+        if not team_id:
+            for nested in sorted(root_dir.iterdir()):
+                if nested.is_dir() and _looks_like_repo_dir(nested):
+                    yield root_dir.name, nested
+
+
+def _looks_like_repo_dir(path) -> bool:
+    return (path / ".toc.json").exists() or any(path.glob("*.md"))

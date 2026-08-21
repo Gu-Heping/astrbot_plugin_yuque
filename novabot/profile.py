@@ -7,12 +7,15 @@ from typing import TYPE_CHECKING, Optional
 
 from astrbot.api import logger
 
-from .llm_utils import call_llm, extract_json, format_docs_for_profile, sanitize_user_input
+from .llm_utils import call_llm, format_docs_for_profile, sanitize_user_input
 from .prompts import PROFILE_PROMPT, DOMAIN_ASSESS_PROMPT
 from .token_monitor import FEATURE_PROFILE, FEATURE_ASSESS
 
 if TYPE_CHECKING:
     from .token_monitor import TokenMonitor
+
+
+LEVEL_LABELS = {"beginner": "入门", "intermediate": "进阶", "advanced": "高级"}
 
 
 class ProfileGenerator:
@@ -260,8 +263,8 @@ def format_domain_assessment(assessment: dict) -> str:
     if learning:
         lines.append("━━━━━━━━━━━━━━━")
         lines.append("📖 正在学习")
-        for l in learning:
-            lines.append(f"• {l}")
+        for item in learning:
+            lines.append(f"• {item}")
         lines.append("")
 
     # 知识缺口
@@ -291,3 +294,155 @@ def format_domain_assessment(assessment: dict) -> str:
             lines.append(f"• {r}")
 
     return "\n".join(lines)
+
+
+async def refresh_user_profile(
+    *,
+    storage,
+    profile_generator: ProfileGenerator,
+    binding: dict,
+    provider,
+    docs: list | None = None,
+) -> tuple[int, str]:
+    """Generate and persist a refreshed user profile.
+
+    Returns ``(docs_count, message)`` so callers can keep their existing
+    "正在分析 N 篇文档" progress message before awaiting LLM work.
+    """
+
+    yuque_id = binding.get("yuque_id")
+    docs = docs if docs is not None else get_profile_docs(storage=storage, binding=binding)
+    if not docs:
+        return 0, "⚠️ 未找到你的文档，请先执行 /sync 同步"
+    if not provider:
+        return len(docs), "❌ LLM 未配置，请先配置模型 Provider"
+
+    profile = await profile_generator.generate_with_llm(docs, provider)
+    storage.save_profile(yuque_id, profile)
+    return len(docs), format_generated_profile_summary(profile)
+
+
+async def assess_user_domain(
+    *,
+    storage,
+    profile_generator: ProfileGenerator,
+    binding: dict,
+    domain: str,
+    provider,
+    docs: list | None = None,
+) -> tuple[int, str]:
+    """Assess a bound user's level in one domain and format the result."""
+
+    docs = docs if docs is not None else get_profile_docs(storage=storage, binding=binding)
+    if not docs:
+        return 0, "⚠️ 未找到你的文档，请先执行 /sync 同步"
+    if not provider:
+        return len(docs), "❌ LLM 未配置，请先配置模型 Provider"
+
+    assessment = await profile_generator.assess_domain_level(docs, domain, provider)
+    return len(docs), format_domain_assessment(assessment)
+
+
+def get_profile_docs(*, storage, binding: dict) -> list:
+    """Load docs for a bound Yuque user using id-first matching."""
+
+    return storage.get_docs_by_author(binding.get("yuque_name", ""), binding.get("yuque_id"))
+
+
+def format_generated_profile_summary(profile: dict) -> str:
+    """Format the short response after refreshing a user's profile."""
+
+    p = profile.get("profile", {})
+    return (
+        "✅ 画像已生成\n"
+        "━━━━━━━━━━━━━━━\n"
+        f"兴趣: {', '.join(_string_list(p.get('interests')))}\n"
+        f"水平: {LEVEL_LABELS.get(p.get('level', ''), '未知')}\n"
+        f"标签: {', '.join(_string_list(p.get('tags')))}\n"
+        "\n"
+        f"📝 {p.get('summary', '')}"
+    )
+
+
+def format_profile_view(*, binding: dict, profile: dict | None) -> str:
+    """Format the /profile view without triggering LLM generation."""
+
+    yuque_name = binding.get("yuque_name", "")
+    yuque_login = binding.get("yuque_login", "")
+    if not profile:
+        return (
+            "📋 用户画像\n"
+            "━━━━━━━━━━━━━━━\n"
+            f"账号: @{yuque_login} ({yuque_name})\n"
+            "\n"
+            "画像未生成\n"
+            "使用 /profile refresh 生成画像"
+        )
+
+    p = profile.get("profile", {})
+    stats = profile.get("stats", {})
+    skill_lines = _profile_skill_lines(p)
+    repos = stats.get("repos", [])
+    repos_str = ", ".join(repos[:3])
+    if len(repos) > 3:
+        repos_str += f" 等 {len(repos)} 个"
+
+    lines = [
+        "📋 用户画像",
+        "━━━━━━━━━━━━━━━",
+        f"账号: @{yuque_login} ({yuque_name})",
+        "",
+        "🎯 兴趣领域",
+    ]
+    lines.extend(skill_lines or ["暂无数据"])
+
+    tags = _string_list(p.get("tags"))
+    if tags:
+        lines.extend(["", "🏷️ 标签", f"• {' • '.join(tags)}"])
+
+    lines.extend(
+        [
+            "",
+            "📊 统计",
+            f"• 文档数: {stats.get('docs_count', 0)} 篇",
+            f"• 知识库: {repos_str or '暂无'}",
+            f"• 整体水平: {LEVEL_LABELS.get(p.get('level', ''), '未知')}",
+        ]
+    )
+
+    summary = p.get("summary", "")
+    if summary:
+        lines.extend(["", f"📝 {summary}"])
+
+    lines.extend(["", "💡 使用 /profile refresh 重新分析"])
+    return "\n".join(lines)
+
+
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item).strip()]
+    return [str(value)]
+
+
+def _profile_skill_lines(profile: dict) -> list[str]:
+    skills = profile.get("skills", {})
+    lines = []
+    for interest in _string_list(profile.get("interests")):
+        skill_level = skills.get(interest)
+        if skill_level:
+            lines.append(f"• {interest} ({LEVEL_LABELS.get(skill_level, '入门')})")
+            continue
+
+        interest_lower = interest.lower()
+        matched_level = ""
+        for skill_name, level in skills.items():
+            skill_lower = skill_name.lower()
+            if interest_lower in skill_lower or skill_lower in interest_lower:
+                matched_level = level
+                break
+        lines.append(f"• {interest} ({LEVEL_LABELS.get(matched_level, '入门')})")
+    return lines

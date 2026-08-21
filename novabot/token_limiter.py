@@ -5,10 +5,8 @@ NovaBot Token 限流器
 
 import json
 import threading
-import time
-from datetime import datetime, date
+from datetime import date
 from pathlib import Path
-from typing import Optional
 
 from astrbot.api import logger
 

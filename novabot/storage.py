@@ -153,6 +153,16 @@ class Storage:
             )
             self._members_cache = members
 
+    @staticmethod
+    def _member_payload(user_key: str, info: dict) -> dict:
+        user_id = str(user_key).split(":", 1)[-1]
+        payload = dict(info)
+        if user_id.isdigit():
+            payload["id"] = int(user_id)
+        else:
+            payload["id"] = user_id
+        return payload
+
     def find_member_by_id(self, user_id: str) -> Optional[dict]:
         """通过用户 ID 精确查找团队成员
 
@@ -165,7 +175,7 @@ class Storage:
         members = self.load_members()
         info = members.get(str(user_id))
         if info:
-            return {"id": int(user_id), **info}
+            return self._member_payload(str(user_id), info)
         return None
 
     def find_member_by_name(self, name_or_login: str) -> Optional[dict]:
@@ -191,19 +201,19 @@ class Storage:
         # 1. 精确匹配 login
         for uid, info in members.items():
             if info.get("login", "").lower() == name_lower:
-                return {"id": int(uid), **info}
+                return self._member_payload(str(uid), info)
 
         # 2. 精确匹配 name
         for uid, info in members.items():
             if info.get("name", "").lower() == name_lower:
-                return {"id": int(uid), **info}
+                return self._member_payload(str(uid), info)
 
         # 3. 模糊匹配
         for uid, info in members.items():
             if name_lower in info.get("name", "").lower():
-                return {"id": int(uid), **info}
+                return self._member_payload(str(uid), info)
             if name_lower in info.get("login", "").lower():
-                return {"id": int(uid), **info}
+                return self._member_payload(str(uid), info)
 
         return None
 
@@ -406,12 +416,14 @@ class Storage:
                 if not matched:
                     continue
 
-                # 按 yuque_id 去重（可能同一文档在多个位置）
+                # 按 team_id + yuque_id 去重，允许不同团队存在相同语雀文档 ID。
                 doc_id = metadata.get("id")
-                if doc_id and doc_id in seen_ids:
+                team_id = str(metadata.get("team_id") or "default")
+                dedup_key = (team_id, str(doc_id))
+                if doc_id and dedup_key in seen_ids:
                     continue
                 if doc_id:
-                    seen_ids.add(doc_id)
+                    seen_ids.add(dedup_key)
 
                 docs.append({
                     "id": doc_id,
@@ -420,6 +432,7 @@ class Storage:
                     "description": metadata.get("description", ""),
                     "author": metadata.get("author", ""),
                     "book_name": metadata.get("book_name", ""),
+                    "team_id": team_id,
                     "content": body,
                     "creator_id": metadata.get("creator_id"),
                 })

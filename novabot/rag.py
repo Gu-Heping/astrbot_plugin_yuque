@@ -3,14 +3,13 @@ NovaBot RAG 检索模块
 基于 LangChain + ChromaDB
 """
 
-import asyncio
 import gc
 import hashlib
 import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -19,6 +18,8 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 
 from astrbot.api import logger
+
+from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME, scoped_document_id
 
 
 class DashScopeEmbeddings(Embeddings):
@@ -52,8 +53,6 @@ class DashScopeEmbeddings(Embeddings):
 
     async def _aembed(self, texts: List[str]) -> List[List[float]]:
         """异步嵌入请求"""
-        import httpx
-
         valid_texts = [t if t and t.strip() else " " for t in texts]
         logger.debug(f"[RAG] DashScope 请求嵌入: {len(valid_texts)} 个文本")
 
@@ -375,11 +374,17 @@ class RAGEngine:
             documents.append(Document(
                 page_content=content,
                 metadata={
-                    "id": str(doc.get("id", "") or ""),
+                    "id": scoped_document_id(doc.get("team_id", DEFAULT_TEAM_ID), doc.get("id", "") or doc.get("yuque_id", "")),
+                    "yuque_id": str(doc.get("id", "") or doc.get("yuque_id", "") or ""),
                     "title": str(doc.get("title", "") or ""),
                     "slug": str(doc.get("slug", "") or ""),
                     "author": str(doc.get("author", "") or ""),
+                    "team_id": str(doc.get("team_id", "") or DEFAULT_TEAM_ID),
+                    "team_name": str(doc.get("team_name", "") or DEFAULT_TEAM_NAME),
                     "book_name": str(doc.get("book_name", "") or ""),
+                    "file_path": str(doc.get("file_path", "") or ""),
+                    "created_at": str(doc.get("created_at", "") or ""),
+                    "updated_at": str(doc.get("updated_at", "") or ""),
                     "source": f"yuque:{doc.get('repo_namespace', '') or ''}/{doc.get('slug', '') or ''}",
                 }
             ))
@@ -448,22 +453,24 @@ class RAGEngine:
             return False
 
         yuque_id = str(yuque_id)
+        team_id = str(doc.get("team_id") or DEFAULT_TEAM_ID)
 
         # 先删除旧向量
-        self.delete_doc(int(yuque_id))
+        self.delete_doc(yuque_id, team_id=team_id)
 
         # 添加新向量
         indexed = self.index_docs([doc])
         if indexed > 0:
-            logger.info(f"[RAG] 更新向量成功: yuque_id={yuque_id}")
+            logger.info(f"[RAG] 更新向量成功: yuque_id={yuque_id}, team_id={team_id}")
             return True
         return False
 
-    def delete_doc(self, yuque_id: int) -> bool:
+    def delete_doc(self, yuque_id: int | str, team_id: str = DEFAULT_TEAM_ID) -> bool:
         """删除指定文档的向量
 
         Args:
             yuque_id: 语雀文档 ID
+            team_id: 团队 ID。默认团队兼容旧裸 ID，非默认团队使用 team-scoped ID。
 
         Returns:
             是否成功
@@ -471,8 +478,9 @@ class RAGEngine:
         try:
             collection = self.vectorstore._collection
             # 使用 where 条件删除
-            collection.delete(where={"id": str(yuque_id)})
-            logger.info(f"[RAG] 删除向量: yuque_id={yuque_id}")
+            document_id = scoped_document_id(team_id, yuque_id)
+            collection.delete(where={"id": document_id})
+            logger.info(f"[RAG] 删除向量: id={document_id}, yuque_id={yuque_id}, team_id={team_id}")
             return True
         except Exception as e:
             logger.error(f"[RAG] 删除向量失败: {e}")
@@ -552,10 +560,15 @@ class RAGEngine:
                 all_docs.append({
                     "content": str(body),
                     "id": str(metadata.get("id") or ""),
+                    "team_id": str(metadata.get("team_id") or DEFAULT_TEAM_ID),
+                    "team_name": str(metadata.get("team_name") or DEFAULT_TEAM_NAME),
                     "title": str(metadata.get("title") or ""),
                     "slug": str(metadata.get("slug") or ""),
                     "author": str(metadata.get("author") or ""),
                     "book_name": str(metadata.get("book_name") or ""),
+                    "file_path": str(metadata.get("file_path") or md_file.relative_to(docs_path).as_posix()),
+                    "created_at": str(metadata.get("created_at") or ""),
+                    "updated_at": str(metadata.get("updated_at") or ""),
                     "repo_namespace": str(md_file.parent.relative_to(docs_path)),
                     "creator_id": creator_id,  # 创建者 ID
                 })
@@ -599,13 +612,13 @@ class RAGEngine:
             if book_filter:
                 search_kwargs["filter"] = {"book_name": book_filter}
 
-            # 获取更多结果用于去重
-            raw_results = self.vectorstore.similarity_search(query, **search_kwargs)
+            # 获取更多结果用于去重，并尽量保留向量后端的真实相关度。
+            raw_results = self._similarity_search_with_scores(query, search_kwargs)
 
             # 按文档 ID 去重，保留分数最高的
             seen_ids = set()
             unique_results = []
-            for doc in raw_results:
+            for doc, score in raw_results:
                 doc_id = doc.metadata.get("id", "")
                 # 如果没有 ID，回退到 title
                 dedup_key = doc_id if doc_id else doc.metadata.get("title", "")
@@ -620,9 +633,16 @@ class RAGEngine:
                     "title": doc.metadata.get("title", ""),
                     "source": doc.metadata.get("source", ""),
                     "author": doc.metadata.get("author", ""),
+                    "team_id": doc.metadata.get("team_id", ""),
+                    "team_name": doc.metadata.get("team_name", ""),
                     "book_name": doc.metadata.get("book_name", ""),
+                    "file_path": doc.metadata.get("file_path", ""),
+                    "created_at": doc.metadata.get("created_at", ""),
+                    "updated_at": doc.metadata.get("updated_at", ""),
                     "creator_id": doc.metadata.get("creator_id"),  # 创建者 ID
                     "id": doc_id,
+                    "yuque_id": doc.metadata.get("yuque_id", ""),
+                    "score": score,
                 })
 
                 if len(unique_results) >= k:
@@ -636,6 +656,29 @@ class RAGEngine:
         except Exception as e:
             logger.error(f"[RAG] 搜索失败: {e}")
             return []
+
+    def _similarity_search_with_scores(self, query: str, search_kwargs: dict) -> list[tuple[Any, float]]:
+        if hasattr(self.vectorstore, "similarity_search_with_relevance_scores"):
+            try:
+                return [
+                    (doc, max(0.0, min(1.0, float(score))))
+                    for doc, score in self.vectorstore.similarity_search_with_relevance_scores(
+                        query, **search_kwargs
+                    )
+                ]
+            except Exception as e:
+                logger.debug(f"[RAG] relevance score search 不可用，回退 distance score: {e}")
+        if hasattr(self.vectorstore, "similarity_search_with_score"):
+            try:
+                return [
+                    (doc, 1.0 / (1.0 + max(0.0, float(distance))))
+                    for doc, distance in self.vectorstore.similarity_search_with_score(
+                        query, **search_kwargs
+                    )
+                ]
+            except Exception as e:
+                logger.debug(f"[RAG] distance score search 不可用，回退无分数搜索: {e}")
+        return [(doc, 0.0) for doc in self.vectorstore.similarity_search(query, **search_kwargs)]
 
     def _make_cache_key(self, query: str, k: int, book_filter: Optional[str]) -> str:
         """生成缓存键"""
