@@ -188,3 +188,20 @@ def test_hybrid_merge_boosts_dual_method_hit_without_lowering_best_score(tmp_pat
     )
 
     assert merged[0].score >= 0.9
+
+
+def test_keyword_index_does_not_promote_low_coverage_match_to_high_score():
+    chunk = Chunk(
+        chunk_id="c1",
+        document_id="d1",
+        chunk_index=0,
+        content="只有 部署 这个偶然词被命中",
+        content_hash="h",
+    )
+    index = ChunkKeywordIndex()
+    index.build([chunk])
+
+    hits = index.search("部署 认证 缓存 权限", top_k=1)
+
+    assert hits
+    assert hits[0].score < 0.35

@@ -130,7 +130,7 @@ class ChunkKeywordIndex:
             coverage = len(matches.get(chunk_id, set())) / len(terms)
             if coverage < 0.25:
                 continue
-            score = min(1.0, (raw_score / scale) * (1.0 + coverage * 0.2))
+            score = min(1.0, (raw_score / scale) * (coverage ** 1.5) * (1.0 + coverage * 0.2))
             hits.append(
                 KeywordHit(
                     chunk=self._chunks[chunk_id],

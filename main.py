@@ -1829,8 +1829,10 @@ class NovaBotPlugin(Star):
                     return
 
                 yield event.plain_result(f"🔍 正在生成「{kb_name}」新人导航...")
+                guide_info = self.kb_manager.get_kb_info(kb_name)
+                guide_team_id = str(guide_info.get("team_id") or "") if guide_info else ""
                 guide = await self.kb_manager.get_kb_guide(
-                    kb_name, self.context, event, self.token_monitor
+                    kb_name, self.context, event, self.token_monitor, team_id=guide_team_id or None
                 )
                 if not guide:
                     yield event.plain_result(f"❌ 未找到知识库「{kb_name}」")
@@ -1850,7 +1852,11 @@ class NovaBotPlugin(Star):
                     yield event.plain_result("用法: /kb updates <知识库> [天数]")
                     return
 
-                result = self.kb_manager.format_kb_updates(kb_name, days)
+                update_info = self.kb_manager.get_kb_info(kb_name)
+                update_team_id = str(update_info.get("team_id") or "") if update_info else ""
+                result = self.kb_manager.format_kb_updates(
+                    kb_name, days, team_id=update_team_id or None
+                )
                 yield event.plain_result(result)
                 return
 
@@ -1898,10 +1904,11 @@ class NovaBotPlugin(Star):
 
             # 找到匹配的知识库，提取查询部分
             query = content[len(matched_name):].strip()
+            matched_team_id = str(matched_kb.get("team_id") or "default")
 
             if not query:
                 # 只有知识库名，显示概览
-                info = self.kb_manager.get_kb_info(matched_name)
+                info = self.kb_manager.get_kb_info(matched_name, team_id=matched_team_id)
                 if not info:
                     yield event.plain_result(f"❌ 未找到知识库「{matched_name}」")
                     return
@@ -1910,9 +1917,9 @@ class NovaBotPlugin(Star):
                 return
 
             # 有查询内容，执行范围检索
-            logger.info(f"[KB] 知识库: {matched_name}, 查询: {query}")
+            logger.info(f"[KB] 知识库: {matched_name}, team_id={matched_team_id}, 查询: {query}")
 
-            results = self.kb_manager.search_in_kb(matched_name, query, k=5)
+            results = self.kb_manager.search_in_kb(matched_name, query, k=5, team_id=matched_team_id)
             if not results:
                 yield event.plain_result(f"在「{matched_name}」中未找到相关内容")
                 return

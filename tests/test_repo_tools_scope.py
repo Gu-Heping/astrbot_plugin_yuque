@@ -214,6 +214,24 @@ async def test_list_repo_docs_uses_team_id_for_same_named_repo(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_repo_docs_cache_requires_team_for_duplicate_repo(tmp_path):
+    docs_dir = tmp_path / "docs"
+    data_dir = tmp_path / "data"
+    docs_dir.mkdir()
+    data_dir.mkdir()
+    _write_repo_cache(docs_dir, data_dir)
+    _write_repo_docs(docs_dir)
+
+    tool = ListRepoDocsTool(plugin=_Plugin(docs_dir, data_dir))
+
+    text = await tool.run(None, repo_name="工程")
+
+    assert "找到多个知识库「工程」，请指定 team_id" in text
+    assert "team_id=default" in text
+    assert "team_id=other" in text
+
+
+@pytest.mark.asyncio
 async def test_list_repo_docs_filesystem_fallback_requires_team_for_duplicate_repo(tmp_path):
     docs_dir = tmp_path / "docs"
     data_dir = tmp_path / "data"

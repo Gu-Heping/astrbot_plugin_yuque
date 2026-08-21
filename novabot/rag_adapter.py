@@ -26,7 +26,7 @@ class RagVectorSearchAdapter:
         raw_results = await asyncio.to_thread(
             self.rag.search,
             query,
-            max(top_k * 3, 10),
+            top_k,
             book_filter,
             False,
         )

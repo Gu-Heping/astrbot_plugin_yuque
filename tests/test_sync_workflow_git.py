@@ -64,6 +64,8 @@ class _Storage:
         self.state = dict(state)
 
     def load_members(self):
+        if hasattr(self, "members"):
+            return dict(self.members)
         return {"1": {"name": "Alice"}}
 
     def save_members(self, members):
@@ -324,6 +326,32 @@ async def test_sync_team_members_merges_non_default_team_members():
         "login": "other-alice",
         "team_id": "other",
     }
+
+
+@pytest.mark.asyncio
+async def test_sync_team_members_removes_departed_members_for_selected_team():
+    storage = _Storage({})
+    storage.members = {
+        "1": {"name": "Default Alice"},
+        "other:1": {"name": "Old Other Alice", "team_id": "other"},
+        "other:2": {"name": "Departed", "team_id": "other"},
+        "research:3": {"name": "Research Bob", "team_id": "research"},
+    }
+    client = _MemberClient(
+        {"type": "Group", "id": 7},
+        [{"user": {"id": 1, "name": "New Other Alice", "login": "alice"}}],
+    )
+
+    await sync_team_members(
+        client=client,
+        storage=storage,
+        team=Team(team_id="other", name="Other", yuque_token="token"),
+    )
+
+    assert storage.members["other:1"]["name"] == "New Other Alice"
+    assert "other:2" not in storage.members
+    assert storage.members["research:3"]["name"] == "Research Bob"
+    assert storage.members["1"]["name"] == "Default Alice"
 
 
 @pytest.mark.asyncio

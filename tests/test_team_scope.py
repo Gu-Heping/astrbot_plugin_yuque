@@ -202,12 +202,16 @@ def test_team_registry_rejects_unsafe_team_id():
         {
             "yuque_teams": [
                 {"team_id": "../archive", "name": "Bad", "yuque_token": "token"},
+                {"team_id": ".git", "name": "Git", "yuque_token": "token"},
+                {"team_id": ".hidden", "name": "Hidden", "yuque_token": "token"},
                 {"team_id": "safe-team", "name": "Safe", "yuque_token": "token"},
             ],
         }
     )
 
     assert registry.get("../archive") is None
+    assert registry.get(".git") is None
+    assert registry.get(".hidden") is None
     assert registry.get("safe-team").name == "Safe"
 
 

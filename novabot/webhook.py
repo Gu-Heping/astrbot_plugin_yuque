@@ -74,6 +74,11 @@ def _client_callback_mode(callback: Callable[..., YuqueClient]) -> str:
         if parameter.kind is inspect.Parameter.VAR_KEYWORD:
             return "keyword"
         if parameter.name == "team_id":
+            if parameter.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.VAR_POSITIONAL,
+            ):
+                return "positional"
             return "keyword"
     return "none"
 
@@ -158,6 +163,8 @@ class WebhookHandler:
     def _get_client_for_team(self, team_id: str = DEFAULT_TEAM_ID) -> YuqueClient:
         if self._get_client_call_mode == "keyword":
             return self.get_client(team_id=team_id)
+        if self._get_client_call_mode == "positional":
+            return self.get_client(team_id)
         return self.get_client()
 
     def _match_editor_name(self, detail: dict) -> Optional[str]:

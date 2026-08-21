@@ -213,7 +213,13 @@ class KnowledgeBaseManager:
 
         return tree
 
-    def search_in_kb(self, book_name: str, query: str, k: int = 5) -> list[dict]:
+    def search_in_kb(
+        self,
+        book_name: str,
+        query: str,
+        k: int = 5,
+        team_id: str | None = None,
+    ) -> list[dict]:
         """在指定知识库范围内检索
 
         Args:
@@ -227,7 +233,10 @@ class KnowledgeBaseManager:
         if not self.rag:
             return []
 
-        return self.rag.search(query, k=k, book_filter=book_name)
+        matched = self._match_book(book_name, team_id=team_id)
+        if not matched:
+            return []
+        return self.rag.search(query, k=k, book_filter=matched.get("book_name") or book_name)
 
     def get_doc_content(self, book_name: str, title: str, team_id: str | None = None) -> Optional[dict]:
         """获取文档完整内容

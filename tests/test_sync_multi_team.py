@@ -519,3 +519,36 @@ async def test_sync_rebuilds_only_current_team_doc_index(tmp_path):
     refreshed = DocIndex(str(tmp_path / "doc_index.db"))
     assert [doc["title"] for doc in refreshed.search(team_id="default")] == ["默认团队文档"]
     assert [doc["title"] for doc in refreshed.search(team_id="other")] == ["其他团队文档"]
+
+
+@pytest.mark.asyncio
+async def test_targeted_sync_preserves_unselected_team_status(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    storage = _FakeStorage(docs_dir)
+    storage.state = {
+        "repos_count": 2,
+        "docs_count": 2,
+        "teams": {
+            "default": {"team_name": "NOVA", "repos_count": 1, "docs_count": 1},
+            "other": {"team_name": "Other", "repos_count": 1, "docs_count": 1},
+        },
+    }
+
+    await run_multi_team_sync(
+        teams=[Team(team_id="other", name="Other", yuque_token="token")],
+        storage=storage,
+        docs_dir=docs_dir,
+        members={"7": {"name": "Alice"}},
+        client_factory=lambda team: _FakeYuqueClient(
+            user_id=2,
+            repo_name="工程",
+            namespace="other/eng",
+            doc_id=202,
+            title="其他团队新文档",
+        ),
+    )
+
+    assert set(storage.state["teams"]) == {"default", "other"}
+    assert storage.state["teams"]["default"]["docs_count"] == 1
+    assert storage.state["teams"]["other"]["docs_count"] == 1
+    assert storage.state["docs_count"] == 2

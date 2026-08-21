@@ -252,12 +252,21 @@ def _save_team_progress(storage, team: Team, current: int, total: int) -> None:
 
 
 def _save_finish_state(storage, total_result: dict, team_states: dict[str, dict]) -> None:
+    previous = storage.load_sync_state()
+    previous_teams = dict(previous.get("teams") or {})
+    merged_team_states = {**previous_teams, **team_states}
+    if len(team_states) < len(merged_team_states):
+        repos_count = sum(int(state.get("repos_count", 0) or 0) for state in merged_team_states.values())
+        docs_count = sum(int(state.get("docs_count", 0) or 0) for state in merged_team_states.values())
+    else:
+        repos_count = total_result.get("repos_count", 0)
+        docs_count = total_result.get("docs", 0)
     state = {
         "last_sync": datetime.now(timezone.utc).isoformat(),
-        "repos_count": total_result.get("repos_count", 0),
-        "docs_count": total_result.get("docs", 0),
+        "repos_count": repos_count,
+        "docs_count": docs_count,
         "token_type": total_result.get("token_type", "未知"),
-        "teams": team_states,
+        "teams": merged_team_states,
         "in_progress": False,
         "progress": None,
         "team_progress": None,

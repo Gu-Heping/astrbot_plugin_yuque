@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import chromadb
 from chromadb.config import Settings
@@ -612,13 +612,13 @@ class RAGEngine:
             if book_filter:
                 search_kwargs["filter"] = {"book_name": book_filter}
 
-            # 获取更多结果用于去重
-            raw_results = self.vectorstore.similarity_search(query, **search_kwargs)
+            # 获取更多结果用于去重，并尽量保留向量后端的真实相关度。
+            raw_results = self._similarity_search_with_scores(query, search_kwargs)
 
             # 按文档 ID 去重，保留分数最高的
             seen_ids = set()
             unique_results = []
-            for doc in raw_results:
+            for doc, score in raw_results:
                 doc_id = doc.metadata.get("id", "")
                 # 如果没有 ID，回退到 title
                 dedup_key = doc_id if doc_id else doc.metadata.get("title", "")
@@ -642,6 +642,7 @@ class RAGEngine:
                     "creator_id": doc.metadata.get("creator_id"),  # 创建者 ID
                     "id": doc_id,
                     "yuque_id": doc.metadata.get("yuque_id", ""),
+                    "score": score,
                 })
 
                 if len(unique_results) >= k:
@@ -655,6 +656,29 @@ class RAGEngine:
         except Exception as e:
             logger.error(f"[RAG] 搜索失败: {e}")
             return []
+
+    def _similarity_search_with_scores(self, query: str, search_kwargs: dict) -> list[tuple[Any, float]]:
+        if hasattr(self.vectorstore, "similarity_search_with_relevance_scores"):
+            try:
+                return [
+                    (doc, max(0.0, min(1.0, float(score))))
+                    for doc, score in self.vectorstore.similarity_search_with_relevance_scores(
+                        query, **search_kwargs
+                    )
+                ]
+            except Exception as e:
+                logger.debug(f"[RAG] relevance score search 不可用，回退 distance score: {e}")
+        if hasattr(self.vectorstore, "similarity_search_with_score"):
+            try:
+                return [
+                    (doc, 1.0 / (1.0 + max(0.0, float(distance))))
+                    for doc, distance in self.vectorstore.similarity_search_with_score(
+                        query, **search_kwargs
+                    )
+                ]
+            except Exception as e:
+                logger.debug(f"[RAG] distance score search 不可用，回退无分数搜索: {e}")
+        return [(doc, 0.0) for doc in self.vectorstore.similarity_search(query, **search_kwargs)]
 
     def _make_cache_key(self, query: str, k: int, book_filter: Optional[str]) -> str:
         """生成缓存键"""

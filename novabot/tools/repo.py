@@ -281,6 +281,7 @@ class ListRepoDocsTool(BaseTool):
         if repos_file.exists():
             try:
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
+                cache_matches = []
                 for repo in repos:
                     repo_team_id = str(repo.get("team_id") or "default")
                     if team_id and repo_team_id != team_id:
@@ -288,9 +289,13 @@ class ListRepoDocsTool(BaseTool):
                     name = repo.get("name", "")
                     ns = repo.get("namespace", "")
                     if repo_name.lower() in name.lower() or repo_name.lower() in ns.lower():
-                        matched_repo = repo
-                        matched_dir = docs_dir / self._repo_dir_for_repo(repo)
-                        break
+                        cache_matches.append(repo)
+                if len(cache_matches) > 1 and not team_id:
+                    choices = [_repo_scope_label(r) for r in cache_matches[:10]]
+                    return f"找到多个知识库「{repo_name}」，请指定 team_id:\n" + "\n".join(choices)
+                if cache_matches:
+                    matched_repo = cache_matches[0]
+                    matched_dir = docs_dir / self._repo_dir_for_repo(matched_repo)
             except (json.JSONDecodeError, OSError) as e:
                 logger.warning(f"读取知识库列表失败: {e}")
 

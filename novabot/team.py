@@ -17,6 +17,13 @@ DEFAULT_YUQUE_BASE_URL = "https://www.yuque.com/api/v2"
 
 
 _TEAM_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+_RESERVED_TEAM_IDS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".yuque-id-to-path.json",
+    ".repos.json",
+}
 
 
 def is_safe_team_id(team_id: str) -> bool:
@@ -24,6 +31,8 @@ def is_safe_team_id(team_id: str) -> bool:
 
     value = str(team_id or "").strip()
     if not value or value in {".", ".."} or ".." in value:
+        return False
+    if value.casefold() in _RESERVED_TEAM_IDS or value.startswith("."):
         return False
     if "/" in value or "\\" in value:
         return False

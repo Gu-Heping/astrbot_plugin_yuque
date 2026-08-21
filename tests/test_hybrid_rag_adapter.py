@@ -93,6 +93,7 @@ async def test_hybrid_search_merges_keyword_and_semantic_methods(tmp_path):
     assert results[0].keyword_score > 0
     assert results[0].vector_score > 0
     assert results[0].reliable is True
+    assert rag.calls[0][1] == 20
     assert rag.calls[0][3] is False
 
 

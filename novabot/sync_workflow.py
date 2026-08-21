@@ -97,6 +97,17 @@ async def sync_team_members(*, client, storage, team: Team | None = None) -> str
         return "⚠️ 未获取到成员，请检查 Token 权限"
 
     existing = dict(storage.load_members())
+    if team_id == DEFAULT_TEAM_ID:
+        existing = {
+            key: info for key, info in existing.items()
+            if ":" in str(key) or dict(info).get("team_id")
+        }
+    else:
+        prefix = f"{team_id}:"
+        existing = {
+            key: info for key, info in existing.items()
+            if not str(key).startswith(prefix)
+        }
     for uid, info in members.items():
         scoped_key = uid if team_id == DEFAULT_TEAM_ID else f"{team_id}:{uid}"
         existing[scoped_key] = info

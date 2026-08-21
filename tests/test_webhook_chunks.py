@@ -235,6 +235,25 @@ def test_webhook_get_client_for_team_supports_keyword_only_callback(tmp_path):
     assert calls == ["other"]
 
 
+def test_webhook_get_client_for_team_supports_positional_only_callback(tmp_path):
+    calls = []
+
+    def get_client(team_id, /):
+        calls.append(team_id)
+        return team_id
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    assert handler._get_client_for_team("other") == "other"
+    assert calls == ["other"]
+
+
 def test_webhook_get_client_for_team_supports_kwargs_callback(tmp_path):
     calls = []
 
