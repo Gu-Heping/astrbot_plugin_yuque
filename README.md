@@ -39,7 +39,7 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 |--------|------|
 | `yuque_token` | 默认语雀团队 Token（单团队部署必需；多团队部署可作为默认团队） |
 | `yuque_base_url` | 默认语雀 API 地址，默认 `https://www.yuque.com/api/v2`；也可填写 `https://nova.yuque.com/` 这类 Web 地址，系统会规范化为 `/api/v2` |
-| `yuque_teams` | 可选，多语雀团队 JSON 数组；留空时沿用 `yuque_token` 单团队模式；支持 token-first 自动发现 |
+| `yuque_teams` | 可选，多语雀团队 Token 列表；留空时沿用 `yuque_token` 单团队模式；支持 token-first 自动发现 |
 | `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
@@ -50,12 +50,12 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 
 示例：
 
-最小配置只需要提供各团队 token，NovaBot 会在启动或同步前调用语雀 API 自动补齐 Team：
+最小配置只需要在 AstrBot 配置面板的 `yuque_teams` 列表里逐项填写各团队 token，NovaBot 会在启动或同步前调用语雀 API 自动补齐 Team：
 
 ```json
 [
-  { "yuque_token": "token-a" },
-  { "yuque_token": "token-b" }
+  "token-a",
+  "token-b"
 ]
 ```
 
@@ -99,7 +99,7 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 兼容说明：
 
 - 未配置 `yuque_teams` 时，NovaBot 继续使用原来的 `yuque_token` 和原始文档目录。
-- `yuque_teams` 支持完整对象、token-only 对象和字符串 token 简写；缺少 `team_id`/`name` 时，系统用 `get_user()` 自动发现并生成 `group_<id>` 或 `user_<id>`。
+- `yuque_teams` 推荐使用列表项字符串 token；也兼容完整对象、token-only 对象、JSON 对象字符串和旧版整体 JSON 字符串；缺少 `team_id`/`name` 时，系统用 `get_user()` 自动发现并生成 `group_<id>` 或 `user_<id>`。
 - 自动发现结果只在内存中使用，不会写回 AstrBot 配置；如两个 token 发现出同一个团队，只保留第一项并记录重复配置错误。
 - 默认团队保持旧文档 ID 与目录布局；非默认团队写入 `yuque_docs/<team_id>/<知识库名>/...`。
 - 文档身份按 `team_id + yuque_id` 区分，同一个语雀文档 ID 可在不同团队中共存。
@@ -245,7 +245,7 @@ NovaBot: 好嘞～以后会更活泼地和你聊天！
 
 ```
 1. 管理员配置 yuque_token + embedding_api_key
-   - 多团队部署时，额外配置 yuque_teams
+   - 多团队部署时，在 yuque_teams 列表中逐项填写团队 token
 2. 管理员: /sync members [team_id]
 3. 管理员: /sync 或 /sync <team_id>
 4. 用户: /bind <用户名>

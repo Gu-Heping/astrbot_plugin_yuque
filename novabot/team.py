@@ -77,6 +77,45 @@ def _as_bool(value: Any, default: bool = True) -> bool:
     return default
 
 
+def _team_entries_from_raw(raw: Any) -> list[Any]:
+    """Normalize supported yuque_teams config shapes into entry items."""
+
+    if not raw:
+        return []
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return []
+        try:
+            raw = json.loads(stripped)
+        except json.JSONDecodeError:
+            return [stripped]
+    if isinstance(raw, dict):
+        raw = raw.get("teams", [])
+    if isinstance(raw, list):
+        return list(raw)
+    return []
+
+
+def _normalize_team_entry(item: Any) -> dict[str, Any] | None:
+    """Normalize one yuque_teams item into a mapping."""
+
+    if isinstance(item, str):
+        stripped = item.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                item = json.loads(stripped)
+            except json.JSONDecodeError:
+                pass
+        if isinstance(item, str):
+            return {"yuque_token": stripped}
+    if isinstance(item, dict):
+        return item
+    return None
+
+
 class TeamRegistry:
     """Resolve team configuration without forcing a new config format."""
 
@@ -98,62 +137,52 @@ class TeamRegistry:
         raw = self._get("yuque_teams", "")
         has_explicit_teams = bool(raw)
         teams: dict[str, Team] = {}
-        if raw:
-            if isinstance(raw, str):
-                try:
-                    raw = json.loads(raw)
-                except json.JSONDecodeError:
-                    raw = []
-            if isinstance(raw, dict):
-                raw = raw.get("teams", [])
-            if isinstance(raw, list):
-                for item in raw:
-                    if isinstance(item, str):
-                        item = {"yuque_token": item}
-                    if not isinstance(item, dict):
-                        continue
-                    team_id = str(item.get("team_id") or item.get("id") or "").strip()
-                    token = str(item.get("yuque_token") or item.get("token") or "")
-                    name = str(item.get("name") or "").strip()
-                    base_url = normalize_yuque_base_url(
-                        item.get("yuque_base_url"),
-                        self._get("yuque_base_url", DEFAULT_YUQUE_BASE_URL),
-                    )
-                    enabled = _as_bool(item.get("enabled"), True)
-                    description = str(item.get("description") or "")
-                    if not team_id:
-                        if token:
-                            self._pending_discovery.append(
-                                PendingTeamDiscovery(
-                                    token=token,
-                                    yuque_base_url=base_url,
-                                    description=description,
-                                    enabled=enabled,
-                                    explicit_name=name,
-                                )
-                            )
-                        continue
-                    if not is_safe_team_id(team_id):
-                        logger.error(f"[TeamRegistry] 忽略非法 team_id: {team_id}")
-                        continue
-                    if token and not name:
-                        self._pending_discovery.append(
-                            PendingTeamDiscovery(
-                                token=token,
-                                yuque_base_url=base_url,
-                                description=description,
-                                enabled=enabled,
-                                explicit_team_id=team_id,
-                            )
+        for raw_item in _team_entries_from_raw(raw):
+            item = _normalize_team_entry(raw_item)
+            if item is None:
+                continue
+            team_id = str(item.get("team_id") or item.get("id") or "").strip()
+            token = str(item.get("yuque_token") or item.get("token") or "")
+            name = str(item.get("name") or "").strip()
+            base_url = normalize_yuque_base_url(
+                item.get("yuque_base_url"),
+                self._get("yuque_base_url", DEFAULT_YUQUE_BASE_URL),
+            )
+            enabled = _as_bool(item.get("enabled"), True)
+            description = str(item.get("description") or "")
+            if not team_id:
+                if token:
+                    self._pending_discovery.append(
+                        PendingTeamDiscovery(
+                            token=token,
+                            yuque_base_url=base_url,
+                            description=description,
+                            enabled=enabled,
+                            explicit_name=name,
                         )
-                    teams[team_id] = Team(
-                        team_id=team_id,
-                        name=name or team_id,
-                        description=description,
-                        yuque_token=token,
-                        yuque_base_url=base_url,
-                        enabled=enabled,
                     )
+                continue
+            if not is_safe_team_id(team_id):
+                logger.error(f"[TeamRegistry] 忽略非法 team_id: {team_id}")
+                continue
+            if token and not name:
+                self._pending_discovery.append(
+                    PendingTeamDiscovery(
+                        token=token,
+                        yuque_base_url=base_url,
+                        description=description,
+                        enabled=enabled,
+                        explicit_team_id=team_id,
+                    )
+                )
+            teams[team_id] = Team(
+                team_id=team_id,
+                name=name or team_id,
+                description=description,
+                yuque_token=token,
+                yuque_base_url=base_url,
+                enabled=enabled,
+            )
 
         if DEFAULT_TEAM_ID not in teams:
             legacy_token = str(self._get("yuque_token", ""))
