@@ -45,6 +45,11 @@ def test_group_scope_allows_private_and_disabled_whitelist():
         allowed_group_ids=frozenset(),
     )
     assert is_group_chat_allowed(
+        _Event("", group=True),
+        whitelist_enabled=False,
+        allowed_group_ids=frozenset(),
+    )
+    assert is_group_chat_allowed(
         _Event(None),
         whitelist_enabled=True,
         allowed_group_ids=frozenset(),
