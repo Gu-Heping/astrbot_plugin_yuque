@@ -50,6 +50,12 @@ from .novabot.chat_scope import (
     normalize_group_ids,
     suppress_default_llm,
 )
+from .novabot.reply_formatting import markdown_to_plaintext
+from .novabot.table_renderer import (
+    clean_table_images,
+    ensure_cjk_font,
+    render_tables_as_images,
+)
 from .novabot.help_text import format_help_text
 from .novabot.rag_commands import RagCommandContext, handle_rag_command
 from .novabot.card_commands import generate_card_command, validate_card_request
@@ -150,6 +156,18 @@ class NovaBotPlugin(Star):
         self.enable_group_whitelist = config.get("enable_group_whitelist", False)
         self.group_whitelist = normalize_group_ids(config.get("group_whitelist", ""))
         self.group_reply_mode = config.get("group_reply_mode", "trigger")
+        self.render_tables_as_images = config.get("render_tables_as_images", True)
+        self.table_font_path = str(config.get("table_font_path", "") or "")
+        self.auto_download_table_font = config.get("auto_download_table_font", True)
+        try:
+            self.table_font_download_timeout = int(config.get("table_font_download_timeout", 30))
+        except (TypeError, ValueError):
+            self.table_font_download_timeout = 30
+        if not 5 <= self.table_font_download_timeout <= 300:
+            logger.warning(
+                "[Config] table_font_download_timeout 超出范围，回退为 30 秒"
+            )
+            self.table_font_download_timeout = 30
         if self.group_reply_mode not in ("trigger", "smart"):
             logger.warning(
                 f"[Config] group_reply_mode 无效值 {self.group_reply_mode!r}，回退为 trigger"
@@ -164,6 +182,8 @@ class NovaBotPlugin(Star):
         # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
         # get_astrbot_data_path() 返回 str，需要转换为 Path
         self.data_dir = PathlibPath(get_astrbot_data_path()) / "plugin_data" / self.name
+        self._table_image_dir = self.data_dir / "table_images"
+        self._resolved_table_font_path: Optional[str] = None
 
         # 组件
         self.storage = Storage(data_dir=str(self.data_dir))
@@ -473,7 +493,53 @@ class NovaBotPlugin(Star):
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot 初始化完成后启动 Webhook 服务（备用触发）"""
+        await self._initialize_reply_rendering()
         await self._start_webhook_service()
+
+    async def _initialize_reply_rendering(self):
+        """Prepare optional Markdown table rendering resources."""
+        clean_table_images(self._table_image_dir)
+        if not self.render_tables_as_images:
+            return
+        try:
+            self._resolved_table_font_path = await ensure_cjk_font(
+                self.data_dir,
+                self.table_font_path or None,
+                self.auto_download_table_font,
+                download_timeout=self.table_font_download_timeout,
+            )
+        except Exception as e:
+            logger.warning(f"[Reply] 表格图片字体初始化失败，回退为纯文本: {e}")
+            self._resolved_table_font_path = None
+
+    def _plain_result(self, event: AstrMessageEvent, text: str):
+        """Return a plain reply with Markdown markers removed."""
+        return event.plain_result(markdown_to_plaintext(text))
+
+    def _rich_result(self, event: AstrMessageEvent, text: str):
+        """Return plain text or a text+image chain for Markdown table replies."""
+        if not self.render_tables_as_images:
+            return self._plain_result(event, text)
+
+        font_path = self.table_font_path or self._resolved_table_font_path
+        segments = render_tables_as_images(text, self._table_image_dir, font_path=font_path)
+        return self._build_chain_result(event, segments)
+
+    def _build_chain_result(self, event: AstrMessageEvent, segments: list[tuple[str, str]]):
+        """Build an AstrBot message result from text/image segments."""
+        import astrbot.api.message_components as comp
+
+        chain: list[object] = []
+        for seg_type, content in segments:
+            if seg_type == "text" and content.strip():
+                chain.append(comp.Plain(content))
+            elif seg_type == "image":
+                chain.append(comp.Image.fromFileSystem(content))
+        if not chain:
+            return event.plain_result("")
+        if len(chain) == 1 and isinstance(chain[0], comp.Plain):
+            return event.plain_result(chain[0].text)
+        return event.chain_result(chain)
 
     async def terminate(self):
         """插件卸载时的清理"""
@@ -710,7 +776,7 @@ class NovaBotPlugin(Star):
         logger.info(f"[on_message] 处理消息 ({trigger}): {query[:30]}...")
         try:
             response = await self.agent.handle_message(event, query)
-            yield event.plain_result(response)
+            yield self._rich_result(event, response)
         except Exception as e:
             logger.error(f"自然语言处理失败: {e}", exc_info=True)
             yield event.plain_result("处理消息时出错，请稍后重试。")
@@ -1014,7 +1080,7 @@ class NovaBotPlugin(Star):
                     provider=provider,
                     docs=docs,
                 )
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
 
             except Exception as e:
                 logger.error(f"领域评估失败: {e}", exc_info=True)
@@ -1040,7 +1106,7 @@ class NovaBotPlugin(Star):
                     provider=provider,
                     docs=docs,
                 )
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
             except Exception as e:
                 logger.error(f"生成画像失败: {e}", exc_info=True)
                 yield event.plain_result(f"❌ 生成失败: {e}")
@@ -1048,7 +1114,7 @@ class NovaBotPlugin(Star):
 
         # 显示画像
         profile = self.storage.load_profile(yuque_id)
-        yield event.plain_result(format_profile_view(binding=binding, profile=profile))
+        yield self._plain_result(event, format_profile_view(binding=binding, profile=profile))
 
     @filter.command("partner")
     async def partner_cmd(self, event: AstrMessageEvent, topic: str = ""):
@@ -1073,7 +1139,7 @@ class NovaBotPlugin(Star):
         try:
             yield event.plain_result("🔍 正在分析推荐...")
             response = await self.agent.handle_message(event, build_partner_agent_query(topic))
-            yield event.plain_result(response)
+            yield self._rich_result(event, response)
 
         except Exception as e:
             logger.error(f"[Partner] Agent 处理失败: {e}", exc_info=True)
@@ -1236,7 +1302,7 @@ class NovaBotPlugin(Star):
                 user_docs=user_docs,
             )
             result = format_learning_path(path)
-            yield event.plain_result(result)
+            yield self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"学习路径生成失败: {e}", exc_info=True)
@@ -1261,7 +1327,7 @@ class NovaBotPlugin(Star):
             # 显示订阅列表
             subs = self.subscription_manager.get_subscriptions(platform_id, umo)
             result = format_subscription_list(subs)
-            yield event.plain_result(result)
+            yield self._rich_result(event, result)
             return
 
         sub_type = sub_type.lower()
@@ -1352,7 +1418,7 @@ class NovaBotPlugin(Star):
                 query=query,
                 user_id=event.get_sender_id(),
             ):
-                yield event.plain_result(message)
+                yield self._rich_result(event, message)
         except Exception as e:
             logger.error(f"RAG 命令失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ RAG 命令失败: {e}")
@@ -1410,7 +1476,7 @@ class NovaBotPlugin(Star):
                 send_file=lambda path: self._try_send_file(event, path),
             )
             for message in messages:
-                yield event.plain_result(message)
+                yield self._rich_result(event, message)
         except Exception as e:
             logger.error(f"生成周报失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 生成周报失败: {e}")
@@ -1466,7 +1532,7 @@ class NovaBotPlugin(Star):
                 target_domain=target_domain,
                 provider=provider,
             )
-            yield event.plain_result(result)
+            yield self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"学习缺口分析失败: {e}", exc_info=True)
@@ -1496,7 +1562,7 @@ class NovaBotPlugin(Star):
                 rag=self.rag,
                 token_monitor=self.token_monitor,
             )
-            yield event.plain_result(result)
+            yield self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"知识卡片生成失败: {e}", exc_info=True)
@@ -1602,7 +1668,7 @@ class NovaBotPlugin(Star):
         try:
             stats = self.token_monitor.get_stats(days=30)
             report = self.token_monitor.format_stats_report(stats)
-            yield event.plain_result(report)
+            yield self._rich_result(event, report)
         except Exception as e:
             logger.error(f"获取 Token 统计失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 获取失败: {e}")
@@ -1718,7 +1784,7 @@ class NovaBotPlugin(Star):
                     return
 
                 result = self.ask_box.format_question_detail(question)
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
                 return
 
             # 回答问题（需绑定语雀）
@@ -1885,7 +1951,7 @@ class NovaBotPlugin(Star):
             if not content:
                 kbs = self.kb_manager.list_kbs()
                 result = self.kb_manager.format_kb_list(kbs)
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
                 return
 
             # 检查是否是 guide 子命令
@@ -1906,7 +1972,7 @@ class NovaBotPlugin(Star):
                     return
 
                 result = self.kb_manager.format_kb_guide(guide)
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
                 return
 
             # 检查是否是 updates 子命令
@@ -1924,7 +1990,7 @@ class NovaBotPlugin(Star):
                 result = self.kb_manager.format_kb_updates(
                     kb_name, days, team_id=update_team_id or None
                 )
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
                 return
 
             # 查找匹配的知识库（支持知识库名包含空格）
@@ -1957,7 +2023,7 @@ class NovaBotPlugin(Star):
                         yield event.plain_result(f"❌ 未找到知识库「{content}」")
                         return
                     result = self.kb_manager.format_kb_info(info)
-                    yield event.plain_result(result)
+                    yield self._rich_result(event, result)
                     return
                 else:
                     book_name = content[:first_space]
@@ -1966,7 +2032,7 @@ class NovaBotPlugin(Star):
                         yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
                         return
                     result = self.kb_manager.format_kb_info(info)
-                    yield event.plain_result(result)
+                    yield self._rich_result(event, result)
                     return
 
             # 找到匹配的知识库，提取查询部分
@@ -1980,7 +2046,7 @@ class NovaBotPlugin(Star):
                     yield event.plain_result(f"❌ 未找到知识库「{matched_name}」")
                     return
                 result = self.kb_manager.format_kb_info(info)
-                yield event.plain_result(result)
+                yield self._rich_result(event, result)
                 return
 
             # 有查询内容，执行范围检索
@@ -2013,7 +2079,7 @@ class NovaBotPlugin(Star):
         """帮助信息"""
         if not self._is_event_scope_allowed(event):
             return
-        yield event.plain_result(format_help_text())
+        yield self._plain_result(event, format_help_text())
 
     @filter.command("memory")
     async def memory_cmd(self, event: AstrMessageEvent, action: str = "", keyword: str = ""):
@@ -2039,23 +2105,23 @@ class NovaBotPlugin(Star):
                 if overview.sessions_for_analysis:
                     provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                     if provider:
-                        yield event.plain_result(overview.text)
+                        yield self._rich_result(event, overview.text)
                         analysis = await analyze_memory_with_llm(
                             provider=provider,
                             user_name=yuque_name,
                             sessions=overview.sessions_for_analysis,
                             token_monitor=self.token_monitor,
                         )
-                        yield event.plain_result(analysis)
+                        yield self._rich_result(event, analysis)
                         return
-                yield event.plain_result(overview.text)
+                yield self._rich_result(event, overview.text)
                 return
 
             action_lower = action.lower()
 
             if action_lower == "recent":
                 sessions = self.memory_manager.get_recent_sessions(user_id, limit=10)
-                yield event.plain_result(format_recent_memory(yuque_name, sessions))
+                yield self._plain_result(event, format_recent_memory(yuque_name, sessions))
                 return
 
             if action_lower == "search":
@@ -2065,15 +2131,15 @@ class NovaBotPlugin(Star):
                     return
 
                 results = self.memory_manager.search_conversations(user_id, search_keyword, limit=10)
-                yield event.plain_result(format_memory_search_results(search_keyword, results))
+                yield self._plain_result(event, format_memory_search_results(search_keyword, results))
                 return
 
             if action_lower == "clear":
                 success = self.memory_manager.clear_user_memory(user_id)
-                yield event.plain_result(format_memory_clear_result(yuque_name, success))
+                yield self._plain_result(event, format_memory_clear_result(yuque_name, success))
                 return
 
-            yield event.plain_result(format_unknown_memory_action(action))
+            yield self._plain_result(event, format_unknown_memory_action(action))
 
         except Exception as e:
             logger.error(f"[Memory] 操作失败: {e}", exc_info=True)
@@ -2102,18 +2168,18 @@ class NovaBotPlugin(Star):
             if not content:
                 overview = build_progress_overview(self.memory_manager, user_id, yuque_name)
                 if not overview.progress_for_analysis:
-                    yield event.plain_result(overview.text)
+                    yield self._rich_result(event, overview.text)
                     return
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if provider:
-                    yield event.plain_result(overview.text)
+                    yield self._rich_result(event, overview.text)
                     analysis = await analyze_progress_with_llm(
                         provider=provider,
                         user_name=yuque_name,
                         progress=overview.progress_for_analysis,
                         token_monitor=self.token_monitor,
                     )
-                    yield event.plain_result(analysis)
+                    yield self._rich_result(event, analysis)
                 else:
                     yield event.plain_result(
                         format_progress_overview_without_analysis(
@@ -2146,7 +2212,7 @@ class NovaBotPlugin(Star):
 
             domain = content.strip()
             progress = self.memory_manager.get_learning_progress(user_id, domain)
-            yield event.plain_result(format_domain_progress(yuque_name, domain, progress))
+            yield self._plain_result(event, format_domain_progress(yuque_name, domain, progress))
 
         except Exception as e:
             logger.error(f"[Progress] 操作失败: {e}", exc_info=True)
@@ -2174,7 +2240,7 @@ class NovaBotPlugin(Star):
         try:
             if not content:
                 questions = self.memory_manager.get_unresolved_questions(user_id)
-                yield event.plain_result(format_unresolved_questions(yuque_name, questions))
+                yield self._plain_result(event, format_unresolved_questions(yuque_name, questions))
                 return
 
             parts = content.split(maxsplit=1)
@@ -2183,13 +2249,13 @@ class NovaBotPlugin(Star):
             if action == "all":
                 questions = self.memory_manager.get_all_questions(user_id)
                 stats = self.memory_manager.get_question_stats(user_id)
-                yield event.plain_result(format_all_questions(yuque_name, questions, stats))
+                yield self._plain_result(event, format_all_questions(yuque_name, questions, stats))
                 return
 
             if action == "frequent":
                 questions = self.memory_manager.get_frequent_questions(user_id, min_ask_count=2)
                 related_docs = find_related_docs_for_questions(self._get_doc_index(), questions)
-                yield event.plain_result(format_frequent_questions(yuque_name, questions, related_docs))
+                yield self._plain_result(event, format_frequent_questions(yuque_name, questions, related_docs))
                 return
 
             if action == "resolve":
@@ -2201,10 +2267,10 @@ class NovaBotPlugin(Star):
                     yield event.plain_result(questions_usage_for_resolve())
                     return
                 success = self.memory_manager.resolve_question(user_id, qid, resolution)
-                yield event.plain_result(format_resolve_question_result(qid, success))
+                yield self._plain_result(event, format_resolve_question_result(qid, success))
                 return
 
-            yield event.plain_result(format_unknown_questions_action(action))
+            yield self._plain_result(event, format_unknown_questions_action(action))
 
         except Exception as e:
             logger.error(f"[Questions] 操作失败: {e}", exc_info=True)
@@ -2247,7 +2313,7 @@ class NovaBotPlugin(Star):
                         event,
                         build_trajectory_topic_query(topic),
                     )
-                    yield event.plain_result(response)
+                    yield self._rich_result(event, response)
                 except Exception as e:
                     logger.error(f"[Trajectory] Agent 处理失败: {e}", exc_info=True)
                     results = self.trajectory_manager.search_by_topic(topic, days=30)
@@ -2278,17 +2344,17 @@ class NovaBotPlugin(Star):
             if should_analyze_trajectory(is_self, trajectory):
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if provider:
-                    yield event.plain_result(response + "\n🔍 正在分析活动模式...")
+                    yield self._rich_result(event, response + "\n🔍 正在分析活动模式...")
                     analysis = await analyze_trajectory_with_llm(
                         provider=provider,
                         user_name=target_name,
                         trajectory=trajectory,
                         token_monitor=self.token_monitor,
                     )
-                    yield event.plain_result(analysis)
+                    yield self._rich_result(event, analysis)
                     return
 
-            yield event.plain_result(response)
+            yield self._rich_result(event, response)
 
         except Exception as e:
             logger.error(f"[Trajectory] 查询失败: {e}", exc_info=True)
@@ -2331,7 +2397,7 @@ class NovaBotPlugin(Star):
                         event,
                         build_collab_find_query(topic),
                     )
-                    yield event.plain_result(response)
+                    yield self._rich_result(event, response)
                 except Exception as e:
                     logger.error(f"[Collab] Agent 处理失败: {e}", exc_info=True)
                     potential = self.collaboration_manager.find_potential_collaborators(

@@ -39,15 +39,23 @@ def update_collaboration_network_from_docs(
 
     total_repos = 0
     total_relations = 0
+    batch_contributors: dict[str, list[str]] = {}
     for (repo_team_id, book_name), contributors in repo_contributors.items():
         if len(contributors) < 2:
             continue
 
         repo_key = book_name if repo_team_id == "default" else f"{repo_team_id}/{book_name}"
-        collaboration_manager.add_repo_contributors(repo_key, list(contributors))
+        batch_contributors[repo_key] = list(contributors)
         total_repos += 1
         n = len(contributors)
         total_relations += n * (n - 1) // 2
+
+    if batch_contributors:
+        if hasattr(collaboration_manager, "add_repositories_contributors"):
+            collaboration_manager.add_repositories_contributors(batch_contributors)
+        else:
+            for repo_key, contributors in batch_contributors.items():
+                collaboration_manager.add_repo_contributors(repo_key, contributors)
 
     logger.info(
         f"[Collaboration] 协作网络更新完成: "

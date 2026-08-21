@@ -15,6 +15,7 @@ from .chunk_indexer import rebuild_chunk_index_from_sync
 from .chunk_store import ChunkStore
 from .git_ops import GitOps
 from .models import DEFAULT_TEAM_ID, Team
+from .sync import normalize_group_members
 from .sync_coordinator import run_multi_team_sync, syncable_teams
 
 
@@ -80,18 +81,7 @@ async def sync_team_members(*, client, storage, team: Team | None = None) -> str
     members_raw = await client.get_group_members(group_id)
 
     team_id = (team.team_id if team else DEFAULT_TEAM_ID) or DEFAULT_TEAM_ID
-    members = {}
-    for item in members_raw:
-        user = item.get("user", {})
-        uid = user.get("id") or item.get("user_id")
-        if uid:
-            info = {
-                "name": user.get("name", ""),
-                "login": user.get("login", ""),
-            }
-            if team_id != DEFAULT_TEAM_ID:
-                info["team_id"] = team_id
-            members[str(uid)] = info
+    members = normalize_group_members(members_raw, team_id)
 
     if not members:
         return "⚠️ 未获取到成员，请检查 Token 权限"

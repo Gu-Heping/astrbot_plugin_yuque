@@ -480,12 +480,35 @@ class DocSyncer:
             creator_obj = detail.get("creator") or detail.get("user") or {}
             creator_id = creator_obj.get("id")
 
-        # 3. 从团队成员中查找真实姓名
-        if creator_id and str(creator_id) in self.members:
-            return self.members[str(creator_id)].get("name", "")
+        # 3. 从团队成员中查找真实姓名。多团队下优先使用 scoped key，
+        # 避免账号级显示名或其它团队的同 ID 成员覆盖当前团队姓名。
+        if creator_id:
+            member_name = self._resolve_member_name(str(creator_id))
+            if member_name:
+                return member_name
 
         # 4. 回退：使用语雀返回的名字
         return YuqueClient.author_name_from_detail(detail)
+
+    def _resolve_member_name(self, creator_id: str) -> str:
+        """Resolve creator ID to the current team's member display name."""
+
+        candidate_keys = []
+        if self.team.team_id != DEFAULT_TEAM_ID:
+            candidate_keys.append(f"{self.team.team_id}:{creator_id}")
+        candidate_keys.append(creator_id)
+
+        for key in candidate_keys:
+            info = self.members.get(key)
+            if not isinstance(info, dict):
+                continue
+            name = str(info.get("name") or "").strip()
+            login = str(info.get("login") or "").strip()
+            if name:
+                return name
+            if login:
+                return login
+        return ""
 
     def _resolve_basename(self, repo_name: str, parent_path: str, base: str) -> str:
         """解决文件名冲突"""
@@ -509,6 +532,42 @@ class DocSyncer:
     def _build_markdown(self, detail: Dict, author: str = "") -> str:
         """构建 Markdown 文件"""
         return build_markdown(detail, author)
+
+
+def normalize_group_members(members_raw: list[dict], team_id: str = DEFAULT_TEAM_ID) -> Dict[str, Dict]:
+    """Normalize Yuque group member API rows into NovaBot member records."""
+
+    normalized: Dict[str, Dict] = {}
+    for item in members_raw:
+        user = item.get("user", {})
+        uid = user.get("id") or item.get("user_id")
+        if not uid:
+            continue
+        info = {
+            "name": user.get("name", ""),
+            "login": user.get("login", ""),
+        }
+        if team_id != DEFAULT_TEAM_ID:
+            info["team_id"] = team_id
+        normalized[str(uid)] = info
+    return normalized
+
+
+def merge_members_for_team(
+    existing: Optional[Dict[str, Dict]],
+    team_members: Dict[str, Dict],
+    team_id: str = DEFAULT_TEAM_ID,
+) -> Dict[str, Dict]:
+    """Merge freshly fetched team members for author name resolution."""
+
+    merged = dict(existing or {})
+    for uid, info in team_members.items():
+        if team_id != DEFAULT_TEAM_ID:
+            merged[f"{team_id}:{uid}"] = info
+            merged.setdefault(uid, info)
+        else:
+            merged[uid] = info
+    return merged
 
 
 async def sync_all_repos(
@@ -548,6 +607,19 @@ async def sync_all_repos(
         logger.error("[Sync] 无法获取用户 ID")
         return {"repos_count": 0, "docs": 0, "titles": 0, "errors": 1}
 
+    sync_team = team or Team.default()
+
+    # 获取团队成员名，用团队内姓名覆盖账号级显示名。
+    if is_group:
+        try:
+            members_raw = await client.get_group_members(user_id)
+            fetched_members = normalize_group_members(members_raw, sync_team.team_id)
+            if fetched_members:
+                members = merge_members_for_team(members, fetched_members, sync_team.team_id)
+                logger.info(f"[Sync] 已加载团队成员用于作者归一化: {len(fetched_members)} 人")
+        except Exception as e:
+            logger.warning(f"[Sync] 获取团队成员失败，作者名将回退到已有缓存或语雀账号名: {e}")
+
     # 获取知识库列表
     if is_group:
         repos = await client.get_group_repos(user_id)
@@ -560,7 +632,6 @@ async def sync_all_repos(
     global_index = _read_global_index(output_dir)
 
     # 同步
-    sync_team = team or Team.default()
     syncer = DocSyncer(client, output_dir, members, global_index, sync_team, team_path_prefix)
     repos_info = []
     total_stats = {"docs": 0, "titles": 0, "errors": 0, "removed": 0}
