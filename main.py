@@ -43,6 +43,7 @@ from .novabot.sync_status import format_sync_already_running, format_sync_starte
 from .novabot.rag_adapter import RagVectorSearchAdapter
 from .novabot.team import TeamRegistry, normalize_yuque_base_url
 from .novabot.team_clients import TeamClientManager
+from .novabot.chat_scope import event_group_id, is_group_chat_allowed, normalize_group_ids
 from .novabot.help_text import format_help_text
 from .novabot.rag_commands import RagCommandContext, handle_rag_command
 from .novabot.card_commands import generate_card_command, validate_card_request
@@ -140,12 +141,18 @@ class NovaBotPlugin(Star):
         self.wake_words = [w.strip().lower() for w in wake_words_str.split(",") if w.strip()]
         self.enable_private_chat = config.get("enable_private_chat", True)
         self.enable_group_at = config.get("enable_group_at", True)
+        self.enable_group_whitelist = config.get("enable_group_whitelist", False)
+        self.group_whitelist = normalize_group_ids(config.get("group_whitelist", ""))
         self.group_reply_mode = config.get("group_reply_mode", "trigger")
         if self.group_reply_mode not in ("trigger", "smart"):
             logger.warning(
                 f"[Config] group_reply_mode 无效值 {self.group_reply_mode!r}，回退为 trigger"
             )
             self.group_reply_mode = "trigger"
+        logger.info(
+            f"[Config] 群聊白名单: enabled={self.enable_group_whitelist}, "
+            f"groups={len(self.group_whitelist)}"
+        )
 
         # 获取插件数据目录（AstrBot 标准路径，使用 self.name）
         # self.name 来自 @register 装饰器的第一个参数，需要先调用 super().__init__(context)
@@ -673,6 +680,8 @@ class NovaBotPlugin(Star):
         # 跳过命令消息
         if self._is_command(msg):
             return
+        if not self._is_event_scope_allowed(event):
+            return
 
         # 判断是否应该处理这条消息
         should_handle, query, trigger = self._should_handle_message(event, msg)
@@ -719,6 +728,16 @@ class NovaBotPlugin(Star):
 
         return False
 
+    def _is_event_scope_allowed(self, event: AstrMessageEvent) -> bool:
+        allowed = is_group_chat_allowed(
+            event,
+            whitelist_enabled=self.enable_group_whitelist,
+            allowed_group_ids=self.group_whitelist,
+        )
+        if not allowed:
+            logger.info(f"[Scope] 忽略非白名单群聊: group_id={event_group_id(event)}")
+        return allowed
+
     def _should_handle_message(self, event: AstrMessageEvent, msg: str) -> tuple:
         """判断是否应该处理这条消息
 
@@ -726,7 +745,10 @@ class NovaBotPlugin(Star):
             (should_handle, processed_query, trigger)
             trigger: "at" | "wake" | "smart" | "private" | ""
         """
-        is_group = event.get_group_id() is not None
+        if not self._is_event_scope_allowed(event):
+            return False, "", ""
+
+        is_group = bool(event_group_id(event))
 
         if is_group:
             # 群聊：显式 @ 触发
@@ -800,6 +822,8 @@ class NovaBotPlugin(Star):
         - /sync members [team_id] - 同步团队成员
         - /sync status - 查看同步状态/进度
         """
+        if not self._is_event_scope_allowed(event):
+            return
         requested_sync_team_id = ""
         action_lower = action.lower()
         if action_lower == "team":
@@ -923,6 +947,8 @@ class NovaBotPlugin(Star):
 
         用法: /bind <用户名或 login>
         """
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         yield event.plain_result(
             bind_yuque_account(storage=self.storage, platform_id=platform_id, query=arg)
@@ -931,6 +957,8 @@ class NovaBotPlugin(Star):
     @filter.command("unbind")
     async def unbind_cmd(self, event: AstrMessageEvent):
         """解除绑定"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         yield event.plain_result(unbind_yuque_account(storage=self.storage, platform_id=platform_id))
 
@@ -943,6 +971,8 @@ class NovaBotPlugin(Star):
         - /profile refresh - 使用 AI 深度分析生成画像
         - /profile assess <领域> - 评估某领域的掌握程度
         """
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
 
@@ -1014,6 +1044,8 @@ class NovaBotPlugin(Star):
     @filter.command("partner")
     async def partner_cmd(self, event: AstrMessageEvent, topic: str = ""):
         """伙伴推荐"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
 
@@ -1147,6 +1179,8 @@ class NovaBotPlugin(Star):
         用法:
         - /path <领域> - 生成该领域的学习路径
         """
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
 
@@ -1209,6 +1243,8 @@ class NovaBotPlugin(Star):
         - /subscribe author <作者名> - 订阅作者
         - /subscribe all - 订阅全部更新
         """
+        if not self._is_event_scope_allowed(event):
+            return
         umo = event.unified_msg_origin
         platform_id = event.get_sender_id()
 
@@ -1256,6 +1292,8 @@ class NovaBotPlugin(Star):
         - /unsubscribe <ID> - 取消指定订阅
         - /unsubscribe all - 取消所有订阅
         """
+        if not self._is_event_scope_allowed(event):
+            return
         umo = event.unified_msg_origin
         platform_id = event.get_sender_id()
 
@@ -1290,6 +1328,8 @@ class NovaBotPlugin(Star):
         - /rag search <关键词> - 搜索
         - /rag rebuild - 重建索引
         """
+        if not self._is_event_scope_allowed(event):
+            return
         context = RagCommandContext(
             rag=self.rag,
             docs_dir=self.storage.docs_dir,
@@ -1311,6 +1351,8 @@ class NovaBotPlugin(Star):
     @filter.command("webhook")
     async def webhook_cmd(self, event: AstrMessageEvent):
         """Webhook 服务状态"""
+        if not self._is_event_scope_allowed(event):
+            return
         if not self.config.get("webhook_enabled", False):
             yield event.plain_result(
                 "Webhook 服务未启用\n"
@@ -1341,6 +1383,8 @@ class NovaBotPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def weekly_cmd(self, event: AstrMessageEvent, action: str = ""):
         """生成本周知识周报或导出按周原始数据。"""
+        if not self._is_event_scope_allowed(event):
+            return
         try:
             docs_dir = self.storage.docs_dir
             doc_index = self._get_doc_index()
@@ -1392,6 +1436,8 @@ class NovaBotPlugin(Star):
         例如: /gap 爬虫
         如果不指定领域，会根据用户画像自动推断
         """
+        if not self._is_event_scope_allowed(event):
+            return
         try:
             platform_id = event.get_sender_id()
             provider = self.context.get_using_provider(umo=event.unified_msg_origin)
@@ -1424,6 +1470,8 @@ class NovaBotPlugin(Star):
         用法: /card <主题>
         例如: /card 爬虫
         """
+        if not self._is_event_scope_allowed(event):
+            return
         try:
             # 获取 LLM Provider
             provider = self.context.get_using_provider(umo=event.unified_msg_origin)
@@ -1457,6 +1505,8 @@ class NovaBotPlugin(Star):
         - /persona formality 正式 - 设置正式程度（轻松/正式）
         - /persona reset - 重置为默认设置
         """
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         binding = self.storage.get_binding(platform_id)
 
@@ -1538,6 +1588,8 @@ class NovaBotPlugin(Star):
     @filter.command("tokens")
     async def tokens_cmd(self, event: AstrMessageEvent):
         """查看 Token 消耗统计"""
+        if not self._is_event_scope_allowed(event):
+            return
         try:
             stats = self.token_monitor.get_stats(days=30)
             report = self.token_monitor.format_stats_report(stats)
@@ -1558,6 +1610,8 @@ class NovaBotPlugin(Star):
         - /ask like <问题ID> <回答ID> - 点赞回答
         - /ask mine - 查看我的问题
         """
+        if not self._is_event_scope_allowed(event):
+            return
         # 从消息直接解析（AstrBot 的 args 只传第一个参数）
         msg = event.message_str.strip()
         if msg.startswith("ask "):
@@ -1779,6 +1833,8 @@ class NovaBotPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def askreset_cmd(self, event: AstrMessageEvent):
         """重置知识问答数据（管理员）"""
+        if not self._is_event_scope_allowed(event):
+            return
         success, msg = self.ask_box.clear_all()
         if success:
             yield event.plain_result(f"✅ {msg}\n\n知识问答数据已重置")
@@ -1795,6 +1851,8 @@ class NovaBotPlugin(Star):
         - /kb <知识库> <问题> - 在知识库范围内问答
         - /kb guide <知识库> - 生成新人导航
         """
+        if not self._is_event_scope_allowed(event):
+            return
         if not self.kb_manager:
             yield event.plain_result("❌ 知识库管理器未初始化")
             return
@@ -1944,11 +2002,15 @@ class NovaBotPlugin(Star):
     @filter.command("novabot")
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
+        if not self._is_event_scope_allowed(event):
+            return
         yield event.plain_result(format_help_text())
 
     @filter.command("memory")
     async def memory_cmd(self, event: AstrMessageEvent, action: str = "", keyword: str = ""):
         """记忆管理"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
         if error:
@@ -2011,6 +2073,8 @@ class NovaBotPlugin(Star):
     @filter.command("progress")
     async def progress_cmd(self, event: AstrMessageEvent, args: str = ""):
         """学习进度管理"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
         if error:
@@ -2082,6 +2146,8 @@ class NovaBotPlugin(Star):
     @filter.command("questions")
     async def questions_cmd(self, event: AstrMessageEvent, args: str = ""):
         """问题档案管理"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
         if error:
@@ -2142,6 +2208,8 @@ class NovaBotPlugin(Star):
     @filter.command("trajectory")
     async def trajectory_cmd(self, event: AstrMessageEvent, args: str = ""):
         """成员轨迹查询"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
         if error:
@@ -2224,6 +2292,8 @@ class NovaBotPlugin(Star):
     @filter.command("collab")
     async def collab_cmd(self, event: AstrMessageEvent, args: str = ""):
         """协作网络查询"""
+        if not self._is_event_scope_allowed(event):
+            return
         platform_id = event.get_sender_id()
         memory_user, error = resolve_bound_memory_user(self.storage, platform_id)
         if error:

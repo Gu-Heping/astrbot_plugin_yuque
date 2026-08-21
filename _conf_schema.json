@@ -50,6 +50,18 @@
     "default": true,
     "hint": "开启后，@NovaBot 可触发对话"
   },
+  "enable_group_whitelist": {
+    "description": "启用群聊白名单",
+    "type": "bool",
+    "default": false,
+    "hint": "关闭时不限制群聊；开启后仅响应 group_whitelist 中的群聊，私聊不受影响"
+  },
+  "group_whitelist": {
+    "description": "允许使用 NovaBot 的群 ID 列表",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔，如 123456,789012。仅 enable_group_whitelist=true 时生效；开启但留空表示拒绝所有群聊"
+  },
   "group_reply_mode": {
     "description": "群聊回复模式",
     "type": "string",
