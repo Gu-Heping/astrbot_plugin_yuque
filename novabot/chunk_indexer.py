@@ -38,6 +38,10 @@ def _source_url(base_url: str, namespace: str, slug: str) -> str:
     return f"{site_url}/{namespace}/{slug}"
 
 
+def _repo_base_url(repo_info: dict, fallback_base_url: str) -> str:
+    return str(repo_info.get("yuque_base_url") or fallback_base_url)
+
+
 def _load_repos(docs_dir: Path) -> dict[str, dict]:
     repos_file = docs_dir / ".repos.json"
     if not repos_file.exists():
@@ -142,7 +146,7 @@ def rebuild_chunk_index_from_sync(
                 namespace=namespace,
                 slug=slug,
                 file_path=rel_path,
-                source_url=_source_url(yuque_base_url, namespace, slug),
+                source_url=_source_url(_repo_base_url(repo_info, yuque_base_url), namespace, slug),
                 author=str(fm.get("author") or ""),
                 updated_at=str(fm.get("updated_at") or ""),
                 size=chunk_size,
@@ -198,7 +202,7 @@ def upsert_chunk_from_markdown_file(
         namespace=namespace,
         slug=slug,
         file_path=rel_path,
-        source_url=_source_url(yuque_base_url, namespace, slug),
+        source_url=_source_url(_repo_base_url(repo_info, yuque_base_url), namespace, slug),
         author=str(fm.get("author") or ""),
         updated_at=str(fm.get("updated_at") or ""),
         size=chunk_size,

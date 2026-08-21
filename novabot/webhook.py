@@ -8,6 +8,7 @@ import asyncio
 import inspect
 import json
 import re
+from urllib.parse import urlparse
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
@@ -75,6 +76,37 @@ def _client_callback_mode(callback: Callable[..., YuqueClient]) -> str:
         if parameter.name == "team_id":
             return "keyword"
     return "none"
+
+
+def _normalized_site_origin(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if value.endswith("/api/v2"):
+        value = value[:-7]
+    elif value.endswith("/api"):
+        value = value[:-4]
+    parsed = urlparse(value.rstrip("/"))
+    if not parsed.scheme or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}".lower()
+
+
+def _payload_site_origin(payload: dict) -> str:
+    data = payload.get("data", {}) if isinstance(payload, dict) else {}
+    book = data.get("book", {}) if isinstance(data, dict) else {}
+    for value in (
+        data.get("url"),
+        data.get("web_url"),
+        data.get("html_url"),
+        book.get("url"),
+        book.get("web_url"),
+        book.get("html_url"),
+    ):
+        origin = _normalized_site_origin(str(value or ""))
+        if origin:
+            return origin
+    return ""
 
 
 class WebhookHandler:
@@ -349,7 +381,15 @@ class WebhookHandler:
 
         logger.info(f"[Webhook] 知识库: {repo_name} (id={repo_id}, slug={repo_slug})")
 
-        preliminary_team = self._get_team_info(repo_id=repo_id, repo_name=repo_name)
+        source_origin = _payload_site_origin(payload)
+        preliminary_team, preliminary_resolved = self._find_team_info(
+            repo_id=repo_id,
+            repo_name=repo_name,
+            namespace=book.get("namespace"),
+            source_origin=source_origin,
+        )
+        if not preliminary_resolved and self._repo_id_candidate_count(repo_id, source_origin=source_origin) > 1:
+            return {"status": "error", "message": "ambiguous repository team"}
         client = self._get_client_for_team(preliminary_team["team_id"])
 
         # 获取 TOC
@@ -388,7 +428,12 @@ class WebhookHandler:
         # 获取 namespace
         namespace = await self._get_namespace(client, repo_id, repo_slug)
         logger.info(f"[Webhook] 知识库 namespace: {namespace or '(无)'}")
-        team_info = self._get_team_info(repo_id=repo_id, repo_name=repo_name, namespace=namespace)
+        team_info = self._get_team_info(
+            repo_id=repo_id,
+            repo_name=repo_name,
+            namespace=namespace,
+            source_origin=source_origin,
+        )
         if team_info["team_id"] != preliminary_team["team_id"]:
             client = self._get_client_for_team(team_info["team_id"])
         detail["team_id"] = team_info["team_id"]
@@ -629,16 +674,22 @@ class WebhookHandler:
         repo_id = book.get("id")
         repo_name = book.get("name", "") or book.get("slug", "")
         repo_slug = book.get("slug", "")
+        source_origin = _payload_site_origin(payload)
         preliminary_team, preliminary_resolved = self._find_team_info(
             repo_id=repo_id,
             repo_name=repo_name,
+            namespace=book.get("namespace"),
+            source_origin=source_origin,
         )
+        if not preliminary_resolved and self._repo_id_candidate_count(repo_id, source_origin=source_origin) > 1:
+            return {"status": "error", "message": "ambiguous repository team"}
         client = self._get_client_for_team(preliminary_team["team_id"])
         namespace = await self._get_namespace(client, repo_id, repo_slug) if repo_id else None
         team_info, team_resolved = self._find_team_info(
             repo_id=repo_id,
             repo_name=repo_name,
             namespace=namespace,
+            source_origin=source_origin,
         )
         if team_info["team_id"] != preliminary_team["team_id"]:
             client = self._get_client_for_team(team_info["team_id"])
@@ -787,11 +838,13 @@ class WebhookHandler:
         repo_id: Optional[int] = None,
         repo_name: str = "",
         namespace: Optional[str] = None,
+        source_origin: str = "",
     ) -> dict:
         team_info, _ = self._find_team_info(
             repo_id=repo_id,
             repo_name=repo_name,
             namespace=namespace,
+            source_origin=source_origin,
         )
         return team_info
 
@@ -801,6 +854,7 @@ class WebhookHandler:
         repo_id: Optional[int] = None,
         repo_name: str = "",
         namespace: Optional[str] = None,
+        source_origin: str = "",
     ) -> tuple[dict, bool]:
         repos_file = self.docs_dir / ".repos.json"
         if repos_file.exists():
@@ -808,20 +862,54 @@ class WebhookHandler:
                 repos = json.loads(repos_file.read_text(encoding="utf-8"))
                 repo_list = repos if isinstance(repos, list) else []
                 matchers = (
-                    lambda repo: repo_id is not None and repo.get("id") == repo_id,
                     lambda repo: bool(namespace) and repo.get("namespace") == namespace,
+                    lambda repo: repo_id is not None and repo.get("id") == repo_id,
                     lambda repo: bool(repo_name) and repo.get("name") == repo_name,
                 )
                 for matcher in matchers:
-                    for repo in repo_list:
-                        if matcher(repo):
-                            return {
-                                "team_id": repo.get("team_id") or DEFAULT_TEAM_ID,
-                                "team_name": repo.get("team_name") or DEFAULT_TEAM_NAME,
-                            }, True
+                    matches = [repo for repo in repo_list if matcher(repo)]
+                    if source_origin:
+                        host_matches = [
+                            repo for repo in matches
+                            if _normalized_site_origin(repo.get("yuque_base_url", "")) == source_origin
+                        ]
+                        if host_matches:
+                            matches = host_matches
+                    if len(matches) == 1:
+                        repo = matches[0]
+                        return {
+                            "team_id": repo.get("team_id") or DEFAULT_TEAM_ID,
+                            "team_name": repo.get("team_name") or DEFAULT_TEAM_NAME,
+                        }, True
+                    if len(matches) > 1:
+                        logger.warning(
+                            "[Webhook] 知识库匹配存在多团队歧义: "
+                            f"repo_id={repo_id}, repo_name={repo_name}, namespace={namespace}"
+                        )
+                        return {"team_id": DEFAULT_TEAM_ID, "team_name": DEFAULT_TEAM_NAME}, False
             except Exception as e:
                 logger.debug(f"[Webhook] 读取团队信息失败: {e}")
         return {"team_id": DEFAULT_TEAM_ID, "team_name": DEFAULT_TEAM_NAME}, False
+
+    def _repo_id_candidate_count(self, repo_id: Optional[int], *, source_origin: str = "") -> int:
+        if repo_id is None:
+            return 0
+        repos_file = self.docs_dir / ".repos.json"
+        if not repos_file.exists():
+            return 0
+        try:
+            repos = json.loads(repos_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return 0
+        matches = [
+            repo for repo in repos if isinstance(repo, dict) and repo.get("id") == repo_id
+        ] if isinstance(repos, list) else []
+        if source_origin:
+            matches = [
+                repo for repo in matches
+                if _normalized_site_origin(repo.get("yuque_base_url", "")) == source_origin
+            ]
+        return len(matches)
 
     def _resolve_delete_team_info(
         self,

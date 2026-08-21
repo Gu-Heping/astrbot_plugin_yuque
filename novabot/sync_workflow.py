@@ -61,7 +61,7 @@ def select_sync_teams(
     return [], f"❌ 未找到可同步团队: {requested}"
 
 
-async def sync_team_members(*, client, storage) -> str:
+async def sync_team_members(*, client, storage, team: Team | None = None) -> str:
     """Synchronize Yuque group members into NovaBot storage."""
 
     user_info = await client.get_user()
@@ -71,20 +71,30 @@ async def sync_team_members(*, client, storage) -> str:
     group_id = user_info.get("id")
     members_raw = await client.get_group_members(group_id)
 
+    team_id = (team.team_id if team else DEFAULT_TEAM_ID) or DEFAULT_TEAM_ID
     members = {}
     for item in members_raw:
         user = item.get("user", {})
         uid = user.get("id") or item.get("user_id")
         if uid:
-            members[str(uid)] = {
+            info = {
                 "name": user.get("name", ""),
                 "login": user.get("login", ""),
             }
+            if team_id != DEFAULT_TEAM_ID:
+                info["team_id"] = team_id
+            members[str(uid)] = info
 
     if not members:
         return "⚠️ 未获取到成员，请检查 Token 权限"
 
-    storage.save_members(members)
+    existing = dict(storage.load_members())
+    for uid, info in members.items():
+        scoped_key = uid if team_id == DEFAULT_TEAM_ID else f"{team_id}:{uid}"
+        existing[scoped_key] = info
+        if uid not in existing:
+            existing[uid] = info
+    storage.save_members(existing)
     return f"✅ 团队成员同步完成\n共 {len(members)} 人\n使用 /bind <用户名> 绑定账号"
 
 

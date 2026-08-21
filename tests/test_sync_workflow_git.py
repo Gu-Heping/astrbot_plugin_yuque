@@ -298,6 +298,28 @@ async def test_sync_team_members_saves_group_members():
 
 
 @pytest.mark.asyncio
+async def test_sync_team_members_merges_non_default_team_members():
+    storage = _Storage({})
+    client = _MemberClient(
+        {"type": "Group", "id": 7},
+        [{"user": {"id": 1, "name": "Other Alice", "login": "other-alice"}}],
+    )
+
+    await sync_team_members(
+        client=client,
+        storage=storage,
+        team=Team(team_id="other", name="Other", yuque_token="token"),
+    )
+
+    assert storage.members["1"] == {"name": "Alice"}
+    assert storage.members["other:1"] == {
+        "name": "Other Alice",
+        "login": "other-alice",
+        "team_id": "other",
+    }
+
+
+@pytest.mark.asyncio
 async def test_sync_team_members_skips_non_group_or_empty_members():
     non_group = await sync_team_members(
         client=_MemberClient({"type": "User"}),

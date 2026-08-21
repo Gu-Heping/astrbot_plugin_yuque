@@ -50,6 +50,40 @@ def test_webhook_prefers_repo_id_before_duplicate_repo_name(tmp_path):
     }
 
 
+def test_webhook_disambiguates_duplicate_repo_id_by_host(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    handler = _handler(tmp_path, store)
+    (handler.docs_dir / ".repos.json").write_text(
+        """
+        [
+          {
+            "id":7,
+            "team_id":"default",
+            "team_name":"NOVA",
+            "name":"工程",
+            "namespace":"nova/eng",
+            "yuque_base_url":"https://www.yuque.com/api/v2"
+          },
+          {
+            "id":7,
+            "team_id":"other",
+            "team_name":"Other",
+            "name":"工程",
+            "namespace":"other/eng",
+            "yuque_base_url":"https://private.example/api/v2"
+          }
+        ]
+        """,
+        encoding="utf-8",
+    )
+
+    assert handler._get_team_info(
+        repo_id=7,
+        source_origin="https://private.example",
+    ) == {"team_id": "other", "team_name": "Other"}
+    assert handler._repo_id_candidate_count(repo_id=7) == 2
+
+
 def test_webhook_resolves_doc_output_with_team_prefix(tmp_path):
     store = ChunkStore(tmp_path / "chunks.db")
     handler = _handler(tmp_path, store)

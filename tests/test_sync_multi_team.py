@@ -255,6 +255,82 @@ async def test_multi_team_sync_preserves_failed_team_repos_cache(tmp_path):
     assert any(repo["namespace"] == "other/eng" for repo in repos)
 
 
+@pytest.mark.asyncio
+async def test_targeted_team_sync_preserves_non_selected_repo_cache(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    docs_dir.mkdir()
+    storage = _FakeStorage(docs_dir)
+    (docs_dir / ".repos.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": 20,
+                    "name": "工程",
+                    "namespace": "other/eng",
+                    "team_id": "other",
+                    "team_name": "Other",
+                }
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    summary = await run_multi_team_sync(
+        teams=[Team.default(yuque_token="legacy")],
+        storage=storage,
+        docs_dir=docs_dir,
+        members={"7": {"name": "Alice"}},
+        client_factory=lambda team: _FakeYuqueClient(
+            user_id=1,
+            repo_name="默认工程",
+            namespace="nova/eng",
+            doc_id=101,
+            title="默认团队文档",
+        ),
+    )
+
+    repos = json.loads((docs_dir / ".repos.json").read_text(encoding="utf-8"))
+    assert summary["teams_count"] == 1
+    assert {repo["team_id"] for repo in repos} == {"default", "other"}
+    assert any(repo["namespace"] == "other/eng" for repo in repos)
+
+
+@pytest.mark.asyncio
+async def test_targeted_default_sync_preserves_other_team_doc_index(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    index.add_doc(
+        {
+            "yuque_id": 202,
+            "title": "其他团队文档",
+            "team_id": "other",
+            "team_name": "Other",
+            "book_name": "工程",
+            "file_path": "other/工程/其他团队文档.md",
+        }
+    )
+    storage = _FakeStorage(docs_dir)
+
+    await run_multi_team_sync(
+        teams=[Team.default(yuque_token="legacy")],
+        storage=storage,
+        docs_dir=docs_dir,
+        members={"7": {"name": "Alice"}},
+        client_factory=lambda team: _FakeYuqueClient(
+            user_id=1,
+            repo_name="默认工程",
+            namespace="nova/eng",
+            doc_id=101,
+            title="默认团队文档",
+        ),
+    )
+
+    refreshed = DocIndex(str(tmp_path / "doc_index.db"))
+    assert [doc["title"] for doc in refreshed.search(team_id="default")] == ["默认团队文档"]
+    assert [doc["title"] for doc in refreshed.search(team_id="other")] == ["其他团队文档"]
+
+
 def test_path_drift_uses_team_scoped_document_id(tmp_path):
     docs_dir = tmp_path / "yuque_docs"
     default_repo = docs_dir / "工程"

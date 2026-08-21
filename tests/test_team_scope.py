@@ -71,6 +71,20 @@ def test_team_registry_accepts_dict_wrapper_config():
     assert registry.get("research").yuque_token == "research-token"
 
 
+def test_team_registry_rejects_unsafe_team_id():
+    registry = TeamRegistry(
+        {
+            "yuque_teams": [
+                {"team_id": "../archive", "name": "Bad", "yuque_token": "token"},
+                {"team_id": "safe-team", "name": "Safe", "yuque_token": "token"},
+            ],
+        }
+    )
+
+    assert registry.get("../archive") is None
+    assert registry.get("safe-team").name == "Safe"
+
+
 def test_retrieval_scope_composes_team_repo_path_author_time_keyword():
     scope = RetrievalScope.from_dict(
         {

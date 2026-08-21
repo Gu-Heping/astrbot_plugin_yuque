@@ -9,6 +9,7 @@ from novabot.profile import (
     get_profile_docs,
     refresh_user_profile,
 )
+from novabot.storage import Storage
 
 
 class _Storage:
@@ -45,6 +46,25 @@ class _ProfileGenerator:
             "mastered": ["核心概念"],
             "next_steps": ["继续实践"],
         }
+
+
+def test_storage_get_docs_by_author_keeps_same_id_across_teams(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    (docs_dir / "工程").mkdir(parents=True)
+    (docs_dir / "other" / "工程").mkdir(parents=True)
+    (docs_dir / "工程" / "默认.md").write_text(
+        "---\nid: 42\nteam_id: default\ntitle: 默认\nauthor: Alice\ncreator_id: 7\nbook_name: 工程\n---\n\n默认内容",
+        encoding="utf-8",
+    )
+    (docs_dir / "other" / "工程" / "其他.md").write_text(
+        "---\nid: 42\nteam_id: other\ntitle: 其他\nauthor: Alice\ncreator_id: 7\nbook_name: 工程\n---\n\n其他内容",
+        encoding="utf-8",
+    )
+
+    storage = Storage(tmp_path)
+    docs = storage.get_docs_by_author(author_name="Alice", yuque_id=7)
+
+    assert {doc["team_id"] for doc in docs} == {"default", "other"}
 
 
 def test_format_profile_view_prompts_refresh_when_missing_profile():

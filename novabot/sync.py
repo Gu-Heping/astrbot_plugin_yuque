@@ -585,6 +585,7 @@ async def sync_all_repos(
         repos_info.append({
             "team_id": sync_team.team_id,
             "team_name": sync_team.name,
+            "yuque_base_url": sync_team.yuque_base_url,
             "id": repo.get("id"),
             "namespace": namespace,
             "name": name,

@@ -833,7 +833,9 @@ class NovaBotPlugin(Star):
 
             client = self._get_client(selected_team.team_id)
             try:
-                yield event.plain_result(await sync_team_members(client=client, storage=self.storage))
+                yield event.plain_result(
+                    await sync_team_members(client=client, storage=self.storage, team=selected_team)
+                )
             except Exception as e:
                 logger.error(f"同步团队成员失败: {e}")
                 yield event.plain_result(f"❌ 同步失败: {e}")

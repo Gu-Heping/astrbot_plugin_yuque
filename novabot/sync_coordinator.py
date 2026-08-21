@@ -82,7 +82,7 @@ async def run_multi_team_sync(
                 progress_callback=team_progress,
                 team=team,
                 team_path_prefix=sync_team_path_prefix(team.team_id),
-                replace_index=len(selected_teams) == 1 and team.team_id == DEFAULT_TEAM_ID,
+                replace_index=False,
                 cleanup_orphans=True,
                 write_repo_cache=False,
                 protected_root_dirs={
@@ -102,9 +102,10 @@ async def run_multi_team_sync(
         for key in ("repos_count", "docs", "titles", "errors", "removed"):
             total_result[key] += result.get(key, 0)
 
-    all_repos_info = _preserve_failed_team_repos(
+    all_repos_info = _merge_repos_cache(
         docs_dir,
         all_repos_info,
+        selected_team_ids={team.team_id for team in selected_teams},
         failed_team_ids={
             team_id
             for team_id, state in team_states.items()
@@ -144,13 +145,14 @@ def _load_existing_repos_cache(docs_dir: Path) -> list[dict]:
     return []
 
 
-def _preserve_failed_team_repos(
+def _merge_repos_cache(
     docs_dir: Path,
     repos_info: list[dict],
     *,
+    selected_team_ids: set[str],
     failed_team_ids: set[str],
 ) -> list[dict]:
-    if not failed_team_ids:
+    if not selected_team_ids and not failed_team_ids:
         return repos_info
     existing = _load_existing_repos_cache(docs_dir)
     current_keys = {
@@ -160,7 +162,10 @@ def _preserve_failed_team_repos(
     preserved = [
         repo
         for repo in existing
-        if str(repo.get("team_id") or DEFAULT_TEAM_ID) in failed_team_ids
+        if (
+            str(repo.get("team_id") or DEFAULT_TEAM_ID) not in selected_team_ids
+            or str(repo.get("team_id") or DEFAULT_TEAM_ID) in failed_team_ids
+        )
         and (str(repo.get("team_id") or DEFAULT_TEAM_ID), repo.get("id"), repo.get("namespace"))
         not in current_keys
     ]

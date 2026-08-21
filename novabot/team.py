@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from astrbot.api import logger
 
 from .models import DEFAULT_TEAM_ID, Team
+
+
+_TEAM_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+
+
+def is_safe_team_id(team_id: str) -> bool:
+    """Return whether a configured team id is a single safe path component."""
+
+    value = str(team_id or "").strip()
+    if not value or value in {".", ".."} or ".." in value:
+        return False
+    if "/" in value or "\\" in value:
+        return False
+    return bool(_TEAM_ID_PATTERN.fullmatch(value))
 
 
 def _as_bool(value: Any, default: bool = True) -> bool:
@@ -59,6 +74,9 @@ class TeamRegistry:
                         continue
                     team_id = str(item.get("team_id") or item.get("id") or "").strip()
                     if not team_id:
+                        continue
+                    if not is_safe_team_id(team_id):
+                        logger.error(f"[TeamRegistry] 忽略非法 team_id: {team_id}")
                         continue
                     teams[team_id] = Team(
                         team_id=team_id,

@@ -776,95 +776,123 @@ class DocIndex:
             logger.error(f"[DocIndex] 按作者查询文档失败: {e}")
             return []
 
-    def get_kb_contributors(self, book_name: str, limit: int = 10) -> List[Dict]:
+    def get_kb_contributors(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库贡献者统计"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(limit)
             rows = conn.execute(
-                """
+                f"""
                 SELECT author, COUNT(*) as doc_count, SUM(word_count) as total_words
                 FROM docs
-                WHERE book_name = ? AND author != ''
+                WHERE {where_clause} AND author != ''
                 GROUP BY author
                 ORDER BY doc_count DESC
                 LIMIT ?
                 """,
-                (book_name, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 获取知识库贡献者失败: {e}")
             return []
 
-    def get_kb_recent_updates(self, book_name: str, limit: int = 10) -> List[Dict]:
+    def get_kb_recent_updates(
+        self,
+        book_name: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库最近更新"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(limit)
             rows = conn.execute(
-                """
-                SELECT title, author, updated_at
+                f"""
+                SELECT title, author, updated_at, team_id, team_name
                 FROM docs
-                WHERE book_name = ?
+                WHERE {where_clause}
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (book_name, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 获取知识库最近更新失败: {e}")
             return []
 
-    def find_doc_for_book_by_title(self, book_name: str, title_keyword: str) -> Optional[Dict]:
+    def find_doc_for_book_by_title(
+        self,
+        book_name: str,
+        title_keyword: str,
+        team_id: Optional[str] = None,
+    ) -> Optional[Dict]:
         """在知识库中按标题模糊匹配单篇文档"""
         if not book_name or not title_keyword:
             return None
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.append(f"%{title_keyword}%")
             row = conn.execute(
-                """
-                SELECT title, author, book_name, file_path
+                f"""
+                SELECT title, author, team_id, team_name, book_name, file_path
                 FROM docs
-                WHERE book_name = ? AND title LIKE ?
+                WHERE {where_clause} AND title LIKE ?
                 ORDER BY word_count DESC
                 LIMIT 1
                 """,
-                (book_name, f"%{title_keyword}%"),
+                params,
             ).fetchone()
             return dict(row) if row else None
         except sqlite3.Error as e:
             logger.error(f"[DocIndex] 按标题匹配文档失败: {e}")
             return None
 
-    def get_book_activity(self, book_name: str, since_date: str, limit: int = 10) -> Dict:
+    def get_book_activity(
+        self,
+        book_name: str,
+        since_date: str,
+        limit: int = 10,
+        team_id: Optional[str] = None,
+    ) -> Dict:
         """获取指定知识库在时间区间内的活跃统计"""
         result = {"docs_updated": 0, "active_contributors": []}
         if not book_name or not since_date:
             return result
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
             docs_updated_row = conn.execute(
-                """
+                f"""
                 SELECT COUNT(*) as count
                 FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?)
+                WHERE {where_clause} AND date(updated_at) >= date(?)
                 """,
-                (book_name, since_date),
+                [*params, since_date],
             ).fetchone()
             active_rows = conn.execute(
-                """
+                f"""
                 SELECT author, COUNT(*) as doc_count
                 FROM docs
-                WHERE book_name = ? AND date(updated_at) >= date(?) AND author != ''
+                WHERE {where_clause} AND date(updated_at) >= date(?) AND author != ''
                 GROUP BY author
                 ORDER BY doc_count DESC
                 LIMIT ?
                 """,
-                (book_name, since_date, limit),
+                [*params, since_date, limit],
             ).fetchall()
             result["docs_updated"] = int(dict(docs_updated_row)["count"]) if docs_updated_row else 0
             result["active_contributors"] = [dict(row) for row in active_rows]
@@ -873,21 +901,29 @@ class DocIndex:
             logger.error(f"[DocIndex] 获取知识库活跃度失败: {e}")
             return result
 
-    def get_top_docs_by_word_count(self, book_name: str, limit: int = 5, min_words: int = 100) -> List[Dict]:
+    def get_top_docs_by_word_count(
+        self,
+        book_name: str,
+        limit: int = 5,
+        min_words: int = 100,
+        team_id: Optional[str] = None,
+    ) -> List[Dict]:
         """获取知识库内字数最多的文档"""
         if not book_name:
             return []
         try:
             conn = self._get_conn()
+            where_clause, params = self._build_doc_filters(book=book_name, team_id=team_id)
+            params.extend([min_words, limit])
             rows = conn.execute(
-                """
+                f"""
                 SELECT title, author, word_count
                 FROM docs
-                WHERE book_name = ? AND word_count > ?
+                WHERE {where_clause} AND word_count > ?
                 ORDER BY word_count DESC
                 LIMIT ?
                 """,
-                (book_name, min_words, limit),
+                params,
             ).fetchall()
             return [dict(row) for row in rows]
         except sqlite3.Error as e:

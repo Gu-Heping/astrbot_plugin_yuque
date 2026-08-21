@@ -129,3 +129,43 @@ def test_clear_team_treats_null_team_as_default_and_preserves_other_team(tmp_pat
     assert deleted == 1
     assert index.search(team_id="default") == []
     assert [doc["title"] for doc in index.search(team_id="other")] == ["其他团队"]
+
+
+def test_kb_helpers_scope_same_named_books_by_team(tmp_path):
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    index.add_doc(
+        {
+            "yuque_id": 1,
+            "title": "Default Team Doc",
+            "author": "Alice",
+            "team_id": "default",
+            "team_name": "NOVA",
+            "book_name": "Engineering",
+            "updated_at": "2026-01-02",
+            "word_count": 200,
+            "file_path": "Engineering/default.md",
+        }
+    )
+    index.add_doc(
+        {
+            "yuque_id": 2,
+            "title": "Other Team Doc",
+            "author": "Bob",
+            "team_id": "other",
+            "team_name": "Other",
+            "book_name": "Engineering",
+            "updated_at": "2026-01-03",
+            "word_count": 300,
+            "file_path": "other/Engineering/other.md",
+        }
+    )
+
+    assert [row["author"] for row in index.get_kb_contributors("Engineering", team_id="other")] == ["Bob"]
+    assert [row["title"] for row in index.get_kb_recent_updates("Engineering", team_id="default")] == [
+        "Default Team Doc"
+    ]
+    assert index.find_doc_for_book_by_title("Engineering", "Other", team_id="other")["team_id"] == "other"
+    assert index.get_book_activity("Engineering", "2026-01-01", team_id="other")["docs_updated"] == 1
+    assert [row["title"] for row in index.get_top_docs_by_word_count("Engineering", team_id="default")] == [
+        "Default Team Doc"
+    ]
