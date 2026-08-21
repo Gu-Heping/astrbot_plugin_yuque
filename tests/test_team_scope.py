@@ -109,6 +109,35 @@ def test_team_registry_accepts_token_only_entries_for_discovery():
     assert registry.get("manual").yuque_base_url == "https://nova.yuque.com/api/v2"
 
 
+def test_team_registry_accepts_webui_token_list_entries():
+    registry = TeamRegistry(
+        {
+            "yuque_teams": [
+                " token-a ",
+                "",
+                "token-b",
+            ],
+        }
+    )
+
+    assert registry.pending_discovery_count == 2
+
+
+def test_team_registry_accepts_json_object_strings_in_list_entries():
+    registry = TeamRegistry(
+        {
+            "yuque_teams": [
+                '{"team_id":"nova","name":"NOVA","yuque_token":"token-a"}',
+                '{"yuque_token":"token-b","description":"新手团队"}',
+            ],
+        }
+    )
+
+    assert registry.get("nova").name == "NOVA"
+    assert registry.get("nova").yuque_token == "token-a"
+    assert registry.pending_discovery_count == 1
+
+
 @pytest.mark.asyncio
 async def test_team_registry_discovers_group_and_user_tokens():
     _DiscoveryClient.users_by_token = {

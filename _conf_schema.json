@@ -11,10 +11,10 @@
     "hint": "公有云使用默认值；也可填写 https://nova.yuque.com/ 这类 Web 地址，系统会规范化为 /api/v2"
   },
   "yuque_teams": {
-    "description": "多语雀团队配置（JSON，可选）",
-    "type": "string",
-    "default": "",
-    "hint": "留空使用 yuque_token 作为默认团队。支持完整对象、{\"yuque_token\":\"xxx\"} token-only 对象，或直接写字符串 token；缺少 team_id/name 时启动或同步前自动发现"
+    "description": "多语雀团队 Token 列表（可选）",
+    "type": "list",
+    "default": [],
+    "hint": "每项填写一个语雀 Token，留空使用 yuque_token 作为默认团队。也兼容 {\"yuque_token\":\"xxx\",\"description\":\"...\"} 对象和旧版 JSON 字符串；缺少 team_id/name 时启动或同步前自动发现"
   },
   "embedding_api_key": {
     "description": "Embedding API Key",
