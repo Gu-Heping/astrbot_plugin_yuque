@@ -77,7 +77,7 @@ def is_group_chat_allowed(
 
     group_id = event_group_id(event)
     if not group_id:
-        return True
+        return not is_group_chat(event)
     if not whitelist_enabled:
         return True
     return group_id in allowed_group_ids

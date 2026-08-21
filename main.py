@@ -683,10 +683,12 @@ class NovaBotPlugin(Star):
         """
         msg = event.message_str.strip()
 
+        if not self._is_event_scope_allowed(event):
+            suppress_default_llm(event)
+            return
+
         # 跳过命令消息
         if self._is_command(msg):
-            return
-        if not self._is_event_scope_allowed(event):
             return
 
         # 判断是否应该处理这条消息
