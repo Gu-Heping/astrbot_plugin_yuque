@@ -190,7 +190,7 @@ async def test_sync_all_repos_prefers_scoped_team_member_name_over_creator_displ
     docs_dir = tmp_path / "yuque_docs"
     members = {
         "7": {"name": "默认团队姓名", "login": "default"},
-        "other:7": {"name": "庄永琪", "login": "zuiaimumuxiao", "team_id": "other"},
+        "other:7": {"name": "Member Alpha", "login": "member-alpha", "team_id": "other"},
     }
     team = Team(
         team_id="other",
@@ -202,12 +202,12 @@ async def test_sync_all_repos_prefers_scoped_team_member_name_over_creator_displ
     await sync_all_repos(
         client=_FakeYuqueClient(
             user_id=2,
-            repo_name="Madoka浏览器AI助手",
+            repo_name="Demo知识库",
             namespace="wg5tth/lplocr",
             doc_id=493,
-            title="庄永琪",
-            creator_name="Cumulo",
-            member_name="庄永琪",
+            title="Member Alpha",
+            creator_name="Account Alias",
+            member_name="Member Alpha",
         ),
         output_dir=docs_dir,
         members=members,
@@ -217,15 +217,15 @@ async def test_sync_all_repos_prefers_scoped_team_member_name_over_creator_displ
         write_repo_cache=False,
     )
 
-    doc_path = docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md"
+    doc_path = docs_dir / "other" / "Demo知识库" / "Member Alpha.md"
     content = doc_path.read_text(encoding="utf-8")
     index = DocIndex(str(tmp_path / "doc_index.db"))
     docs = index.search(team_id="other")
 
-    assert "author: 庄永琪" in content
-    assert "| 庄永琪 |" in content
-    assert "author: Cumulo" not in content
-    assert docs[0]["author"] == "庄永琪"
+    assert "author: Member Alpha" in content
+    assert "| Member Alpha |" in content
+    assert "author: Account Alias" not in content
+    assert docs[0]["author"] == "Member Alpha"
 
 
 @pytest.mark.asyncio
@@ -241,12 +241,12 @@ async def test_sync_all_repos_fetches_group_members_for_author_resolution(tmp_pa
     await sync_all_repos(
         client=_FakeYuqueClient(
             user_id=2,
-            repo_name="Madoka浏览器AI助手",
+            repo_name="Demo知识库",
             namespace="wg5tth/lplocr",
             doc_id=493,
-            title="庄永琪",
-            creator_name="Cumulo",
-            member_name="庄永琪",
+            title="Member Alpha",
+            creator_name="Account Alias",
+            member_name="Member Alpha",
         ),
         output_dir=docs_dir,
         members={},
@@ -258,20 +258,20 @@ async def test_sync_all_repos_fetches_group_members_for_author_resolution(tmp_pa
 
     index = DocIndex(str(tmp_path / "doc_index.db"))
     docs = index.search(team_id="other")
-    content = (docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md").read_text(
+    content = (docs_dir / "other" / "Demo知识库" / "Member Alpha.md").read_text(
         encoding="utf-8"
     )
 
-    assert docs[0]["author"] == "庄永琪"
-    assert "author: 庄永琪" in content
-    assert "author: Cumulo" not in content
+    assert docs[0]["author"] == "Member Alpha"
+    assert "author: Member Alpha" in content
+    assert "author: Account Alias" not in content
 
 
 @pytest.mark.asyncio
 async def test_sync_all_repos_uses_cached_member_when_group_members_fetch_fails(tmp_path):
     docs_dir = tmp_path / "yuque_docs"
     members = {
-        "other:7": {"name": "庄永琪", "login": "zuiaimumuxiao", "team_id": "other"},
+        "other:7": {"name": "Member Alpha", "login": "member-alpha", "team_id": "other"},
     }
     team = Team(
         team_id="other",
@@ -283,11 +283,11 @@ async def test_sync_all_repos_uses_cached_member_when_group_members_fetch_fails(
     await sync_all_repos(
         client=_FakeYuqueClient(
             user_id=2,
-            repo_name="Madoka浏览器AI助手",
+            repo_name="Demo知识库",
             namespace="wg5tth/lplocr",
             doc_id=493,
-            title="庄永琪",
-            creator_name="Cumulo",
+            title="Member Alpha",
+            creator_name="Account Alias",
             member_error=RuntimeError("members unavailable"),
         ),
         output_dir=docs_dir,
@@ -300,13 +300,13 @@ async def test_sync_all_repos_uses_cached_member_when_group_members_fetch_fails(
 
     index = DocIndex(str(tmp_path / "doc_index.db"))
     docs = index.search(team_id="other")
-    content = (docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md").read_text(
+    content = (docs_dir / "other" / "Demo知识库" / "Member Alpha.md").read_text(
         encoding="utf-8"
     )
 
-    assert docs[0]["author"] == "庄永琪"
-    assert "author: 庄永琪" in content
-    assert "author: Cumulo" not in content
+    assert docs[0]["author"] == "Member Alpha"
+    assert "author: Member Alpha" in content
+    assert "author: Account Alias" not in content
 
 
 @pytest.mark.asyncio
