@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import builtins
+import os
 from pathlib import Path
 import sys
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -208,12 +210,34 @@ def test_clean_table_images_enforces_retention_count(tmp_path):
     for i in range(3):
         path = tmp_path / f"table_{i}.png"
         path.write_bytes(b"image")
+        old_time = time.time() - 120 - i
+        os.utime(path, (old_time, old_time))
 
     from novabot.table_renderer import clean_table_images
 
     clean_table_images(tmp_path, max_files=1, max_age_seconds=999999)
 
     assert len(list(tmp_path.glob("table_*.png"))) == 1
+
+
+def test_clean_table_images_protects_recent_images_from_count_cleanup(tmp_path):
+    for i in range(2):
+        path = tmp_path / f"table_old_{i}.png"
+        path.write_bytes(b"old")
+        old_time = time.time() - 120 - i
+        os.utime(path, (old_time, old_time))
+
+    recent = tmp_path / "table_recent.png"
+    recent.write_bytes(b"recent")
+
+    from novabot.table_renderer import clean_table_images
+
+    clean_table_images(tmp_path, max_files=0, max_age_seconds=999999)
+
+    assert recent.exists()
+    assert sorted(path.name for path in tmp_path.glob("table_*.png")) == [
+        "table_recent.png"
+    ]
 
 
 def test_find_font_path_caches_missing_system_font(monkeypatch):

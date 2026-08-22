@@ -35,6 +35,7 @@ _MAX_TABLE_IMAGE_HEIGHT = 12000
 _MAX_TABLE_IMAGE_PIXELS = 40_000_000
 _TABLE_IMAGE_RETENTION_COUNT = 100
 _TABLE_IMAGE_RETENTION_SECONDS = 24 * 60 * 60
+_TABLE_IMAGE_PROTECT_SECONDS = 60
 
 
 def _is_valid_font(path: str | Path) -> bool:
@@ -462,21 +463,29 @@ def clean_table_images(
     *,
     max_age_seconds: int = _TABLE_IMAGE_RETENTION_SECONDS,
     max_files: int = _TABLE_IMAGE_RETENTION_COUNT,
+    protect_recent_seconds: int = _TABLE_IMAGE_PROTECT_SECONDS,
 ) -> None:
     """Remove old rendered table images to avoid unbounded disk growth."""
     if not image_dir.exists():
         return
     now = datetime.now()
-    images = sorted(
-        image_dir.glob("table_*.png"),
-        key=lambda path: path.stat().st_mtime if path.exists() else 0,
-        reverse=True,
-    )
-    cutoff = now - timedelta(seconds=max_age_seconds)
-    for index, path in enumerate(images):
+    image_stats: list[tuple[Path, datetime]] = []
+    for path in image_dir.glob("table_*.png"):
         try:
-            modified_at = datetime.fromtimestamp(path.stat().st_mtime)
-            if index >= max_files or modified_at < cutoff:
+            image_stats.append((path, datetime.fromtimestamp(path.stat().st_mtime)))
+        except OSError:
+            continue
+
+    images = sorted(image_stats, key=lambda item: item[1], reverse=True)
+    cutoff = now - timedelta(seconds=max_age_seconds)
+    protected_cutoff = now - timedelta(seconds=protect_recent_seconds)
+    retained_unprotected = 0
+    for path, modified_at in images:
+        if modified_at >= protected_cutoff:
+            continue
+        retained_unprotected += 1
+        try:
+            if retained_unprotected > max_files or modified_at < cutoff:
                 path.unlink()
         except OSError:
             pass
