@@ -216,6 +216,37 @@ def test_webhook_get_client_for_team_does_not_swallow_internal_type_error(tmp_pa
     assert calls == ["other"]
 
 
+def test_webhook_try_get_client_for_team_ignores_unknown_team(tmp_path):
+    def get_client(team_id="default"):
+        raise ValueError(f"unknown team_id: {team_id}")
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    assert handler._try_get_client_for_team("missing") is None
+
+
+def test_webhook_try_get_client_for_team_reraises_other_value_errors(tmp_path):
+    def get_client(team_id="default"):
+        raise ValueError("bad client state")
+
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    with pytest.raises(ValueError, match="bad client state"):
+        handler._try_get_client_for_team("other")
+
+
 def test_webhook_get_client_for_team_supports_keyword_only_callback(tmp_path):
     calls = []
 
@@ -342,6 +373,37 @@ def test_webhook_doc_change_uses_team_specific_client(tmp_path):
     assert (docs_dir / "other" / "工程" / "部署说明.md").exists()
 
 
+def test_webhook_doc_change_ignores_unknown_team_from_repo_cache(tmp_path):
+    import asyncio
+
+    docs_dir = tmp_path / "yuque_docs"
+    docs_dir.mkdir()
+    (docs_dir / ".repos.json").write_text(
+        '[{"id":7,"team_id":"missing","team_name":"Missing","name":"工程","namespace":"missing/eng"}]',
+        encoding="utf-8",
+    )
+
+    def get_client(team_id="default"):
+        raise ValueError(f"unknown team_id: {team_id}")
+
+    handler = WebhookHandler(
+        docs_dir=docs_dir,
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+        chunk_store=ChunkStore(tmp_path / "chunks.db"),
+    )
+
+    result = asyncio.run(_run_doc_change(handler))
+
+    assert result == {
+        "status": "ignored",
+        "message": "unknown team",
+        "team_id": "missing",
+    }
+
+
 def test_webhook_push_state_is_team_scoped(tmp_path):
     import asyncio
 
@@ -434,6 +496,75 @@ def test_webhook_delete_chunk_uses_team_scoped_document_id(tmp_path):
 
     assert store.get_document_chunks("99") != []
     assert store.get_document_chunks("other:99") == []
+
+
+def test_webhook_delete_uses_doc_index_team_before_default_client(tmp_path):
+    import asyncio
+
+    docs_dir = tmp_path / "yuque_docs"
+    doc_path = docs_dir / "other" / "工程" / "删除.md"
+    doc_path.parent.mkdir(parents=True)
+    doc_path.write_text("待删除", encoding="utf-8")
+    store = ChunkStore(tmp_path / "chunks.db")
+    store.save_document_chunks(
+        "other:42",
+        split_markdown(
+            "other:42",
+            "待删除 chunk",
+            title="删除",
+            team_id="other",
+            team_name="Other",
+            size=220,
+            overlap=40,
+        ),
+    )
+    with DocIndex(str(tmp_path / "doc_index.db")) as index:
+        index.add_doc(
+            {
+                "yuque_id": 42,
+                "title": "删除",
+                "team_id": "other",
+                "team_name": "Other",
+                "file_path": "other/工程/删除.md",
+            }
+        )
+
+    requested_team_ids = []
+
+    def get_client(team_id="default"):
+        requested_team_ids.append(team_id)
+        if team_id == "default":
+            raise ValueError("unknown team_id: default")
+        return _FakeYuqueClient()
+
+    handler = WebhookHandler(
+        docs_dir=docs_dir,
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+        chunk_store=store,
+    )
+    handler._git_commit = lambda *args, **kwargs: None
+
+    result = asyncio.run(
+        handler._handle_doc_delete(
+            {
+                "data": {
+                    "id": 42,
+                    "book": {"id": 7, "name": "工程", "slug": "eng"},
+                }
+            }
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert requested_team_ids[0] == "other"
+    assert "default" not in requested_team_ids
+    assert not doc_path.exists()
+    assert store.get_document_chunks("other:42") == []
+    with DocIndex(str(tmp_path / "doc_index.db")) as index:
+        assert index.get_doc_by_yuque_id(42, team_id="other") is None
 
 
 def test_webhook_delete_scope_can_infer_single_indexed_team(tmp_path):

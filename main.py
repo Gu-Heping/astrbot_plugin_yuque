@@ -223,6 +223,9 @@ class NovaBotPlugin(Star):
         self._webhook_site: Optional[web.TCPSite] = None
         self._webhook_started: bool = False  # 标记服务是否已启动
         self._sync_lock = asyncio.Lock()  # 保护同步操作，防止并发
+        self._team_discovery_lock = asyncio.Lock()
+        self._webhook_start_lock = asyncio.Lock()
+        self._webhook_start_task: Optional[asyncio.Task] = None
         self._doc_index = None  # 懒加载的 DocIndex
         self.chunk_store = ChunkStore(self.storage.data_dir / "chunk_index.db")
         self.knowledge_core: Optional[KnowledgeCore] = None
@@ -425,11 +428,37 @@ class NovaBotPlugin(Star):
         """尝试启动 Webhook 服务（延迟启动）"""
         try:
             loop = asyncio.get_running_loop()
-            loop.create_task(self._start_webhook_service())
+            if self._webhook_start_task and not self._webhook_start_task.done():
+                logger.info("[Webhook] 启动任务已存在")
+                return
+            self._webhook_start_task = loop.create_task(
+                self._start_webhook_service_with_discovery()
+            )
             logger.info("[Webhook] 已安排启动任务")
         except RuntimeError:
             # 事件循环未运行，等待 on_astrbot_loaded 触发
             logger.info("[Webhook] 事件循环未运行，等待 on_astrbot_loaded 触发")
+
+    async def _discover_teams_for_runtime(self):
+        """Resolve token-only teams before runtime components need clients."""
+        if self.team_registry.pending_discovery_count <= 0:
+            return
+        async with self._team_discovery_lock:
+            if self.team_registry.pending_discovery_count <= 0:
+                return
+            logger.info(
+                f"[TeamRegistry] 启动运行时团队自动发现: "
+                f"pending={self.team_registry.pending_discovery_count}"
+            )
+            await self.team_registry.discover_pending()
+
+    async def _start_webhook_service_with_discovery(self):
+        """Start Webhook after token-only teams have been discovered."""
+        async with self._webhook_start_lock:
+            if self._webhook_started:
+                return
+            await self._discover_teams_for_runtime()
+            await self._start_webhook_service()
 
     async def _start_webhook_service(self):
         """启动 Webhook 服务"""
@@ -497,7 +526,13 @@ class NovaBotPlugin(Star):
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot 初始化完成后启动 Webhook 服务（备用触发）"""
-        await self._start_webhook_service()
+        if self._webhook_start_task and not self._webhook_start_task.done():
+            await self._webhook_start_task
+        else:
+            self._webhook_start_task = asyncio.create_task(
+                self._start_webhook_service_with_discovery()
+            )
+            await self._webhook_start_task
         asyncio.create_task(self._initialize_reply_rendering())
 
     async def _initialize_reply_rendering(self):
@@ -611,6 +646,19 @@ class NovaBotPlugin(Star):
 
     async def terminate(self):
         """插件卸载时的清理"""
+        if (
+            self._webhook_start_task
+            and not self._webhook_start_task.done()
+            and self._webhook_start_task is not asyncio.current_task()
+        ):
+            try:
+                self._webhook_start_task.cancel()
+                await self._webhook_start_task
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.warning(f"[Webhook] 取消启动任务失败: {e}")
+
         # 停止主动关心任务
         self._care_running = False
         if self._care_task:
@@ -636,6 +684,7 @@ class NovaBotPlugin(Star):
                 await self._webhook_runner.cleanup()
             except Exception as e:
                 logger.warning(f"[Webhook] 清理 runner 失败: {e}")
+        self._webhook_started = False
 
         # 关闭语雀客户端
         await self._close_client()
