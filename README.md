@@ -127,6 +127,11 @@ NovaBot 会在发送 LLM/知识库生成结果前清理 Markdown 标记，例如
 |--------|------|
 | `git_enabled` | 启用 Git 版本控制（默认 true） |
 | `git_auto_push` | 自动推送到远程仓库 |
+| `git_auto_config_user` | 自动配置文档仓库本地 Git 提交身份，默认关闭 |
+| `git_user_name` | 自动配置的 `user.name`，默认 `NovaBot` |
+| `git_user_email` | 自动配置的 `user.email`，默认 `novabot@example.local` |
+
+Docker/服务器环境如果每次重启后仓库缺少 `user.name/user.email`，可以开启 `git_auto_config_user`。NovaBot 只会写入文档仓库的本地 `.git/config`，不会修改容器或宿主机的全局 Git 配置。
 
 ### 消息路由
 

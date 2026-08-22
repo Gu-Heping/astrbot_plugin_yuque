@@ -200,6 +200,9 @@ async def run_background_sync_pipeline(
     chunk_size: int = 1200,
     chunk_overlap: int = 180,
     git_enabled: bool = True,
+    git_auto_config_user: bool = False,
+    git_user_name: str = "NovaBot",
+    git_user_email: str = "novabot@example.local",
     requested_team_id: str = "",
     sync_runner=run_multi_team_sync,
     post_sync_runner=None,
@@ -257,6 +260,9 @@ async def run_background_sync_pipeline(
         docs_dir=docs_dir,
         result=total_result,
         enabled=git_enabled,
+        git_auto_config_user=git_auto_config_user,
+        git_user_name=git_user_name,
+        git_user_email=git_user_email,
     )
 
     return sync_summary
@@ -393,6 +399,9 @@ def commit_sync_changes(
     docs_dir: Path,
     result: dict,
     enabled: bool = True,
+    git_auto_config_user: bool = False,
+    git_user_name: str = "NovaBot",
+    git_user_email: str = "novabot@example.local",
     git_factory: Callable[[Path], Any] = GitOps,
     status_runner: Callable[..., Any] = subprocess.run,
 ) -> str | None:
@@ -402,7 +411,18 @@ def commit_sync_changes(
         return None
 
     git = git_factory(Path(docs_dir))
-    if not git.is_git_repo() or not git.has_user_identity():
+    if not git.is_git_repo():
+        return None
+    ensure_identity = getattr(git, "ensure_user_identity", None)
+    if callable(ensure_identity):
+        has_identity = ensure_identity(
+            auto_config=git_auto_config_user,
+            name=git_user_name,
+            email=git_user_email,
+        )
+    else:
+        has_identity = git.has_user_identity()
+    if not has_identity:
         return None
 
     try:

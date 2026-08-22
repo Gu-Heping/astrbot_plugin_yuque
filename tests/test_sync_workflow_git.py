@@ -31,6 +31,7 @@ class _FakeGit:
         self.repo_dir = repo_dir
         self.is_repo = is_repo
         self.has_identity = has_identity
+        self.ensure_identity_calls = []
         self.commits = []
         _FakeGit.instances.append(self)
 
@@ -38,6 +39,11 @@ class _FakeGit:
         return self.is_repo
 
     def has_user_identity(self):
+        return self.has_identity
+
+    def ensure_user_identity(self, **kwargs):
+        self.ensure_identity_calls.append(kwargs)
+        self.has_identity = self.has_identity or bool(kwargs.get("auto_config"))
         return self.has_identity
 
     def add_commit(self, files, message):
@@ -132,6 +138,29 @@ def test_commit_sync_changes_commits_porcelain_files(tmp_path):
     assert result == "abc1234"
     assert _FakeGit.instances[0].commits == [
         (["a.md", "b.md"], "sync: 同步 3 篇文档, 清理 2 个文件")
+    ]
+
+
+def test_commit_sync_changes_can_auto_config_git_identity(tmp_path):
+    _FakeGit.instances = []
+
+    result = commit_sync_changes(
+        docs_dir=tmp_path,
+        result={"docs": 1},
+        git_auto_config_user=True,
+        git_user_name="Bot",
+        git_user_email="bot@example.local",
+        git_factory=lambda repo_dir: _FakeGit(repo_dir, has_identity=False),
+        status_runner=lambda *args, **kwargs: SimpleNamespace(stdout=" M a.md\n"),
+    )
+
+    assert result == "abc1234"
+    assert _FakeGit.instances[0].ensure_identity_calls == [
+        {
+            "auto_config": True,
+            "name": "Bot",
+            "email": "bot@example.local",
+        }
     ]
 
 
