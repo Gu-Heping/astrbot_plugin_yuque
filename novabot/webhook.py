@@ -167,6 +167,16 @@ class WebhookHandler:
             return self.get_client(team_id)
         return self.get_client()
 
+    def _try_get_client_for_team(self, team_id: str = DEFAULT_TEAM_ID) -> YuqueClient | None:
+        """Return a team client, or None when the webhook targets an unmanaged team."""
+        try:
+            return self._get_client_for_team(team_id)
+        except ValueError as e:
+            if "unknown team_id" not in str(e):
+                raise
+            logger.warning(f"[Webhook] 忽略未配置团队的事件: team_id={team_id}")
+            return None
+
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）
 
@@ -397,7 +407,9 @@ class WebhookHandler:
         )
         if not preliminary_resolved and self._repo_id_candidate_count(repo_id, source_origin=source_origin) > 1:
             return {"status": "error", "message": "ambiguous repository team"}
-        client = self._get_client_for_team(preliminary_team["team_id"])
+        client = self._try_get_client_for_team(preliminary_team["team_id"])
+        if client is None:
+            return {"status": "ignored", "message": "unknown team", "team_id": preliminary_team["team_id"]}
 
         # 获取 TOC
         toc_list = None
@@ -442,7 +454,9 @@ class WebhookHandler:
             source_origin=source_origin,
         )
         if team_info["team_id"] != preliminary_team["team_id"]:
-            client = self._get_client_for_team(team_info["team_id"])
+            client = self._try_get_client_for_team(team_info["team_id"])
+            if client is None:
+                return {"status": "ignored", "message": "unknown team", "team_id": team_info["team_id"]}
         detail["team_id"] = team_info["team_id"]
         detail["team_name"] = team_info["team_name"]
 
@@ -690,7 +704,9 @@ class WebhookHandler:
         )
         if not preliminary_resolved and self._repo_id_candidate_count(repo_id, source_origin=source_origin) > 1:
             return {"status": "error", "message": "ambiguous repository team"}
-        client = self._get_client_for_team(preliminary_team["team_id"])
+        client = self._try_get_client_for_team(preliminary_team["team_id"])
+        if client is None:
+            return {"status": "ignored", "message": "unknown team", "team_id": preliminary_team["team_id"]}
         namespace = await self._get_namespace(client, repo_id, repo_slug) if repo_id else None
         team_info, team_resolved = self._find_team_info(
             repo_id=repo_id,
@@ -699,7 +715,9 @@ class WebhookHandler:
             source_origin=source_origin,
         )
         if team_info["team_id"] != preliminary_team["team_id"]:
-            client = self._get_client_for_team(team_info["team_id"])
+            client = self._try_get_client_for_team(team_info["team_id"])
+            if client is None:
+                return {"status": "ignored", "message": "unknown team", "team_id": team_info["team_id"]}
 
         team_info, team_error = self._resolve_delete_team_info(
             doc_id=doc_id,
