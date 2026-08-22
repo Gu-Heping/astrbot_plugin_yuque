@@ -85,6 +85,12 @@ def test_extract_relaxed_pipe_table_without_separator():
     ]
 
 
+def test_extract_ignores_ordered_lists_with_pipes():
+    text = "1. A | B\n2) C | D\n"
+
+    assert _extract_table_blocks(text) == []
+
+
 def test_render_table_image_creates_png(tmp_path):
     from PIL import ImageFont
 
@@ -165,6 +171,15 @@ def test_render_relaxed_weekly_pipe_table_as_image(tmp_path, monkeypatch):
 
     assert [segment[0] for segment in segments] == ["text", "image", "text"]
     assert Path(segments[1][1]).exists()
+
+
+def test_render_ordered_lists_with_pipes_as_plain_text(tmp_path):
+    text = "1. A | B\n2) C | D\n"
+
+    segments = render_tables_as_images(text, tmp_path)
+
+    assert segments == [("text", "1. A | B\n2) C | D")]
+    assert list(tmp_path.glob("table_*.png")) == []
 
 
 def test_find_font_path_prefers_configured_path(tmp_path, monkeypatch):

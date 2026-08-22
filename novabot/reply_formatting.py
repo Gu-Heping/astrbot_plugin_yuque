@@ -104,6 +104,8 @@ def _is_table_row(line: str) -> bool:
     stripped = line.strip()
     if stripped.startswith("|") and stripped.endswith("|"):
         return stripped.count("|") >= 2
+    if re.match(r"^\d+[\.)]\s+", stripped):
+        return False
     return stripped.count("|") >= 2 and not stripped.startswith(("-", "*", "+", ">"))
 
 
