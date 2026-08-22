@@ -140,8 +140,8 @@ async def sync_all_team_members(
     group_teams = 0
 
     for team in teams:
-        client = client_factory(team.team_id)
         try:
+            client = client_factory(team.team_id)
             result = await sync_team_members(client=client, storage=storage, team=team)
         except Exception as e:
             logger.error(f"[Sync] 同步团队成员失败: team_id={team.team_id}, error={e}", exc_info=True)

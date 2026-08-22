@@ -426,6 +426,37 @@ async def test_sync_all_team_members_syncs_all_group_teams_and_skips_users():
 
 
 @pytest.mark.asyncio
+async def test_sync_all_team_members_continues_when_client_creation_fails():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+    }
+
+    def client_factory(team_id):
+        if team_id == "default":
+            raise RuntimeError("client unavailable")
+        return clients[team_id]
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=client_factory,
+    )
+
+    assert "NOVA (default): ❌ 同步失败: client unavailable" in text
+    assert "Other (other): ✅ 团队成员同步完成，1 人" in text
+    assert "团队: 1/2 个团队完成成员同步" in text
+    assert storage.members["other:2"]["name"] == "Other Bob"
+
+
+@pytest.mark.asyncio
 async def test_run_background_sync_pipeline_orchestrates_post_sync_and_commit(tmp_path):
     storage = _Storage({})
     calls = {}

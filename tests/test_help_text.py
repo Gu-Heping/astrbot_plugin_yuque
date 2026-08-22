@@ -7,7 +7,7 @@ def test_help_text_exposes_multi_team_sync_without_dropping_community_commands()
     assert "/sync - 同步全部已启用团队知识库" in text
     assert "/sync <team_id> - 只同步指定团队" in text
     assert "/sync team <team_id> - 只同步指定团队" in text
-    assert "/sync members - 同步全部团队成员" in text
+    assert "/sync members - 同步全部已启用团队成员" in text
     assert "/sync members <team_id> - 同步指定团队成员" in text
 
     assert "/profile refresh - 刷新画像" in text
