@@ -6,8 +6,11 @@ import asyncio
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from .reply_formatting import _clean_cell, _is_table_row, markdown_to_plaintext
 
 
 logger = logging.getLogger(__name__)
@@ -22,6 +25,16 @@ _CJK_FONT_URLS = [
 ]
 _FONT_FILE_NAME = "NotoSansCJKsc-Regular.otf"
 _FONT_LOCK = asyncio.Lock()
+_SYSTEM_FONT_PATH_CACHE_SET = False
+_SYSTEM_FONT_PATH_CACHE: str | None = None
+_MAX_FONT_BYTES = 64 * 1024 * 1024
+_MAX_TABLE_ROWS = 200
+_MAX_TABLE_COLUMNS = 20
+_MAX_TABLE_IMAGE_WIDTH = 12000
+_MAX_TABLE_IMAGE_HEIGHT = 12000
+_MAX_TABLE_IMAGE_PIXELS = 40_000_000
+_TABLE_IMAGE_RETENTION_COUNT = 100
+_TABLE_IMAGE_RETENTION_SECONDS = 24 * 60 * 60
 
 
 def _is_valid_font(path: str | Path) -> bool:
@@ -42,10 +55,16 @@ def _find_font_path(font_path: str | None = None) -> str | None:
     Otherwise the function searches common system font locations and, if
     Matplotlib is installed, scans the system font list for CJK fonts.
     """
+    global _SYSTEM_FONT_PATH_CACHE, _SYSTEM_FONT_PATH_CACHE_SET
+
     if font_path:
         candidate = Path(font_path)
         if candidate.is_file() and _is_valid_font(candidate):
             return str(candidate)
+        return None
+
+    if _SYSTEM_FONT_PATH_CACHE_SET:
+        return _SYSTEM_FONT_PATH_CACHE
 
     candidates = [
         # Windows common Chinese fonts
@@ -78,6 +97,8 @@ def _find_font_path(font_path: str | None = None) -> str | None:
     ]
     for path in candidates:
         if Path(path).is_file() and _is_valid_font(path):
+            _SYSTEM_FONT_PATH_CACHE = path
+            _SYSTEM_FONT_PATH_CACHE_SET = True
             return path
 
     # Optional: let Matplotlib scan the system font list for CJK fonts.
@@ -106,12 +127,16 @@ def _find_font_path(font_path: str | None = None) -> str | None:
                 prop = fm.FontProperties(fname=path)
                 name = (prop.get_name() or "").lower()
                 if any(k in name for k in cjk_keywords) and _is_valid_font(path):
+                    _SYSTEM_FONT_PATH_CACHE = path
+                    _SYSTEM_FONT_PATH_CACHE_SET = True
                     return path
             except Exception:
                 continue
     except Exception:
         pass
 
+    _SYSTEM_FONT_PATH_CACHE = None
+    _SYSTEM_FONT_PATH_CACHE_SET = True
     return None
 
 
@@ -158,8 +183,14 @@ async def _download_font(url: str, dest: Path, timeout: float = 30.0) -> bool:
             async with client.stream("GET", url) as response:
                 response.raise_for_status()
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                written = 0
                 with dest.open("wb") as f:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
+                        written += len(chunk)
+                        if written > _MAX_FONT_BYTES:
+                            raise RuntimeError(
+                                f"Font download exceeded {_MAX_FONT_BYTES} bytes"
+                            )
                         f.write(chunk)
         return _is_valid_font(dest)
     except Exception as exc:
@@ -219,13 +250,6 @@ async def ensure_cjk_font(
     return None
 
 
-def _is_table_row(line: str) -> bool:
-    stripped = line.strip()
-    return bool(
-        stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 2
-    )
-
-
 def _is_separator_row(row: list[str]) -> bool:
     return all(re.fullmatch(r"[\s\-:]+", cell) for cell in row)
 
@@ -234,17 +258,6 @@ def _parse_row(line: str) -> list[str]:
     stripped = line.strip()
     inner = stripped[1:-1]
     return [cell.strip() for cell in inner.split("|")]
-
-
-def _clean_cell(text: str) -> str:
-    """Remove lightweight inline Markdown from a table cell."""
-    text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    text = re.sub(r"__([^_]+)__", r"\1", text)
-    text = re.sub(r"~~([^~]+)~~", r"\1", text)
-    text = re.sub(r"`([^`]+)`", r"\1", text)
-    text = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"[图片: \2]", text)
-    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
-    return text.strip()
 
 
 def _extract_table_blocks(text: str) -> list[tuple[int, int, list[list[str]]]]:
@@ -312,6 +325,16 @@ def _render_table_image(
     """Draw rows as a PNG table and save to output_path."""
     from PIL import Image, ImageDraw, ImageFont
 
+    if not rows:
+        raise RuntimeError("Table has no rows")
+    if len(rows) > _MAX_TABLE_ROWS:
+        raise RuntimeError(f"Table has too many rows: {len(rows)}")
+    col_count = len(rows[0])
+    if col_count > _MAX_TABLE_COLUMNS:
+        raise RuntimeError(f"Table has too many columns: {col_count}")
+    if any(len(row) != col_count for row in rows):
+        raise RuntimeError("Table rows have inconsistent column counts")
+
     all_text = "".join("".join(row) for row in rows)
     font = _find_font(font_size, font_path=font_path)
     if font is None and _has_cjk(all_text):
@@ -322,7 +345,6 @@ def _render_table_image(
         font = ImageFont.load_default()
 
     # Calculate natural column widths (header + body).
-    col_count = len(rows[0]) if rows else 0
     col_widths = [0] * col_count
     wrapped_cells: list[list[list[str]]] = []
     for r_idx, row in enumerate(rows):
@@ -354,6 +376,15 @@ def _render_table_image(
 
     table_width = sum(col_widths) + 1
     table_height = sum(row_heights) + 1
+    if (
+        table_width > _MAX_TABLE_IMAGE_WIDTH
+        or table_height > _MAX_TABLE_IMAGE_HEIGHT
+        or table_width * table_height > _MAX_TABLE_IMAGE_PIXELS
+    ):
+        raise RuntimeError(
+            f"Table image is too large: {table_width}x{table_height}"
+        )
+
     image = Image.new("RGB", (table_width, table_height), "white")
     draw = ImageDraw.Draw(image)
 
@@ -391,13 +422,12 @@ def render_tables_as_images(
     If no CJK font is available, tables are kept as plain text instead of
     producing garbled images.
     """
-    from .reply_formatting import markdown_to_plaintext
-
     blocks = _extract_table_blocks(markdown_text)
     if not blocks:
         return [("text", markdown_to_plaintext(markdown_text))]
 
     segments: list[tuple[str, str]] = []
+    generated_images: list[Path] = []
     last_end = 0
     try:
         for start, end, rows in blocks:
@@ -406,11 +436,16 @@ def render_tables_as_images(
             if before_text.strip():
                 segments.append(("text", markdown_to_plaintext(before_text)))
             image_path = image_dir / f"table_{uuid.uuid4().hex}.png"
+            generated_images.append(image_path)
             _render_table_image(rows, image_path, font_path=font_path)
             segments.append(("image", str(image_path)))
             last_end = end
-    except RuntimeError:
-        # No usable font: fall back to the original plain-text rendering.
+    except (RuntimeError, OSError, MemoryError):
+        for image_path in generated_images:
+            try:
+                image_path.unlink(missing_ok=True)
+            except OSError:
+                pass
         return [("text", markdown_to_plaintext(markdown_text))]
 
     after_lines = markdown_text.splitlines()[last_end:]
@@ -418,15 +453,30 @@ def render_tables_as_images(
     if after_text.strip():
         segments.append(("text", markdown_to_plaintext(after_text)))
 
+    clean_table_images(image_dir)
     return segments
 
 
-def clean_table_images(image_dir: Path) -> None:
-    """Remove previously rendered table images to avoid unbounded disk growth."""
+def clean_table_images(
+    image_dir: Path,
+    *,
+    max_age_seconds: int = _TABLE_IMAGE_RETENTION_SECONDS,
+    max_files: int = _TABLE_IMAGE_RETENTION_COUNT,
+) -> None:
+    """Remove old rendered table images to avoid unbounded disk growth."""
     if not image_dir.exists():
         return
-    for path in image_dir.glob("table_*.png"):
+    now = datetime.now()
+    images = sorted(
+        image_dir.glob("table_*.png"),
+        key=lambda path: path.stat().st_mtime if path.exists() else 0,
+        reverse=True,
+    )
+    cutoff = now - timedelta(seconds=max_age_seconds)
+    for index, path in enumerate(images):
         try:
-            path.unlink()
+            modified_at = datetime.fromtimestamp(path.stat().st_mtime)
+            if index >= max_files or modified_at < cutoff:
+                path.unlink()
         except OSError:
             pass

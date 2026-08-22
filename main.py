@@ -493,8 +493,8 @@ class NovaBotPlugin(Star):
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """AstrBot 初始化完成后启动 Webhook 服务（备用触发）"""
-        await self._initialize_reply_rendering()
         await self._start_webhook_service()
+        asyncio.create_task(self._initialize_reply_rendering())
 
     async def _initialize_reply_rendering(self):
         """Prepare optional Markdown table rendering resources."""
@@ -516,13 +516,17 @@ class NovaBotPlugin(Star):
         """Return a plain reply with Markdown markers removed."""
         return event.plain_result(markdown_to_plaintext(text))
 
-    def _rich_result(self, event: AstrMessageEvent, text: str):
+    async def _rich_result(self, event: AstrMessageEvent, text: str):
         """Return plain text or a text+image chain for Markdown table replies."""
         if not self.render_tables_as_images:
             return self._plain_result(event, text)
 
-        font_path = self.table_font_path or self._resolved_table_font_path
-        segments = render_tables_as_images(text, self._table_image_dir, font_path=font_path)
+        segments = await asyncio.to_thread(
+            render_tables_as_images,
+            text,
+            self._table_image_dir,
+            font_path=self._resolved_table_font_path,
+        )
         return self._build_chain_result(event, segments)
 
     def _build_chain_result(self, event: AstrMessageEvent, segments: list[tuple[str, str]]):
@@ -776,7 +780,7 @@ class NovaBotPlugin(Star):
         logger.info(f"[on_message] 处理消息 ({trigger}): {query[:30]}...")
         try:
             response = await self.agent.handle_message(event, query)
-            yield self._rich_result(event, response)
+            yield await self._rich_result(event, response)
         except Exception as e:
             logger.error(f"自然语言处理失败: {e}", exc_info=True)
             yield event.plain_result("处理消息时出错，请稍后重试。")
@@ -1080,7 +1084,7 @@ class NovaBotPlugin(Star):
                     provider=provider,
                     docs=docs,
                 )
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
 
             except Exception as e:
                 logger.error(f"领域评估失败: {e}", exc_info=True)
@@ -1106,7 +1110,7 @@ class NovaBotPlugin(Star):
                     provider=provider,
                     docs=docs,
                 )
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
             except Exception as e:
                 logger.error(f"生成画像失败: {e}", exc_info=True)
                 yield event.plain_result(f"❌ 生成失败: {e}")
@@ -1139,7 +1143,7 @@ class NovaBotPlugin(Star):
         try:
             yield event.plain_result("🔍 正在分析推荐...")
             response = await self.agent.handle_message(event, build_partner_agent_query(topic))
-            yield self._rich_result(event, response)
+            yield await self._rich_result(event, response)
 
         except Exception as e:
             logger.error(f"[Partner] Agent 处理失败: {e}", exc_info=True)
@@ -1302,7 +1306,7 @@ class NovaBotPlugin(Star):
                 user_docs=user_docs,
             )
             result = format_learning_path(path)
-            yield self._rich_result(event, result)
+            yield await self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"学习路径生成失败: {e}", exc_info=True)
@@ -1327,7 +1331,7 @@ class NovaBotPlugin(Star):
             # 显示订阅列表
             subs = self.subscription_manager.get_subscriptions(platform_id, umo)
             result = format_subscription_list(subs)
-            yield self._rich_result(event, result)
+            yield await self._rich_result(event, result)
             return
 
         sub_type = sub_type.lower()
@@ -1418,7 +1422,7 @@ class NovaBotPlugin(Star):
                 query=query,
                 user_id=event.get_sender_id(),
             ):
-                yield self._rich_result(event, message)
+                yield await self._rich_result(event, message)
         except Exception as e:
             logger.error(f"RAG 命令失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ RAG 命令失败: {e}")
@@ -1476,7 +1480,7 @@ class NovaBotPlugin(Star):
                 send_file=lambda path: self._try_send_file(event, path),
             )
             for message in messages:
-                yield self._rich_result(event, message)
+                yield await self._rich_result(event, message)
         except Exception as e:
             logger.error(f"生成周报失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 生成周报失败: {e}")
@@ -1532,7 +1536,7 @@ class NovaBotPlugin(Star):
                 target_domain=target_domain,
                 provider=provider,
             )
-            yield self._rich_result(event, result)
+            yield await self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"学习缺口分析失败: {e}", exc_info=True)
@@ -1562,7 +1566,7 @@ class NovaBotPlugin(Star):
                 rag=self.rag,
                 token_monitor=self.token_monitor,
             )
-            yield self._rich_result(event, result)
+            yield await self._rich_result(event, result)
 
         except Exception as e:
             logger.error(f"知识卡片生成失败: {e}", exc_info=True)
@@ -1668,7 +1672,7 @@ class NovaBotPlugin(Star):
         try:
             stats = self.token_monitor.get_stats(days=30)
             report = self.token_monitor.format_stats_report(stats)
-            yield self._rich_result(event, report)
+            yield await self._rich_result(event, report)
         except Exception as e:
             logger.error(f"获取 Token 统计失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 获取失败: {e}")
@@ -1784,7 +1788,7 @@ class NovaBotPlugin(Star):
                     return
 
                 result = self.ask_box.format_question_detail(question)
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
                 return
 
             # 回答问题（需绑定语雀）
@@ -1951,7 +1955,7 @@ class NovaBotPlugin(Star):
             if not content:
                 kbs = self.kb_manager.list_kbs()
                 result = self.kb_manager.format_kb_list(kbs)
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
                 return
 
             # 检查是否是 guide 子命令
@@ -1972,7 +1976,7 @@ class NovaBotPlugin(Star):
                     return
 
                 result = self.kb_manager.format_kb_guide(guide)
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
                 return
 
             # 检查是否是 updates 子命令
@@ -1990,7 +1994,7 @@ class NovaBotPlugin(Star):
                 result = self.kb_manager.format_kb_updates(
                     kb_name, days, team_id=update_team_id or None
                 )
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
                 return
 
             # 查找匹配的知识库（支持知识库名包含空格）
@@ -2023,7 +2027,7 @@ class NovaBotPlugin(Star):
                         yield event.plain_result(f"❌ 未找到知识库「{content}」")
                         return
                     result = self.kb_manager.format_kb_info(info)
-                    yield self._rich_result(event, result)
+                    yield await self._rich_result(event, result)
                     return
                 else:
                     book_name = content[:first_space]
@@ -2032,7 +2036,7 @@ class NovaBotPlugin(Star):
                         yield event.plain_result(f"❌ 未找到知识库「{book_name}」")
                         return
                     result = self.kb_manager.format_kb_info(info)
-                    yield self._rich_result(event, result)
+                    yield await self._rich_result(event, result)
                     return
 
             # 找到匹配的知识库，提取查询部分
@@ -2046,7 +2050,7 @@ class NovaBotPlugin(Star):
                     yield event.plain_result(f"❌ 未找到知识库「{matched_name}」")
                     return
                 result = self.kb_manager.format_kb_info(info)
-                yield self._rich_result(event, result)
+                yield await self._rich_result(event, result)
                 return
 
             # 有查询内容，执行范围检索
@@ -2105,16 +2109,16 @@ class NovaBotPlugin(Star):
                 if overview.sessions_for_analysis:
                     provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                     if provider:
-                        yield self._rich_result(event, overview.text)
+                        yield await self._rich_result(event, overview.text)
                         analysis = await analyze_memory_with_llm(
                             provider=provider,
                             user_name=yuque_name,
                             sessions=overview.sessions_for_analysis,
                             token_monitor=self.token_monitor,
                         )
-                        yield self._rich_result(event, analysis)
+                        yield await self._rich_result(event, analysis)
                         return
-                yield self._rich_result(event, overview.text)
+                yield await self._rich_result(event, overview.text)
                 return
 
             action_lower = action.lower()
@@ -2168,18 +2172,18 @@ class NovaBotPlugin(Star):
             if not content:
                 overview = build_progress_overview(self.memory_manager, user_id, yuque_name)
                 if not overview.progress_for_analysis:
-                    yield self._rich_result(event, overview.text)
+                    yield await self._rich_result(event, overview.text)
                     return
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if provider:
-                    yield self._rich_result(event, overview.text)
+                    yield await self._rich_result(event, overview.text)
                     analysis = await analyze_progress_with_llm(
                         provider=provider,
                         user_name=yuque_name,
                         progress=overview.progress_for_analysis,
                         token_monitor=self.token_monitor,
                     )
-                    yield self._rich_result(event, analysis)
+                    yield await self._rich_result(event, analysis)
                 else:
                     yield event.plain_result(
                         format_progress_overview_without_analysis(
@@ -2313,7 +2317,7 @@ class NovaBotPlugin(Star):
                         event,
                         build_trajectory_topic_query(topic),
                     )
-                    yield self._rich_result(event, response)
+                    yield await self._rich_result(event, response)
                 except Exception as e:
                     logger.error(f"[Trajectory] Agent 处理失败: {e}", exc_info=True)
                     results = self.trajectory_manager.search_by_topic(topic, days=30)
@@ -2344,17 +2348,17 @@ class NovaBotPlugin(Star):
             if should_analyze_trajectory(is_self, trajectory):
                 provider = self.context.get_using_provider(umo=event.unified_msg_origin)
                 if provider:
-                    yield self._rich_result(event, response + "\n🔍 正在分析活动模式...")
+                    yield await self._rich_result(event, response + "\n🔍 正在分析活动模式...")
                     analysis = await analyze_trajectory_with_llm(
                         provider=provider,
                         user_name=target_name,
                         trajectory=trajectory,
                         token_monitor=self.token_monitor,
                     )
-                    yield self._rich_result(event, analysis)
+                    yield await self._rich_result(event, analysis)
                     return
 
-            yield self._rich_result(event, response)
+            yield await self._rich_result(event, response)
 
         except Exception as e:
             logger.error(f"[Trajectory] 查询失败: {e}", exc_info=True)
@@ -2397,7 +2401,7 @@ class NovaBotPlugin(Star):
                         event,
                         build_collab_find_query(topic),
                     )
-                    yield self._rich_result(event, response)
+                    yield await self._rich_result(event, response)
                 except Exception as e:
                     logger.error(f"[Collab] Agent 处理失败: {e}", exc_info=True)
                     potential = self.collaboration_manager.find_potential_collaborators(

@@ -12,4 +12,4 @@ langchain-community>=0.3.10
 langchain-openai>=0.2.0
 langchain-core>=0.3.10
 chromadb>=0.4.0,<0.6.0
-Pillow>=10
+Pillow>=12.2.0

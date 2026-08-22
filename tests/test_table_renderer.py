@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
 
 from novabot.table_renderer import (
+    _download_font,
     _extract_table_blocks,
     _find_font_path,
     _is_separator_row,
@@ -60,26 +66,35 @@ def test_extract_ignores_invalid_tables():
 
 
 def test_render_table_image_creates_png(tmp_path):
-    rows = [["配置", "说明"], ["token", "API token"]]
+    from PIL import ImageFont
+
+    rows = [["Name", "Description"], ["token", "API token"]]
     output = tmp_path / "test.png"
-    _render_table_image(rows, output)
+    _render_table_image(rows, output, font_path=None)
     assert output.exists()
     from PIL import Image
 
     with Image.open(output) as img:
         assert img.format == "PNG"
         assert img.width > 0 and img.height > 0
+    assert ImageFont.load_default()
 
 
-def test_render_tables_as_images_splits_segments(tmp_path):
+def test_render_tables_as_images_splits_segments(tmp_path, monkeypatch):
+    from PIL import ImageFont
+
     text = (
         "请看下表：\n"
         "\n"
-        "| 名称 | 值 |\n"
+        "| Name | Value |\n"
         "| --- | --- |\n"
         "| A | 1 |\n"
         "\n"
         "结束。"
+    )
+    monkeypatch.setattr(
+        "novabot.table_renderer._find_font",
+        lambda size, font_path=None: ImageFont.load_default(),
     )
     segments = render_tables_as_images(text, tmp_path)
     assert len(segments) == 3
@@ -157,3 +172,112 @@ def test_is_valid_font_rejects_invalid_file(tmp_path):
     bad_file.write_text("hello")
     assert _is_valid_font(bad_file) is False
 
+
+def test_render_table_image_rejects_oversized_tables(tmp_path):
+    rows = [["c"]] * 201
+
+    with pytest.raises(RuntimeError, match="too many rows"):
+        _render_table_image(rows, tmp_path / "large.png")
+
+
+def test_render_tables_as_images_removes_partial_images_on_fallback(tmp_path, monkeypatch):
+    calls = {"count": 0}
+
+    def fake_render(rows, output_path, font_path=None):
+        calls["count"] += 1
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"partial")
+        if calls["count"] == 2:
+            raise RuntimeError("too large")
+        return output_path
+
+    monkeypatch.setattr("novabot.table_renderer._render_table_image", fake_render)
+    text = (
+        "| A | B |\n| --- | --- |\n| 1 | 2 |\n"
+        "\n"
+        "| C | D |\n| --- | --- |\n| 3 | 4 |\n"
+    )
+
+    segments = render_tables_as_images(text, tmp_path)
+
+    assert segments == [("text", "A | B\n1 | 2\n\nC | D\n3 | 4")]
+    assert list(tmp_path.glob("table_*.png")) == []
+
+
+def test_clean_table_images_enforces_retention_count(tmp_path):
+    for i in range(3):
+        path = tmp_path / f"table_{i}.png"
+        path.write_bytes(b"image")
+
+    from novabot.table_renderer import clean_table_images
+
+    clean_table_images(tmp_path, max_files=1, max_age_seconds=999999)
+
+    assert len(list(tmp_path.glob("table_*.png"))) == 1
+
+
+def test_find_font_path_caches_missing_system_font(monkeypatch):
+    import novabot.table_renderer as table_renderer
+
+    table_renderer._SYSTEM_FONT_PATH_CACHE = None
+    table_renderer._SYSTEM_FONT_PATH_CACHE_SET = False
+
+    class MissingPath:
+        def __init__(self, value):
+            self.value = value
+
+        def is_file(self):
+            return False
+
+    monkeypatch.setattr(table_renderer, "Path", MissingPath)
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "matplotlib":
+            raise ImportError("matplotlib unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert table_renderer._find_font_path() is None
+    assert table_renderer._SYSTEM_FONT_PATH_CACHE_SET is True
+
+
+def test_download_font_rejects_oversized_response(tmp_path, monkeypatch):
+    import novabot.table_renderer as table_renderer
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_bytes(self, chunk_size=8192):
+            yield b"x" * (table_renderer._MAX_FONT_BYTES + 1)
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url):
+            return FakeResponse()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "httpx",
+        SimpleNamespace(AsyncClient=FakeClient),
+    )
+
+    dest = tmp_path / "font.otf"
+    assert asyncio.run(_download_font("https://example.test/font.otf", dest)) is False
+    assert not dest.exists()

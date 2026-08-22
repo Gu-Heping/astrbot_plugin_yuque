@@ -42,7 +42,8 @@ def markdown_to_plaintext(text: str) -> str:
     # Blockquotes -> prefix with "| ".
     text = re.sub(r"^>\s?", "| ", text, flags=re.MULTILINE)
 
-    # Bold / italic / strikethrough (must come after list-marker handling).
+    # Bold / italic / strikethrough. Single-emphasis patterns use a trailing
+    # whitespace guard so bullet markers like "* item" are left alone.
     # Double emphasis first.
     text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = re.sub(r"__([^_]+)__", r"\1", text)

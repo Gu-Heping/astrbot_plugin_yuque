@@ -21,6 +21,7 @@ class _FakeYuqueClient:
         title: str,
         creator_name: str = "Alice",
         member_name: str = "Alice",
+        member_error: Exception | None = None,
     ):
         self.user_id = user_id
         self.repo_name = repo_name
@@ -29,6 +30,7 @@ class _FakeYuqueClient:
         self.title = title
         self.creator_name = creator_name
         self.member_name = member_name
+        self.member_error = member_error
         self.closed = False
 
     async def get_user(self):
@@ -43,6 +45,8 @@ class _FakeYuqueClient:
 
     async def get_group_members(self, user_id):
         assert user_id == self.user_id
+        if self.member_error:
+            raise self.member_error
         return [
             {
                 "user": {
@@ -246,6 +250,48 @@ async def test_sync_all_repos_fetches_group_members_for_author_resolution(tmp_pa
         ),
         output_dir=docs_dir,
         members={},
+        team=team,
+        team_path_prefix="other",
+        replace_index=False,
+        write_repo_cache=False,
+    )
+
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    docs = index.search(team_id="other")
+    content = (docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert docs[0]["author"] == "庄永琪"
+    assert "author: 庄永琪" in content
+    assert "author: Cumulo" not in content
+
+
+@pytest.mark.asyncio
+async def test_sync_all_repos_uses_cached_member_when_group_members_fetch_fails(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    members = {
+        "other:7": {"name": "庄永琪", "login": "zuiaimumuxiao", "team_id": "other"},
+    }
+    team = Team(
+        team_id="other",
+        name="NOVA2026春",
+        yuque_token="team-token",
+        yuque_base_url="https://www.yuque.com/api/v2",
+    )
+
+    await sync_all_repos(
+        client=_FakeYuqueClient(
+            user_id=2,
+            repo_name="Madoka浏览器AI助手",
+            namespace="wg5tth/lplocr",
+            doc_id=493,
+            title="庄永琪",
+            creator_name="Cumulo",
+            member_error=RuntimeError("members unavailable"),
+        ),
+        output_dir=docs_dir,
+        members=members,
         team=team,
         team_path_prefix="other",
         replace_index=False,
