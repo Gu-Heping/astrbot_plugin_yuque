@@ -498,6 +498,75 @@ def test_webhook_delete_chunk_uses_team_scoped_document_id(tmp_path):
     assert store.get_document_chunks("other:99") == []
 
 
+def test_webhook_delete_uses_doc_index_team_before_default_client(tmp_path):
+    import asyncio
+
+    docs_dir = tmp_path / "yuque_docs"
+    doc_path = docs_dir / "other" / "工程" / "删除.md"
+    doc_path.parent.mkdir(parents=True)
+    doc_path.write_text("待删除", encoding="utf-8")
+    store = ChunkStore(tmp_path / "chunks.db")
+    store.save_document_chunks(
+        "other:42",
+        split_markdown(
+            "other:42",
+            "待删除 chunk",
+            title="删除",
+            team_id="other",
+            team_name="Other",
+            size=220,
+            overlap=40,
+        ),
+    )
+    with DocIndex(str(tmp_path / "doc_index.db")) as index:
+        index.add_doc(
+            {
+                "yuque_id": 42,
+                "title": "删除",
+                "team_id": "other",
+                "team_name": "Other",
+                "file_path": "other/工程/删除.md",
+            }
+        )
+
+    requested_team_ids = []
+
+    def get_client(team_id="default"):
+        requested_team_ids.append(team_id)
+        if team_id == "default":
+            raise ValueError("unknown team_id: default")
+        return _FakeYuqueClient()
+
+    handler = WebhookHandler(
+        docs_dir=docs_dir,
+        data_dir=tmp_path,
+        get_client=get_client,
+        rag=None,
+        config={"git_enabled": False},
+        chunk_store=store,
+    )
+    handler._git_commit = lambda *args, **kwargs: None
+
+    result = asyncio.run(
+        handler._handle_doc_delete(
+            {
+                "data": {
+                    "id": 42,
+                    "book": {"id": 7, "name": "工程", "slug": "eng"},
+                }
+            }
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert requested_team_ids[0] == "other"
+    assert "default" not in requested_team_ids
+    assert not doc_path.exists()
+    assert store.get_document_chunks("other:42") == []
+    with DocIndex(str(tmp_path / "doc_index.db")) as index:
+        assert index.get_doc_by_yuque_id(42, team_id="other") is None
+
+
 def test_webhook_delete_scope_can_infer_single_indexed_team(tmp_path):
     handler = _handler(tmp_path, ChunkStore(tmp_path / "chunks.db"))
     with DocIndex(str(tmp_path / "doc_index.db")) as index:

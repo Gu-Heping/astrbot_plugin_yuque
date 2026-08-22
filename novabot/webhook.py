@@ -704,20 +704,52 @@ class WebhookHandler:
         )
         if not preliminary_resolved and self._repo_id_candidate_count(repo_id, source_origin=source_origin) > 1:
             return {"status": "error", "message": "ambiguous repository team"}
-        client = self._try_get_client_for_team(preliminary_team["team_id"])
+
+        team_info = preliminary_team
+        team_resolved = preliminary_resolved
+        client = None
+        client_team_id = ""
+        namespace = None
+        if not preliminary_resolved:
+            team_info, team_error = self._resolve_delete_team_info(
+                doc_id=doc_id,
+                team_info=preliminary_team,
+                team_resolved=False,
+            )
+            if team_error:
+                logger.warning(f"[Webhook] {team_error}")
+                return {"status": "error", "message": team_error}
+            if team_info is None:
+                return {"status": "ignored", "message": "unknown team"}
+
+        client = self._try_get_client_for_team(team_info["team_id"])
         if client is None:
-            return {"status": "ignored", "message": "unknown team", "team_id": preliminary_team["team_id"]}
-        namespace = await self._get_namespace(client, repo_id, repo_slug) if repo_id else None
-        team_info, team_resolved = self._find_team_info(
+            return {
+                "status": "ignored",
+                "message": "unknown team",
+                "team_id": team_info["team_id"],
+            }
+        client_team_id = team_info["team_id"]
+
+        if repo_id:
+            namespace = await self._get_namespace(client, repo_id, repo_slug)
+        resolved_by_repo, resolved_by_repo_ok = self._find_team_info(
             repo_id=repo_id,
             repo_name=repo_name,
             namespace=namespace,
             source_origin=source_origin,
         )
-        if team_info["team_id"] != preliminary_team["team_id"]:
+        if resolved_by_repo_ok:
+            team_resolved = True
+            team_info = resolved_by_repo
+        if team_info["team_id"] != client_team_id:
             client = self._try_get_client_for_team(team_info["team_id"])
             if client is None:
-                return {"status": "ignored", "message": "unknown team", "team_id": team_info["team_id"]}
+                return {
+                    "status": "ignored",
+                    "message": "unknown team",
+                    "team_id": team_info["team_id"],
+                }
 
         team_info, team_error = self._resolve_delete_team_info(
             doc_id=doc_id,
