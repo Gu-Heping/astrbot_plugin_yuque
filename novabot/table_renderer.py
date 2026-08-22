@@ -10,7 +10,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from .reply_formatting import _clean_cell, _is_table_row, markdown_to_plaintext
+from .reply_formatting import (
+    _clean_cell,
+    _is_table_row,
+    _parse_table_row,
+    markdown_to_plaintext,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -256,9 +261,7 @@ def _is_separator_row(row: list[str]) -> bool:
 
 
 def _parse_row(line: str) -> list[str]:
-    stripped = line.strip()
-    inner = stripped[1:-1]
-    return [cell.strip() for cell in inner.split("|")]
+    return _parse_table_row(line)
 
 
 def _extract_table_blocks(text: str) -> list[tuple[int, int, list[list[str]]]]:
@@ -276,19 +279,24 @@ def _extract_table_blocks(text: str) -> list[tuple[int, int, list[list[str]]]]:
             table_lines.append(_parse_row(lines[i]))
             i += 1
         end = i
-        # Require at least header + separator + one row.
-        if len(table_lines) >= 3:
+        if len(table_lines) >= 2:
             sep_index = next(
                 (idx for idx, row in enumerate(table_lines) if _is_separator_row(row)),
                 None,
             )
-            if sep_index is not None and sep_index > 0:
-                # Keep header and body rows, drop separator.
+            if sep_index is not None:
+                if sep_index == 0:
+                    i = end
+                    continue
                 rows = [table_lines[0]] + table_lines[sep_index + 1 :]
-                # Ensure all rows have the same column count.
+            else:
+                rows = table_lines
+
+            if len(rows) >= 2:
                 col_count = max(len(row) for row in rows)
-                normalized = [row + [""] * (col_count - len(row)) for row in rows]
-                blocks.append((start, end, normalized))
+                if col_count >= 2:
+                    normalized = [row + [""] * (col_count - len(row)) for row in rows]
+                    blocks.append((start, end, normalized))
         i = end
     return blocks
 

@@ -101,7 +101,10 @@ def _convert_tables(text: str) -> str:
 
 
 def _is_table_row(line: str) -> bool:
-    return bool(line.startswith("|") and line.endswith("|") and line.count("|") >= 2)
+    stripped = line.strip()
+    if stripped.startswith("|") and stripped.endswith("|"):
+        return stripped.count("|") >= 2
+    return stripped.count("|") >= 2 and not stripped.startswith(("-", "*", "+", ">"))
 
 
 def _render_table(lines: list[str]) -> list[str] | None:
@@ -130,8 +133,12 @@ def _render_table(lines: list[str]) -> list[str] | None:
 
 
 def _parse_table_row(line: str) -> list[str]:
-    # Strip outer pipes, split on unescaped pipes.
-    inner = line[1:-1]
+    # Strip optional outer pipes, split on unescaped pipes.
+    inner = line.strip()
+    if inner.startswith("|"):
+        inner = inner[1:]
+    if inner.endswith("|"):
+        inner = inner[:-1]
     return [cell.strip() for cell in inner.split("|")]
 
 
