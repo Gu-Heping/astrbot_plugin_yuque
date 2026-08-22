@@ -510,7 +510,10 @@ class NovaBotPlugin(Star):
                 download_timeout=self.table_font_download_timeout,
             )
             if self._resolved_table_font_path:
-                logger.info(f"[Reply] 表格图片字体已就绪: {self._resolved_table_font_path}")
+                logger.info(
+                    f"[Reply] 表格图片字体已就绪: "
+                    f"{PathlibPath(self._resolved_table_font_path).name}"
+                )
             else:
                 logger.warning("[Reply] 未找到可用中文字体，包含中文的表格会回退为纯文本")
         except Exception as e:

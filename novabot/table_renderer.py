@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from astrbot.api import logger
 
 from .reply_formatting import (
     _clean_cell,
@@ -16,9 +17,6 @@ from .reply_formatting import (
     _parse_table_row,
     markdown_to_plaintext,
 )
-
-
-logger = logging.getLogger(__name__)
 
 # Noto Sans CJK Simplified Chinese Regular is licensed under the SIL Open Font
 # License 1.1. jsDelivr is tried first because it is usually faster in mainland
@@ -451,7 +449,7 @@ def render_tables_as_images(
             _render_table_image(rows, image_path, font_path=font_path)
             logger.info(
                 f"[TableRender] 表格渲染成功: rows={len(rows)}, "
-                f"cols={len(rows[0]) if rows else 0}, path={image_path}"
+                f"cols={len(rows[0]) if rows else 0}, file={image_path.name}"
             )
             segments.append(("image", str(image_path)))
             last_end = end
