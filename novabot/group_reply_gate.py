@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Optional
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
+from .chat_participant import extract_chat_participant, format_history_item
 from .llm_utils import call_llm, sanitize_user_input
 from .token_monitor import FEATURE_GROUP_GATE
 
@@ -102,11 +103,17 @@ async def should_reply(
         if not prov:
             return False, "no_provider"
 
-        sender_name = event.get_sender_name() or "用户"
+        participant = extract_chat_participant(event)
+        sender_name = participant.safe_display_name
         safe_msg = sanitize_user_input(text, max_length=500)
         history_text = await _format_recent_history(plugin, umo)
 
-        prompt_parts = [f"发送者: {sender_name}", f"当前消息: {safe_msg}"]
+        prompt_parts = [
+            f"发送者: {sender_name}",
+            f"发送者平台 ID: {participant.safe_platform_id or '未知'}",
+            f"群聊 ID: {participant.safe_group_id or '未知'}",
+            f"当前消息: {safe_msg}",
+        ]
         if history_text:
             prompt_parts.append(f"最近对话:\n{history_text}")
         prompt = "\n".join(prompt_parts)
@@ -154,10 +161,9 @@ async def _format_recent_history(plugin: "NovaBotPlugin", umo: str) -> Optional[
         for item in recent:
             if not isinstance(item, dict):
                 continue
-            role = item.get("role", "user")
-            content = (item.get("content") or "")[:200]
-            label = "用户" if role == "user" else "NovaBot"
-            lines.append(f"{label}: {content}")
+            formatted = format_history_item(item, is_group=True)
+            if formatted:
+                lines.append(formatted[:200])
         return "\n".join(lines) if lines else None
 
     except Exception as e:

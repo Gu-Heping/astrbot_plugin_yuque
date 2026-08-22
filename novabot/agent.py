@@ -13,7 +13,12 @@ from astrbot.core.agent.message import (
     TextPart,
 )
 
-from .chat_scope import is_group_chat
+from .chat_participant import (
+    ChatParticipant,
+    extract_chat_participant,
+    format_group_history_user_message,
+    format_history_item,
+)
 from .prompt_security import (
     add_prompt_injection_guard,
     is_prompt_injection_only,
@@ -112,15 +117,17 @@ class NovaBotAgent:
         if not prov_id:
             return "LLM 未配置，无法处理消息。请联系管理员配置 LLM 服务。"
 
+        participant = extract_chat_participant(event)
+
         # 获取用户画像（如果已绑定）
         user_context = await self._get_user_context(event)
 
-        # 获取当前发送者名称（用于群聊区分用户）
-        sender_name = event.get_sender_name() or "用户"
-        user_context["sender_name"] = sender_name
+        # 获取当前发送者元数据（用于群聊区分用户）
+        user_context["sender_name"] = participant.safe_display_name
+        user_context["participant"] = participant
 
         # 获取对话历史（群聊中减少历史轮数，避免混淆上下文）
-        is_group = is_group_chat(event)
+        is_group = participant.is_group
         max_history_rounds = 1 if is_group else 5  # 群聊只保留1轮，私聊5轮
         conversation_history = await self._get_conversation_history(umo, max_rounds=max_history_rounds)
 
@@ -189,7 +196,12 @@ class NovaBotAgent:
                         logger.debug(f"[Agent] 实际 token: {actual_tokens}, 预估: {estimated_tokens}")
 
             # 记录对话到 conversation_manager
-            await self._record_conversation(umo, user_message, llm_resp.completion_text)
+            await self._record_conversation(
+                umo,
+                user_message,
+                llm_resp.completion_text,
+                participant=participant,
+            )
 
             # 新增：记录到长期记忆（需已绑定语雀）
             if self.plugin.memory_manager and user_context.get("bound"):
@@ -293,7 +305,14 @@ class NovaBotAgent:
             logger.warning(f"[Agent] 获取对话历史失败: {e}")
             return []
 
-    async def _record_conversation(self, umo: str, user_msg: str, assistant_msg: str):
+    async def _record_conversation(
+        self,
+        umo: str,
+        user_msg: str,
+        assistant_msg: str,
+        *,
+        participant: ChatParticipant | None = None,
+    ):
         """记录对话到 conversation_manager
 
         Args:
@@ -314,6 +333,8 @@ class NovaBotAgent:
                 return
 
             # 构建消息
+            if participant and participant.is_group:
+                user_msg = format_group_history_user_message(participant, user_msg)
             user_msg_segment = UserMessageSegment(content=[TextPart(text=user_msg)])
             assistant_msg_segment = AssistantMessageSegment(content=[TextPart(text=assistant_msg)])
 
@@ -368,13 +389,20 @@ class NovaBotAgent:
 
         # 获取当前发送者名称
         sender_name = user_context.get("sender_name", "用户")
+        participant = user_context.get("participant")
 
         # 群聊模式：明确标注当前用户
         if is_group:
+            participant_lines = (
+                participant.as_prompt_lines()
+                if isinstance(participant, ChatParticipant)
+                else [f"- 当前成员显示名: {sender_name}"]
+            )
             prompt += f"""
 
 【当前对话场景】
 - 这是在群聊中
+{chr(10).join(participant_lines)}
 - 当前与你对话的用户是：「{sender_name}」
 - 请只回复「{sender_name}」的问题，不要混淆群内其他人的话题
 - 如果消息与「{sender_name}」之前的问题无关，说明可能是新话题，正常回答即可"""
@@ -383,17 +411,23 @@ class NovaBotAgent:
         if conversation_history:
             # 群聊历史需要特别标注来源
             if is_group:
-                history_text = "\n".join([
-                    f"[群友] {msg.get('content', '')}" if msg['role'] == 'user' else f"[NovaBot] {msg.get('content', '')}"
-                    for msg in conversation_history
-                    if msg.get('role') and msg.get('content')
-                ])
+                history_text = "\n".join(
+                    line
+                    for line in (
+                        format_history_item(msg, is_group=True)
+                        for msg in conversation_history
+                    )
+                    if line
+                )
             else:
-                history_text = "\n".join([
-                    f"{'用户' if msg['role'] == 'user' else 'NovaBot'}: {msg.get('content', '')}"
-                    for msg in conversation_history
-                    if msg.get('role') and msg.get('content')
-                ])
+                history_text = "\n".join(
+                    line
+                    for line in (
+                        format_history_item(msg, is_group=False)
+                        for msg in conversation_history
+                    )
+                    if line
+                )
 
             if history_text:
                 wrapped_history = wrap_untrusted_context(
