@@ -21,6 +21,7 @@ from novabot.table_renderer import (
     _parse_row,
     _render_table_image,
     ensure_cjk_font,
+    has_renderable_table,
     render_tables_as_images,
 )
 
@@ -66,6 +67,11 @@ def test_parse_row_strips_padding():
 def test_extract_ignores_invalid_tables():
     text = "| a | b |\n普通段落"
     assert _extract_table_blocks(text) == []
+
+
+def test_has_renderable_table_detects_relaxed_tables():
+    assert has_renderable_table("名称 | 数量\n文档 | 3\n")
+    assert not has_renderable_table("这是一段普通文本。")
 
 
 def test_extract_relaxed_pipe_table_without_separator():

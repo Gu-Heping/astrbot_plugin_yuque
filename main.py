@@ -4,6 +4,7 @@ NovaBot - NOVA 社团智能助手
 """
 
 import asyncio
+import time
 from typing import Optional
 
 from aiohttp import web
@@ -54,6 +55,7 @@ from .novabot.reply_formatting import markdown_to_plaintext
 from .novabot.table_renderer import (
     clean_table_images,
     ensure_cjk_font,
+    has_renderable_table,
     render_tables_as_images,
 )
 from .novabot.help_text import format_help_text
@@ -184,6 +186,7 @@ class NovaBotPlugin(Star):
         self.data_dir = PathlibPath(get_astrbot_data_path()) / "plugin_data" / self.name
         self._table_image_dir = self.data_dir / "table_images"
         self._resolved_table_font_path: Optional[str] = None
+        self._table_font_retry_after = 0.0
 
         # 组件
         self.storage = Storage(data_dir=str(self.data_dir))
@@ -529,6 +532,36 @@ class NovaBotPlugin(Star):
         if not self.render_tables_as_images:
             logger.info("[Reply] render_tables_as_images=false，使用纯文本回复")
             return self._plain_result(event, text)
+
+        if (
+            self._resolved_table_font_path is None
+            and self.auto_download_table_font
+            and has_renderable_table(text)
+        ):
+            now = time.monotonic()
+            if now >= self._table_font_retry_after:
+                logger.info("[Reply] 检测到表格但字体未就绪，尝试补充下载中文字体")
+                self._resolved_table_font_path = await ensure_cjk_font(
+                    self.data_dir,
+                    self.table_font_path or None,
+                    self.auto_download_table_font,
+                    download_timeout=self.table_font_download_timeout,
+                )
+                if self._resolved_table_font_path:
+                    logger.info(
+                        f"[Reply] 表格图片字体已就绪: "
+                        f"{PathlibPath(self._resolved_table_font_path).name}"
+                    )
+                else:
+                    self._table_font_retry_after = now + 300
+                    logger.warning(
+                        "[Reply] 中文字体补充下载失败，5 分钟内不再重复尝试"
+                    )
+            else:
+                remaining = int(self._table_font_retry_after - now)
+                logger.info(
+                    f"[Reply] 中文字体仍在重试冷却中，剩余 {remaining} 秒"
+                )
 
         segments = await asyncio.to_thread(
             render_tables_as_images,
