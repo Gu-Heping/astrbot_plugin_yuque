@@ -14,6 +14,13 @@ from astrbot.core.agent.message import (
 )
 
 from .chat_scope import is_group_chat
+from .prompt_security import (
+    add_prompt_injection_guard,
+    is_prompt_injection_only,
+    looks_like_prompt_injection,
+    prompt_injection_refusal,
+    wrap_untrusted_user_message,
+)
 
 
 # 默认系统提示词
@@ -86,6 +93,13 @@ class NovaBotAgent:
         umo = event.unified_msg_origin
         # 使用传入的 query 或原始消息
         user_message = query if query else event.message_str
+        guarded_user_message = user_message
+        suspected_prompt_injection = looks_like_prompt_injection(user_message)
+        if suspected_prompt_injection:
+            logger.warning("[Agent] 检测到疑似 prompt injection 输入")
+            if is_prompt_injection_only(user_message):
+                return prompt_injection_refusal()
+            guarded_user_message = wrap_untrusted_user_message(user_message)
 
         # 获取 Provider ID
         prov_id = await self.plugin.context.get_current_chat_provider_id(umo)
@@ -106,6 +120,8 @@ class NovaBotAgent:
 
         # 构建系统提示词（包含历史和当前用户信息）
         system_prompt = self._build_system_prompt(user_context, conversation_history, is_group)
+        if suspected_prompt_injection:
+            system_prompt = add_prompt_injection_guard(system_prompt)
 
         # 获取工具
         tools = self._get_tools()
@@ -141,7 +157,7 @@ class NovaBotAgent:
             llm_resp = await self.plugin.context.tool_loop_agent(
                 event=event,
                 chat_provider_id=prov_id,
-                prompt=user_message,
+                prompt=guarded_user_message,
                 system_prompt=system_prompt,
                 tools=ToolSet(tools),
                 max_steps=10,
