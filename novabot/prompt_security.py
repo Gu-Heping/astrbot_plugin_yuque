@@ -9,9 +9,8 @@ _COMMAND_LINE_RE = re.compile(
     r"^\s*(?:"
     r"[\[【][A-Z][A-Z0-9_ -]{2,}[\]】]"
     r"|[A-Z][A-Z0-9_ -]{2,}"
-    r"|(?:system|developer|assistant|user)\s*:"
+    r"|(?i:(?:system|developer|assistant|user))\s*:"
     r")\s*$",
-    re.IGNORECASE,
 )
 
 _INJECTION_PATTERNS = [
