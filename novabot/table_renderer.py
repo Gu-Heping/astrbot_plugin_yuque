@@ -299,6 +299,11 @@ def _extract_table_blocks(text: str) -> list[tuple[int, int, list[list[str]]]]:
     return blocks
 
 
+def has_renderable_table(markdown_text: str) -> bool:
+    """Return True when the text contains at least one table block."""
+    return bool(_extract_table_blocks(markdown_text))
+
+
 def _wrap_text(text: str, font: Any, max_width: int) -> list[str]:
     """Wrap text into lines that fit within max_width pixels."""
     if max_width <= 0:
