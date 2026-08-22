@@ -11,12 +11,26 @@ from novabot.sync_coordinator import run_multi_team_sync
 
 
 class _FakeYuqueClient:
-    def __init__(self, *, user_id: int, repo_name: str, namespace: str, doc_id: int, title: str):
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        repo_name: str,
+        namespace: str,
+        doc_id: int,
+        title: str,
+        creator_name: str = "Alice",
+        member_name: str = "Alice",
+        member_error: Exception | None = None,
+    ):
         self.user_id = user_id
         self.repo_name = repo_name
         self.namespace = namespace
         self.doc_id = doc_id
         self.title = title
+        self.creator_name = creator_name
+        self.member_name = member_name
+        self.member_error = member_error
         self.closed = False
 
     async def get_user(self):
@@ -28,6 +42,20 @@ class _FakeYuqueClient:
 
     async def get_user_repos(self, user_id):
         raise AssertionError("group sync should use get_group_repos")
+
+    async def get_group_members(self, user_id):
+        assert user_id == self.user_id
+        if self.member_error:
+            raise self.member_error
+        return [
+            {
+                "user": {
+                    "id": 7,
+                    "name": self.member_name,
+                    "login": "alice",
+                }
+            }
+        ]
 
     async def get_repo_toc(self, namespace):
         assert namespace == self.namespace
@@ -51,7 +79,8 @@ class _FakeYuqueClient:
             "body": f"# {self.title}\n\n来自 {self.repo_name} 的多团队同步测试。",
             "book": {"name": self.repo_name, "namespace": namespace},
             "user_id": 7,
-            "user": {"id": 7, "name": "Alice"},
+            "user": {"id": 7, "name": self.creator_name},
+            "creator": {"id": 7, "name": self.creator_name},
         }
 
     async def close(self):
@@ -154,6 +183,130 @@ async def test_sync_all_repos_can_append_isolated_team_indexes(tmp_path):
     global_index = json.loads((docs_dir / ".yuque-id-to-path.json").read_text(encoding="utf-8"))
     assert global_index["101"] == "工程/默认团队文档.md"
     assert global_index["other:101"] == "other/工程/其他团队文档.md"
+
+
+@pytest.mark.asyncio
+async def test_sync_all_repos_prefers_scoped_team_member_name_over_creator_display(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    members = {
+        "7": {"name": "默认团队姓名", "login": "default"},
+        "other:7": {"name": "庄永琪", "login": "zuiaimumuxiao", "team_id": "other"},
+    }
+    team = Team(
+        team_id="other",
+        name="NOVA2026春",
+        yuque_token="team-token",
+        yuque_base_url="https://www.yuque.com/api/v2",
+    )
+
+    await sync_all_repos(
+        client=_FakeYuqueClient(
+            user_id=2,
+            repo_name="Madoka浏览器AI助手",
+            namespace="wg5tth/lplocr",
+            doc_id=493,
+            title="庄永琪",
+            creator_name="Cumulo",
+            member_name="庄永琪",
+        ),
+        output_dir=docs_dir,
+        members=members,
+        team=team,
+        team_path_prefix="other",
+        replace_index=False,
+        write_repo_cache=False,
+    )
+
+    doc_path = docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md"
+    content = doc_path.read_text(encoding="utf-8")
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    docs = index.search(team_id="other")
+
+    assert "author: 庄永琪" in content
+    assert "| 庄永琪 |" in content
+    assert "author: Cumulo" not in content
+    assert docs[0]["author"] == "庄永琪"
+
+
+@pytest.mark.asyncio
+async def test_sync_all_repos_fetches_group_members_for_author_resolution(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    team = Team(
+        team_id="other",
+        name="NOVA2026春",
+        yuque_token="team-token",
+        yuque_base_url="https://www.yuque.com/api/v2",
+    )
+
+    await sync_all_repos(
+        client=_FakeYuqueClient(
+            user_id=2,
+            repo_name="Madoka浏览器AI助手",
+            namespace="wg5tth/lplocr",
+            doc_id=493,
+            title="庄永琪",
+            creator_name="Cumulo",
+            member_name="庄永琪",
+        ),
+        output_dir=docs_dir,
+        members={},
+        team=team,
+        team_path_prefix="other",
+        replace_index=False,
+        write_repo_cache=False,
+    )
+
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    docs = index.search(team_id="other")
+    content = (docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert docs[0]["author"] == "庄永琪"
+    assert "author: 庄永琪" in content
+    assert "author: Cumulo" not in content
+
+
+@pytest.mark.asyncio
+async def test_sync_all_repos_uses_cached_member_when_group_members_fetch_fails(tmp_path):
+    docs_dir = tmp_path / "yuque_docs"
+    members = {
+        "other:7": {"name": "庄永琪", "login": "zuiaimumuxiao", "team_id": "other"},
+    }
+    team = Team(
+        team_id="other",
+        name="NOVA2026春",
+        yuque_token="team-token",
+        yuque_base_url="https://www.yuque.com/api/v2",
+    )
+
+    await sync_all_repos(
+        client=_FakeYuqueClient(
+            user_id=2,
+            repo_name="Madoka浏览器AI助手",
+            namespace="wg5tth/lplocr",
+            doc_id=493,
+            title="庄永琪",
+            creator_name="Cumulo",
+            member_error=RuntimeError("members unavailable"),
+        ),
+        output_dir=docs_dir,
+        members=members,
+        team=team,
+        team_path_prefix="other",
+        replace_index=False,
+        write_repo_cache=False,
+    )
+
+    index = DocIndex(str(tmp_path / "doc_index.db"))
+    docs = index.search(team_id="other")
+    content = (docs_dir / "other" / "Madoka浏览器AI助手" / "庄永琪.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert docs[0]["author"] == "庄永琪"
+    assert "author: 庄永琪" in content
+    assert "author: Cumulo" not in content
 
 
 @pytest.mark.asyncio

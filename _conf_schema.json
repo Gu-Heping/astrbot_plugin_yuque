@@ -70,6 +70,30 @@
     "labels": ["仅 @/唤醒词（默认）", "智能旁听（Bot 自行决定是否回复）"],
     "hint": "智能旁听适合小群/答疑群；活跃群慎用，可能增加 Token 消耗"
   },
+  "render_tables_as_images": {
+    "description": "将回复中的 Markdown 表格渲染为图片",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，LLM 回复中的 Markdown 表格会以图片发送；普通 Markdown 标记仍会转为纯文本"
+  },
+  "table_font_path": {
+    "description": "表格图片字体文件路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动搜索系统中文字体；私有环境可填写字体文件绝对路径"
+  },
+  "auto_download_table_font": {
+    "description": "自动下载中文表格字体",
+    "type": "bool",
+    "default": true,
+    "hint": "未找到系统中文字体时自动下载 Noto Sans CJK SC；关闭后找不到字体会回退为纯文本表格"
+  },
+  "table_font_download_timeout": {
+    "description": "字体下载超时（秒）",
+    "type": "int",
+    "default": 30,
+    "hint": "范围 5-300 秒，超出会回退为 30 秒"
+  },
   "webhook_enabled": {
     "description": "启用 Webhook 服务（实时同步语雀文档变更）",
     "type": "bool",

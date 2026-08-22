@@ -43,6 +43,14 @@ git clone https://github.com/Gu-Heping/astrbot_plugin_yuque.git
 | `embedding_api_key` | Embedding API Key（必需） |
 | `embedding_base_url` | Embedding API 地址（可选） |
 | `embedding_model` | Embedding 模型，默认 `text-embedding-3-small` |
+| `render_tables_as_images` | 将回复中的 Markdown 表格渲染为图片，默认开启 |
+| `table_font_path` | 表格图片字体文件路径；留空自动搜索系统中文字体 |
+| `auto_download_table_font` | 未找到中文字体时自动下载 Noto Sans CJK SC，默认开启 |
+| `table_font_download_timeout` | 字体下载超时秒数，默认 `30` |
+
+#### 回复格式
+
+NovaBot 会在发送 LLM/知识库生成结果前清理 Markdown 标记，例如 `**加粗**`、标题、代码围栏、链接语法会转为适合 QQ/群聊阅读的纯文本。回答中包含 Markdown 表格时，默认会将表格渲染为 PNG 图片并插入回复；如果关闭 `render_tables_as_images`，或未安装 Pillow/找不到可用字体，表格会自动回退为纯文本。
 
 #### 多语雀团队
 

@@ -111,6 +111,38 @@ class CollaborationNetwork:
         Returns:
             关系 ID
         """
+        network = self._load_network()
+        collaboration_id = self._upsert_collaboration(
+            network,
+            member_a,
+            member_b,
+            source_type,
+            context=context,
+            strength=strength,
+            metadata=metadata,
+            update_stats=True,
+        )
+        if collaboration_id:
+            self._save_network(network)
+        return collaboration_id
+
+    def _upsert_collaboration(
+        self,
+        network: dict,
+        member_a: str,
+        member_b: str,
+        source_type: str,
+        context: str = "",
+        strength: Optional[float] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        collaboration_by_pair: Optional[Dict[tuple[str, str], dict]] = None,
+        update_stats: bool = True,
+    ) -> str:
+        """Insert or update a collaboration in memory.
+
+        Callers that bulk import many edges can pass a pair lookup and defer the
+        expensive stats rebuild and disk write until the batch is complete.
+        """
         if not member_a or not member_b or member_a == member_b:
             logger.warning("[Collaboration] 无效参数，跳过记录")
             return ""
@@ -120,28 +152,35 @@ class CollaborationNetwork:
             logger.warning(f"[Collaboration] 未知来源类型: {source_type}")
             source_type = "explicit"
 
-        network = self._load_network()
-
         # 检查是否已存在相同关系
-        for collab in network["collaborations"]:
-            existing_pair = {collab["member_a"], collab["member_b"]}
-            if {member_a, member_b} == existing_pair:
-                # 已存在，更新强度
-                old_strength = collab.get("strength", 0)
-                new_strength = strength or self.STRENGTH_WEIGHTS.get(source_type, 0.3)
-                collab["strength"] = min(old_strength + new_strength, 1.0)
-                collab["last_updated"] = datetime.now().isoformat()
-                collab["interactions"] = collab.get("interactions", 1) + 1
+        pair_key = self._pair_key(member_a, member_b)
+        collab = None
+        if collaboration_by_pair is not None:
+            collab = collaboration_by_pair.get(pair_key)
+        else:
+            for existing in network["collaborations"]:
+                if self._pair_key(existing["member_a"], existing["member_b"]) == pair_key:
+                    collab = existing
+                    break
 
-                # 更新成员统计
+        if collab:
+            # 已存在，更新强度
+            old_strength = collab.get("strength", 0)
+            new_strength = strength or self.STRENGTH_WEIGHTS.get(source_type, 0.3)
+            collab["strength"] = min(old_strength + new_strength, 1.0)
+            collab["last_updated"] = datetime.now().isoformat()
+            collab["interactions"] = collab.get("interactions", 1) + 1
+            network["updated_at"] = datetime.now().isoformat()
+
+            # 更新成员统计
+            if update_stats:
                 self._update_member_stats(network, member_a, member_b)
 
-                self._save_network(network)
-                logger.debug(
-                    f"[Collaboration] 更新关系: {member_a}-{member_b}, "
-                    f"strength={collab['strength']}"
-                )
-                return collab["collaboration_id"]
+            logger.debug(
+                f"[Collaboration] 更新关系: {member_a}-{member_b}, "
+                f"strength={collab['strength']}"
+            )
+            return collab["collaboration_id"]
 
         # 新建关系
         collaboration_id = str(uuid4())[:8]
@@ -162,18 +201,54 @@ class CollaborationNetwork:
         }
 
         network["collaborations"].append(collaboration)
+        if collaboration_by_pair is not None:
+            collaboration_by_pair[pair_key] = collaboration
         network["updated_at"] = datetime.now().isoformat()
 
         # 更新成员统计
-        self._update_member_stats(network, member_a, member_b)
-
-        self._save_network(network)
+        if update_stats:
+            self._update_member_stats(network, member_a, member_b)
 
         logger.debug(
             f"[Collaboration] 新建关系: {member_a}-{member_b}, "
             f"source={source_type}, strength={strength}"
         )
         return collaboration_id
+
+    @staticmethod
+    def _pair_key(member_a: str, member_b: str) -> tuple[str, str]:
+        return tuple(sorted((str(member_a), str(member_b))))
+
+    def _build_collaboration_lookup(self, network: dict) -> Dict[tuple[str, str], dict]:
+        return {
+            self._pair_key(collab["member_a"], collab["member_b"]): collab
+            for collab in network.get("collaborations", [])
+        }
+
+    def _rebuild_member_stats(self, network: dict):
+        """Rebuild member collaboration stats in one pass."""
+
+        collaborators: Dict[str, Set[str]] = {}
+        interactions: Dict[str, int] = {}
+
+        for collab in network.get("collaborations", []):
+            member_a = collab["member_a"]
+            member_b = collab["member_b"]
+            interaction_count = collab.get("interactions", 1)
+
+            collaborators.setdefault(member_a, set()).add(member_b)
+            collaborators.setdefault(member_b, set()).add(member_a)
+            interactions[member_a] = interactions.get(member_a, 0) + interaction_count
+            interactions[member_b] = interactions.get(member_b, 0) + interaction_count
+
+        network["member_stats"] = {
+            member: {
+                "collaborator_count": len(partners),
+                "total_interactions": interactions.get(member, 0),
+                "avg_strength": 0,
+            }
+            for member, partners in collaborators.items()
+        }
 
     def _update_member_stats(self, network: dict, member_a: str, member_b: str):
         """更新成员协作统计"""
@@ -479,22 +554,44 @@ class CollaborationNetwork:
             repo_name: 知识库名称
             contributors: 贡献者列表
         """
+        self.add_repositories_contributors({repo_name: contributors})
+
+    def add_repositories_contributors(self, repo_contributors: Dict[str, List[str]]):
+        """批量记录多个知识库贡献者并一次性保存协作网络。"""
+
         network = self._load_network()
-        network.setdefault("repo_contributors", {})[repo_name] = contributors
+        repo_map = network.setdefault("repo_contributors", {})
+        collaboration_by_pair = self._build_collaboration_lookup(network)
+        updated_repos = 0
+        updated_relations = 0
 
-        # 自动创建同一知识库贡献者的协作关系
-        for i, member_a in enumerate(contributors):
-            for member_b in contributors[i + 1:]:
-                self.add_collaboration(
-                    member_a, member_b,
-                    "same_repo",
-                    context=repo_name,
-                )
+        for repo_name, contributors in repo_contributors.items():
+            unique_contributors = list(dict.fromkeys(c for c in contributors if c))
+            repo_map[repo_name] = unique_contributors
+            updated_repos += 1
 
-        self._save_network(network)
+            # 自动创建同一知识库贡献者的协作关系
+            for i, member_a in enumerate(unique_contributors):
+                for member_b in unique_contributors[i + 1:]:
+                    if self._upsert_collaboration(
+                        network,
+                        member_a,
+                        member_b,
+                        "same_repo",
+                        context=repo_name,
+                        collaboration_by_pair=collaboration_by_pair,
+                        update_stats=False,
+                    ):
+                        updated_relations += 1
+
+        if updated_repos:
+            self._rebuild_member_stats(network)
+            network["updated_at"] = datetime.now().isoformat()
+            self._save_network(network)
+
         logger.info(
-            f"[Collaboration] 记录知识库贡献者: {repo_name}, "
-            f"count={len(contributors)}"
+            f"[Collaboration] 批量记录知识库贡献者: "
+            f"repos={updated_repos}, relations={updated_relations}"
         )
 
     def add_group_members(self, group_name: str, members: List[str]):
@@ -505,21 +602,28 @@ class CollaborationNetwork:
             members: 成员列表
         """
         network = self._load_network()
-        network.setdefault("group_members", {})[group_name] = members
+        unique_members = list(dict.fromkeys(member for member in members if member))
+        network.setdefault("group_members", {})[group_name] = unique_members
+        collaboration_by_pair = self._build_collaboration_lookup(network)
 
         # 自动创建同一兴趣组的协作关系
-        for i, member_a in enumerate(members):
-            for member_b in members[i + 1:]:
-                self.add_collaboration(
-                    member_a, member_b,
+        for i, member_a in enumerate(unique_members):
+            for member_b in unique_members[i + 1:]:
+                self._upsert_collaboration(
+                    network,
+                    member_a,
+                    member_b,
                     "same_group",
                     context=group_name,
+                    collaboration_by_pair=collaboration_by_pair,
+                    update_stats=False,
                 )
 
+        self._rebuild_member_stats(network)
         self._save_network(network)
         logger.info(
             f"[Collaboration] 记录兴趣组成员: {group_name}, "
-            f"count={len(members)}"
+            f"count={len(unique_members)}"
         )
 
     def get_member_stats(self, member_id: str) -> dict:
