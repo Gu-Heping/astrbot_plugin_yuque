@@ -171,6 +171,9 @@ async def sync_all_team_members(
 
 
 def _extract_member_count(result: str) -> int | None:
+    if not result.startswith("✅ 团队成员同步完成"):
+        return None
+
     marker = "共 "
     if marker not in result:
         return None

@@ -486,6 +486,37 @@ async def test_sync_all_team_members_continues_when_client_creation_fails():
 
 
 @pytest.mark.asyncio
+async def test_sync_all_team_members_ignores_member_count_in_failure_text():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+    }
+
+    def client_factory(team_id):
+        if team_id == "default":
+            raise RuntimeError("upstream said 共 3 人 before failing")
+        return clients[team_id]
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=client_factory,
+    )
+
+    assert "⚠️ 多团队成员同步处理完成" in text
+    assert "团队: 1/2 个团队完成成员同步" in text
+    assert "成员记录: 1 人次" in text
+    assert "NOVA (default): ❌ 同步失败: upstream said 共 3 人 before failing" in text
+
+
+@pytest.mark.asyncio
 async def test_run_background_sync_pipeline_orchestrates_post_sync_and_commit(tmp_path):
     storage = _Storage({})
     calls = {}
