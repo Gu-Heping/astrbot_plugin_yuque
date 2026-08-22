@@ -567,6 +567,47 @@ def test_webhook_delete_uses_doc_index_team_before_default_client(tmp_path):
         assert index.get_doc_by_yuque_id(42, team_id="other") is None
 
 
+def test_webhook_git_commit_preserves_empty_identity_settings(tmp_path, monkeypatch):
+    calls = []
+
+    class FakeGit:
+        def __init__(self, repo_dir):
+            self.repo_dir = repo_dir
+
+        def ensure_git(self):
+            return True
+
+        def ensure_user_identity(self, **kwargs):
+            calls.append(kwargs)
+            return False
+
+        def add_commit(self, files, message):
+            pytest.fail("commit should be skipped when identity is invalid")
+
+    monkeypatch.setattr("novabot.webhook.GitOps", FakeGit)
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={
+            "git_enabled": True,
+            "git_auto_config_user": True,
+            "git_user_name": "",
+            "git_user_email": "",
+        },
+    )
+
+    assert handler._git_commit("a.md", "update", "标题") is None
+    assert calls == [
+        {
+            "auto_config": True,
+            "name": "",
+            "email": "",
+        }
+    ]
+
+
 def test_webhook_delete_scope_can_infer_single_indexed_team(tmp_path):
     handler = _handler(tmp_path, ChunkStore(tmp_path / "chunks.db"))
     with DocIndex(str(tmp_path / "doc_index.db")) as index:

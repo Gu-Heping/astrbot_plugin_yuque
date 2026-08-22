@@ -1125,11 +1125,8 @@ class WebhookHandler:
             return None
         if not git.ensure_user_identity(
             auto_config=bool(self.config.get("git_auto_config_user", False)),
-            name=str(self.config.get("git_user_name", "NovaBot") or "NovaBot"),
-            email=str(
-                self.config.get("git_user_email", "novabot@example.local")
-                or "novabot@example.local"
-            ),
+            name=self.config.get("git_user_name", "NovaBot"),
+            email=self.config.get("git_user_email", "novabot@example.local"),
         ):
             return None
 

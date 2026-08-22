@@ -33,7 +33,7 @@
 - **旧数据兼容**：非默认团队写入 `yuque_docs/<team_id>/...`；旧匿名群聊历史仍可读取，只是会标记为未知群友。
 
 ### 验证
-- `python -m pytest tests -q`：269 passed
+- `python -m pytest tests -q`：270 passed
 - `python -m compileall main.py novabot tests`：通过
 - `python -m ruff check .`：All checks passed
 - `git diff --check`：通过
