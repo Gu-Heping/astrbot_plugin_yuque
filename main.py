@@ -34,9 +34,9 @@ from .novabot.sync_workflow import (
     mark_sync_failed,
     refresh_collaboration_artifacts,
     run_background_sync_pipeline,
-    select_member_sync_team,
+    select_member_sync_teams,
     select_sync_teams,
-    sync_team_members,
+    sync_all_team_members,
 )
 from .novabot.sync_coordinator import syncable_teams
 from .novabot.sync_status import format_sync_already_running, format_sync_started, format_sync_status
@@ -898,7 +898,8 @@ class NovaBotPlugin(Star):
         用法:
         - /sync - 同步全部已启用团队知识库（后台运行）
         - /sync <team_id> 或 /sync team <team_id> - 同步指定团队
-        - /sync members [team_id] - 同步团队成员
+        - /sync members - 同步全部已启用团队成员
+        - /sync members <team_id> - 同步指定团队成员
         - /sync status - 查看同步状态/进度
         """
         if not self._is_event_scope_allowed(event):
@@ -930,7 +931,7 @@ class NovaBotPlugin(Star):
 
         # 同步团队成员
         if action_lower == "members":
-            selected_team, error = select_member_sync_team(
+            selected_teams, error = select_member_sync_teams(
                 self.team_registry.list_enabled(),
                 requested_team_id=team_id,
             )
@@ -938,14 +939,21 @@ class NovaBotPlugin(Star):
                 yield event.plain_result(error)
                 return
 
-            yield event.plain_result(
-                f"🔄 同步团队成员... ({selected_team.name}, team_id={selected_team.team_id})"
-            )
+            if team_id.strip():
+                selected_team = selected_teams[0]
+                yield event.plain_result(
+                    f"🔄 同步团队成员... ({selected_team.name}, team_id={selected_team.team_id})"
+                )
+            else:
+                yield event.plain_result(f"🔄 同步多团队成员... ({len(selected_teams)} 个团队)")
 
-            client = self._get_client(selected_team.team_id)
             try:
                 yield event.plain_result(
-                    await sync_team_members(client=client, storage=self.storage, team=selected_team)
+                    await sync_all_team_members(
+                        teams=selected_teams,
+                        storage=self.storage,
+                        client_factory=self._get_client,
+                    )
                 )
             except Exception as e:
                 logger.error(f"同步团队成员失败: {e}")
