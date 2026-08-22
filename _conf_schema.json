@@ -120,6 +120,24 @@
     "type": "bool",
     "default": false
   },
+  "git_auto_config_user": {
+    "description": "自动配置 Git 提交身份",
+    "type": "bool",
+    "default": false,
+    "hint": "适合 Docker/服务器环境；开启后仅写入文档仓库本地 .git/config，不修改全局 git 配置"
+  },
+  "git_user_name": {
+    "description": "自动配置的 Git user.name",
+    "type": "string",
+    "default": "NovaBot",
+    "hint": "仅 git_auto_config_user=true 且仓库未配置 user.name/user.email 时使用"
+  },
+  "git_user_email": {
+    "description": "自动配置的 Git user.email",
+    "type": "string",
+    "default": "novabot@example.local",
+    "hint": "仅 git_auto_config_user=true 且仓库未配置 user.name/user.email 时使用"
+  },
   "push_enabled": {
     "description": "启用智能推送（文档变更时推送通知给订阅者）",
     "type": "bool",

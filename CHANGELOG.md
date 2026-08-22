@@ -21,6 +21,7 @@
 - **协作网络性能**：批量写入协作关系，避免同步阶段反复整文件写盘导致 CPU 与 I/O 压力过高。
 - **Agent 边界收敛**：`main.py` 进一步收敛为 AstrBot 生命周期、handler 与组件装配，知识检索和社区能力迁移到 `novabot/` 模块。
 - **回复格式清理**：面向 QQ/群聊输出时清理常见 Markdown 标记，链接与表格展示更稳定。
+- **Git 提交身份配置**：新增 `git_auto_config_user`、`git_user_name`、`git_user_email`，服务器/Docker 环境可显式开启仓库本地 Git 身份配置，避免重启后自动 commit 因缺少 `user.name/user.email` 跳过。
 
 ### 安全
 - **Prompt injection 防护**：对 persona 加载、系统覆盖、隐藏信号等可疑输入进行拒绝或隔离；用户消息、群聊历史、工具返回和成员显示名均按不可信上下文处理。
@@ -32,7 +33,7 @@
 - **旧数据兼容**：非默认团队写入 `yuque_docs/<team_id>/...`；旧匿名群聊历史仍可读取，只是会标记为未知群友。
 
 ### 验证
-- `python -m pytest tests -q`：254 passed
+- `python -m pytest tests -q`：270 passed
 - `python -m compileall main.py novabot tests`：通过
 - `python -m ruff check .`：All checks passed
 - `git diff --check`：通过

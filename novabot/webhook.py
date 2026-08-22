@@ -1123,6 +1123,12 @@ class WebhookHandler:
         git = GitOps(self.docs_dir)
         if not git.ensure_git():
             return None
+        if not git.ensure_user_identity(
+            auto_config=bool(self.config.get("git_auto_config_user", False)),
+            name=self.config.get("git_user_name", "NovaBot"),
+            email=self.config.get("git_user_email", "novabot@example.local"),
+        ):
+            return None
 
         if isinstance(files, str):
             files = [files]

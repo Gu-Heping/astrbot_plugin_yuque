@@ -81,6 +81,18 @@ def _sanitize_commit_message(message: str) -> str:
     return sanitized or "update"
 
 
+def _sanitize_git_identity(value: str, *, field: str) -> str:
+    """Validate a Git identity field for local repository config."""
+    cleaned = str(value or "").strip()
+    if not cleaned:
+        raise ValueError(f"Empty git {field}")
+    if any(char in cleaned for char in ("\n", "\r", "\x00")):
+        raise ValueError(f"Dangerous character in git {field}")
+    if len(cleaned) > 100:
+        raise ValueError(f"Git {field} is too long")
+    return cleaned
+
+
 class GitOps:
     """Git 操作封装"""
 
@@ -138,6 +150,45 @@ class GitOps:
         except Exception as e:
             logger.debug(f"[GitOps] 检查用户身份失败: {e}")
             return False
+
+    def configure_user_identity(self, name: str, email: str) -> bool:
+        """Configure repository-local Git user identity."""
+        try:
+            safe_name = _sanitize_git_identity(name, field="user.name")
+            safe_email = _sanitize_git_identity(email, field="user.email")
+            for key, value in (
+                ("user.name", safe_name),
+                ("user.email", safe_email),
+            ):
+                result = subprocess.run(
+                    ["git", "config", "--local", key, value],
+                    cwd=self.repo_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode != 0:
+                    logger.warning(f"[GitOps] 配置 {key} 失败: {result.stderr}")
+                    return False
+            logger.info("[GitOps] 已配置仓库本地 user.name/user.email")
+            return True
+        except Exception as e:
+            logger.warning(f"[GitOps] 自动配置用户身份失败: {e}")
+            return False
+
+    def ensure_user_identity(
+        self,
+        *,
+        auto_config: bool = False,
+        name: str = "NovaBot",
+        email: str = "novabot@example.local",
+    ) -> bool:
+        """Ensure Git can create commits, optionally setting local identity."""
+        if self.has_user_identity():
+            return True
+        if auto_config and self.configure_user_identity(name, email):
+            return self.has_user_identity()
+        logger.warning("[GitOps] 未配置 user.name/user.email，跳过 commit")
+        return False
 
     def add_commit(self, files: List[str], message: str) -> Optional[str]:
         """添加文件并提交

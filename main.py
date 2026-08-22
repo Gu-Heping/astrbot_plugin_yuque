@@ -1114,6 +1114,12 @@ class NovaBotPlugin(Star):
                     chunk_size=self.config.get("knowledge_chunk_size", 1200),
                     chunk_overlap=self.config.get("knowledge_chunk_overlap", 180),
                     git_enabled=self.config.get("git_enabled", True),
+                    git_auto_config_user=self.config.get("git_auto_config_user", False),
+                    git_user_name=self.config.get("git_user_name", "NovaBot"),
+                    git_user_email=self.config.get(
+                        "git_user_email",
+                        "novabot@example.local",
+                    ),
                     requested_team_id=requested_team_id,
                 )
 
