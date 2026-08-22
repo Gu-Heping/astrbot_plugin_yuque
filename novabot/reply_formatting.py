@@ -106,7 +106,7 @@ def _is_table_row(line: str) -> bool:
         return stripped.count("|") >= 2
     if re.match(r"^\d+[\.)]\s+", stripped):
         return False
-    return stripped.count("|") >= 2 and not stripped.startswith(("-", "*", "+", ">"))
+    return stripped.count("|") >= 1 and not stripped.startswith(("-", "*", "+", ">"))
 
 
 def _render_table(lines: list[str]) -> list[str] | None:

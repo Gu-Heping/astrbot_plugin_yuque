@@ -85,6 +85,21 @@ def test_extract_relaxed_pipe_table_without_separator():
     ]
 
 
+def test_extract_two_column_relaxed_pipe_table_without_separator():
+    text = (
+        "文档 | 类型\n"
+        "《线下活动》 | 新建\n"
+    )
+
+    blocks = _extract_table_blocks(text)
+
+    assert len(blocks) == 1
+    assert blocks[0][2] == [
+        ["文档", "类型"],
+        ["《线下活动》", "新建"],
+    ]
+
+
 def test_extract_ignores_ordered_lists_with_pipes():
     text = "1. A | B\n2) C | D\n"
 
