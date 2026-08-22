@@ -32,3 +32,28 @@ def test_markdown_to_plaintext_converts_tables_to_readable_rows():
     assert "---" not in plain
     assert "配置 | 说明" in plain
     assert "render_tables_as_images | 表格转图片" in plain
+
+
+def test_markdown_to_plaintext_handles_relaxed_pipe_tables():
+    text = (
+        "文档 | 类型 | 亮点\n"
+        "《线下活动》 | 新建 | 1,389 字，社团线下活动安排\n"
+        "《项目技术设计文档》 | 更新 | 技术方案迭代\n"
+    )
+
+    plain = markdown_to_plaintext(text)
+
+    assert "文档 | 类型 | 亮点" in plain
+    assert "《线下活动》 | 新建 | 1,389 字，社团线下活动安排" in plain
+    assert "《项目技术设计文档》 | 更新 | 技术方案迭代" in plain
+
+
+def test_markdown_to_plaintext_keeps_ordered_lists_with_pipes_as_text():
+    text = (
+        "1. A | B\n"
+        "2) C | D\n"
+    )
+
+    plain = markdown_to_plaintext(text)
+
+    assert plain == "1. A | B\n2) C | D"

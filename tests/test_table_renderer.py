@@ -60,10 +60,49 @@ def test_separator_row_detection():
 
 def test_parse_row_strips_padding():
     assert _parse_row("|  a  | b |") == ["a", "b"]
+    assert _parse_row("文档 | 类型 | 亮点") == ["文档", "类型", "亮点"]
 
 
 def test_extract_ignores_invalid_tables():
-    text = "| a | b |\n| c | d |\n普通段落"
+    text = "| a | b |\n普通段落"
+    assert _extract_table_blocks(text) == []
+
+
+def test_extract_relaxed_pipe_table_without_separator():
+    text = (
+        "文档 | 类型 | 亮点\n"
+        "《线下活动》 | 新建 | 1,389 字，社团线下活动安排\n"
+        "《项目技术设计文档》 | 更新 | 技术方案迭代\n"
+    )
+
+    blocks = _extract_table_blocks(text)
+
+    assert len(blocks) == 1
+    assert blocks[0][2] == [
+        ["文档", "类型", "亮点"],
+        ["《线下活动》", "新建", "1,389 字，社团线下活动安排"],
+        ["《项目技术设计文档》", "更新", "技术方案迭代"],
+    ]
+
+
+def test_extract_two_column_relaxed_pipe_table_without_separator():
+    text = (
+        "文档 | 类型\n"
+        "《线下活动》 | 新建\n"
+    )
+
+    blocks = _extract_table_blocks(text)
+
+    assert len(blocks) == 1
+    assert blocks[0][2] == [
+        ["文档", "类型"],
+        ["《线下活动》", "新建"],
+    ]
+
+
+def test_extract_ignores_ordered_lists_with_pipes():
+    text = "1. A | B\n2) C | D\n"
+
     assert _extract_table_blocks(text) == []
 
 
@@ -126,6 +165,36 @@ def test_render_tables_as_images_handles_multiple_tables(tmp_path):
     assert len(images) == 2
     for _, path in images:
         assert Path(path).exists()
+
+
+def test_render_relaxed_weekly_pipe_table_as_image(tmp_path, monkeypatch):
+    from PIL import ImageFont
+
+    monkeypatch.setattr(
+        "novabot.table_renderer._find_font",
+        lambda size, font_path=None: ImageFont.load_default(),
+    )
+    text = (
+        "🔥 本周热点文档\n\n"
+        "文档 | 类型 | 亮点\n"
+        "《线下活动》 | 新建 | 1,389 字，社团线下活动安排\n"
+        "《项目技术设计文档》 | 更新 | 技术方案迭代\n\n"
+        "✍️ 活跃作者 TOP 5"
+    )
+
+    segments = render_tables_as_images(text, tmp_path)
+
+    assert [segment[0] for segment in segments] == ["text", "image", "text"]
+    assert Path(segments[1][1]).exists()
+
+
+def test_render_ordered_lists_with_pipes_as_plain_text(tmp_path):
+    text = "1. A | B\n2) C | D\n"
+
+    segments = render_tables_as_images(text, tmp_path)
+
+    assert segments == [("text", "1. A | B\n2) C | D")]
+    assert list(tmp_path.glob("table_*.png")) == []
 
 
 def test_find_font_path_prefers_configured_path(tmp_path, monkeypatch):
