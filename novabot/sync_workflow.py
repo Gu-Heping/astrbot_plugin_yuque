@@ -156,7 +156,8 @@ async def sync_all_team_members(
     if len(teams) == 1:
         return results[0][1]
 
-    lines = ["✅ 多团队成员同步完成"]
+    status = "✅" if group_teams == len(teams) else "⚠️"
+    lines = [f"{status} 多团队成员同步处理完成"]
     lines.append(f"团队: {group_teams}/{len(teams)} 个团队完成成员同步")
     lines.append(f"成员记录: {total_members} 人次")
     lines.append("━━━━━━━━━━━━━━━")
