@@ -4,6 +4,39 @@
 
 格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## [v0.30.0] - 2026-08-22
+
+### 新增
+- **Multi-Team Knowledge Core**：将 Team 作为一等实体，支持多语雀团队独立同步、独立索引和组合检索范围。
+- **Token-first 团队配置**：`yuque_teams` 支持逐项填写 token，启动或同步前自动发现团队/个人账号并补齐 Team 元数据；完整显式配置继续兼容。
+- **Chunk-level 混合检索**：知识事实问答升级为 chunk 级关键词召回 + 语义检索 + 元数据过滤，并引入 Evidence-first 回答边界。
+- **群聊白名单**：新增 `enable_group_whitelist` 与 `group_whitelist`，可限制 NovaBot 只在目标群聊生效，私聊不受影响。
+- **群聊成员上下文**：显式建模群成员显示名、平台 ID 与群 ID，群聊历史记录带成员标签，降低多人上下文混淆。
+- **Markdown 表格图片渲染**：回复中的 Markdown 表格可自动渲染为图片，无法渲染时回退为纯文本。
+
+### 改进
+- **同步生命周期隔离**：多团队同步状态、文档路径、仓库缓存、Webhook 解析与索引更新按 Team 隔离。
+- **增量索引与同步**：减少重复重建成本，文档投影、元数据索引和 chunk 索引的更新路径更一致。
+- **成员姓名解析**：同步文档作者时优先使用团队成员姓名，避免误用账号注册显示名。
+- **协作网络性能**：批量写入协作关系，避免同步阶段反复整文件写盘导致 CPU 与 I/O 压力过高。
+- **Agent 边界收敛**：`main.py` 进一步收敛为 AstrBot 生命周期、handler 与组件装配，知识检索和社区能力迁移到 `novabot/` 模块。
+- **回复格式清理**：面向 QQ/群聊输出时清理常见 Markdown 标记，链接与表格展示更稳定。
+
+### 安全
+- **Prompt injection 防护**：对 persona 加载、系统覆盖、隐藏信号等可疑输入进行拒绝或隔离；用户消息、群聊历史、工具返回和成员显示名均按不可信上下文处理。
+- **群聊守门加固**：智能旁听的发送者元数据和历史记录进入 LLM 前进行清理/隔离，降低恶意群昵称或历史文本影响回复决策的风险。
+
+### 兼容
+- **旧配置兼容**：未配置 `yuque_teams` 时继续使用原 `yuque_token` 单团队模式；默认团队保持旧文档 ID 与目录布局。
+- **配置地址兼容**：`yuque_base_url` 默认仍为 `https://www.yuque.com/api/v2`，填写 `https://nova.yuque.com/` 这类 Web 地址时会自动规范化为 `/api/v2`。
+- **旧数据兼容**：非默认团队写入 `yuque_docs/<team_id>/...`；旧匿名群聊历史仍可读取，只是会标记为未知群友。
+
+### 验证
+- `python -m pytest tests -q`：254 passed
+- `python -m compileall main.py novabot tests`：通过
+- `python -m ruff check .`：All checks passed
+- `git diff --check`：通过
+
 ## [v0.29.3] - 2026-05-19
 
 ### 新增
