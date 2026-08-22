@@ -500,6 +500,7 @@ class NovaBotPlugin(Star):
         """Prepare optional Markdown table rendering resources."""
         clean_table_images(self._table_image_dir)
         if not self.render_tables_as_images:
+            logger.info("[Reply] 表格图片渲染未启用")
             return
         try:
             self._resolved_table_font_path = await ensure_cjk_font(
@@ -508,6 +509,13 @@ class NovaBotPlugin(Star):
                 self.auto_download_table_font,
                 download_timeout=self.table_font_download_timeout,
             )
+            if self._resolved_table_font_path:
+                logger.info(
+                    f"[Reply] 表格图片字体已就绪: "
+                    f"{PathlibPath(self._resolved_table_font_path).name}"
+                )
+            else:
+                logger.warning("[Reply] 未找到可用中文字体，包含中文的表格会回退为纯文本")
         except Exception as e:
             logger.warning(f"[Reply] 表格图片字体初始化失败，回退为纯文本: {e}")
             self._resolved_table_font_path = None
@@ -519,6 +527,7 @@ class NovaBotPlugin(Star):
     async def _rich_result(self, event: AstrMessageEvent, text: str):
         """Return plain text or a text+image chain for Markdown table replies."""
         if not self.render_tables_as_images:
+            logger.info("[Reply] render_tables_as_images=false，使用纯文本回复")
             return self._plain_result(event, text)
 
         segments = await asyncio.to_thread(
@@ -526,6 +535,12 @@ class NovaBotPlugin(Star):
             text,
             self._table_image_dir,
             font_path=self._resolved_table_font_path,
+        )
+        text_segments = sum(1 for seg_type, _ in segments if seg_type == "text")
+        image_segments = sum(1 for seg_type, _ in segments if seg_type == "image")
+        logger.info(
+            f"[Reply] 表格渲染结果: text_segments={text_segments}, "
+            f"image_segments={image_segments}"
         )
         return self._build_chain_result(event, segments)
 
@@ -539,6 +554,7 @@ class NovaBotPlugin(Star):
                 chain.append(comp.Plain(content))
             elif seg_type == "image":
                 chain.append(comp.Image.fromFileSystem(content))
+        logger.info(f"[Reply] 构建消息链: segments={len(segments)}, chain={len(chain)}")
         if not chain:
             return event.plain_result("")
         if len(chain) == 1 and isinstance(chain[0], comp.Plain):
