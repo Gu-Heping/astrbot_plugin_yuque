@@ -433,8 +433,10 @@ def render_tables_as_images(
     """
     blocks = _extract_table_blocks(markdown_text)
     if not blocks:
+        logger.info("[TableRender] 未检测到可渲染表格，使用纯文本回复")
         return [("text", markdown_to_plaintext(markdown_text))]
 
+    logger.info(f"[TableRender] 检测到 {len(blocks)} 个表格块，开始渲染")
     segments: list[tuple[str, str]] = []
     generated_images: list[Path] = []
     last_end = 0
@@ -447,9 +449,14 @@ def render_tables_as_images(
             image_path = image_dir / f"table_{uuid.uuid4().hex}.png"
             generated_images.append(image_path)
             _render_table_image(rows, image_path, font_path=font_path)
+            logger.info(
+                f"[TableRender] 表格渲染成功: rows={len(rows)}, "
+                f"cols={len(rows[0]) if rows else 0}, path={image_path}"
+            )
             segments.append(("image", str(image_path)))
             last_end = end
-    except (RuntimeError, OSError, MemoryError):
+    except (RuntimeError, OSError, MemoryError) as e:
+        logger.warning(f"[TableRender] 表格渲染失败，回退为纯文本: {e}")
         for image_path in generated_images:
             try:
                 image_path.unlink(missing_ok=True)
@@ -463,6 +470,11 @@ def render_tables_as_images(
         segments.append(("text", markdown_to_plaintext(after_text)))
 
     clean_table_images(image_dir)
+    image_count = sum(1 for seg_type, _ in segments if seg_type == "image")
+    text_count = sum(1 for seg_type, _ in segments if seg_type == "text")
+    logger.info(
+        f"[TableRender] 渲染完成: text_segments={text_count}, image_segments={image_count}"
+    )
     return segments
 
 
