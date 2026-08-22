@@ -186,7 +186,8 @@ NovaBot 会在发送 LLM/知识库生成结果前清理 Markdown 标记，例如
 | `/sync` | 同步全部已启用团队知识库 |
 | `/sync <team_id>` 或 `/sync team <team_id>` | 只同步指定团队 |
 | `/sync status` | 查看同步状态 |
-| `/sync members [team_id]` | 同步团队成员；传入 `team_id` 时使用指定团队 Token |
+| `/sync members` | 同步全部已启用团队成员；个人 Token 会自动跳过 |
+| `/sync members <team_id>` | 只同步指定团队成员 |
 | `/rag search <关键词>` | RAG 搜索 |
 | `/rag rebuild` | 重建索引 |
 | `/webhook` | Webhook 服务状态 |
@@ -256,7 +257,7 @@ NovaBot: 好嘞～以后会更活泼地和你聊天！
 ```
 1. 管理员配置 yuque_token + embedding_api_key
    - 多团队部署时，在 yuque_teams 列表中逐项填写团队 token
-2. 管理员: /sync members [team_id]
+2. 管理员: /sync members
 3. 管理员: /sync 或 /sync <team_id>
 4. 用户: /bind <用户名>
 5. 用户: /profile refresh（生成画像）

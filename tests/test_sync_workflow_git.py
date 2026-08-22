@@ -17,7 +17,9 @@ from novabot.sync_workflow import (
     run_post_sync_workflow,
     run_background_sync_pipeline,
     select_member_sync_team,
+    select_member_sync_teams,
     select_sync_teams,
+    sync_all_team_members,
     sync_team_members,
 )
 
@@ -266,6 +268,25 @@ def test_select_member_sync_team_reports_missing_or_unsyncable_team():
     assert no_token_error == "❌ 未配置语雀 Token"
 
 
+def test_select_member_sync_teams_selects_all_by_default_or_one_explicit():
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+        Team(team_id="off", name="Off", yuque_token="off-token", enabled=False),
+    ]
+
+    selected, error = select_member_sync_teams(teams)
+    one, one_error = select_member_sync_teams(teams, requested_team_id="other")
+    missing, missing_error = select_member_sync_teams(teams, requested_team_id="missing")
+
+    assert [team.team_id for team in selected] == ["default", "other"]
+    assert error is None
+    assert [team.team_id for team in one] == ["other"]
+    assert one_error is None
+    assert missing == []
+    assert missing_error == "❌ 未找到可同步团队: missing"
+
+
 def test_select_sync_teams_can_select_all_or_one_team():
     teams = [
         Team.default(yuque_token="legacy"),
@@ -367,6 +388,132 @@ async def test_sync_team_members_skips_non_group_or_empty_members():
 
     assert "非团队 Token" in non_group
     assert "未获取到成员" in empty
+
+
+@pytest.mark.asyncio
+async def test_sync_all_team_members_syncs_all_group_teams_and_skips_users():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+        Team(team_id="person", name="Person", yuque_token="user-token"),
+    ]
+    clients = {
+        "default": _MemberClient(
+            {"type": "Group", "id": 7},
+            [{"user": {"id": 1, "name": "Default Alice", "login": "alice"}}],
+        ),
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+        "person": _MemberClient({"type": "User", "id": 9}),
+    }
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=lambda team_id: clients[team_id],
+    )
+
+    assert "⚠️ 多团队成员同步处理完成" in text
+    assert "团队: 2/3 个团队完成成员同步" in text
+    assert "成员记录: 2 人次" in text
+    assert "Person (person): ⚠️ 非团队 Token" in text
+    assert storage.members["1"]["name"] == "Default Alice"
+    assert storage.members["other:2"]["name"] == "Other Bob"
+    assert storage.members["2"]["name"] == "Other Bob"
+
+
+@pytest.mark.asyncio
+async def test_sync_all_team_members_reports_success_when_all_teams_sync():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "default": _MemberClient(
+            {"type": "Group", "id": 7},
+            [{"user": {"id": 1, "name": "Default Alice", "login": "alice"}}],
+        ),
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+    }
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=lambda team_id: clients[team_id],
+    )
+
+    assert "✅ 多团队成员同步处理完成" in text
+    assert "团队: 2/2 个团队完成成员同步" in text
+
+
+@pytest.mark.asyncio
+async def test_sync_all_team_members_continues_when_client_creation_fails():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+    }
+
+    def client_factory(team_id):
+        if team_id == "default":
+            raise RuntimeError("client unavailable")
+        return clients[team_id]
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=client_factory,
+    )
+
+    assert "⚠️ 多团队成员同步处理完成" in text
+    assert "NOVA (default): ❌ 同步失败: client unavailable" in text
+    assert "Other (other): ✅ 团队成员同步完成，1 人" in text
+    assert "团队: 1/2 个团队完成成员同步" in text
+    assert storage.members["other:2"]["name"] == "Other Bob"
+
+
+@pytest.mark.asyncio
+async def test_sync_all_team_members_ignores_member_count_in_failure_text():
+    storage = _Storage({})
+    teams = [
+        Team.default(yuque_token="legacy"),
+        Team(team_id="other", name="Other", yuque_token="team-token"),
+    ]
+    clients = {
+        "other": _MemberClient(
+            {"type": "Group", "id": 8},
+            [{"user": {"id": 2, "name": "Other Bob", "login": "bob"}}],
+        ),
+    }
+
+    def client_factory(team_id):
+        if team_id == "default":
+            raise RuntimeError("upstream said 共 3 人 before failing")
+        return clients[team_id]
+
+    text = await sync_all_team_members(
+        teams=teams,
+        storage=storage,
+        client_factory=client_factory,
+    )
+
+    assert "⚠️ 多团队成员同步处理完成" in text
+    assert "团队: 1/2 个团队完成成员同步" in text
+    assert "成员记录: 1 人次" in text
+    assert "NOVA (default): ❌ 同步失败: upstream said 共 3 人 before failing" in text
 
 
 @pytest.mark.asyncio

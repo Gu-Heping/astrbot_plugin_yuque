@@ -23,7 +23,7 @@ def select_member_sync_team(
     teams: list[Team],
     requested_team_id: str = "",
 ) -> tuple[Team | None, str | None]:
-    """Select which configured team should provide /sync members data."""
+    """Select the explicitly requested team for /sync members <team_id>."""
 
     sync_teams = syncable_teams(teams)
     if not sync_teams:
@@ -40,6 +40,23 @@ def select_member_sync_team(
         if team.team_id == DEFAULT_TEAM_ID:
             return team, None
     return sync_teams[0], None
+
+
+def select_member_sync_teams(
+    teams: list[Team],
+    requested_team_id: str = "",
+) -> tuple[list[Team], str | None]:
+    """Select teams whose members should be synchronized."""
+
+    requested = requested_team_id.strip()
+    if requested:
+        team, error = select_member_sync_team(teams, requested_team_id=requested)
+        return ([team] if team else []), error
+
+    sync_teams = syncable_teams(teams)
+    if not sync_teams:
+        return [], "❌ 未配置语雀 Token"
+    return sync_teams, None
 
 
 def select_sync_teams(
@@ -105,6 +122,67 @@ async def sync_team_members(*, client, storage, team: Team | None = None) -> str
             existing[uid] = info
     storage.save_members(existing)
     return f"✅ 团队成员同步完成\n共 {len(members)} 人\n使用 /bind <用户名> 绑定账号"
+
+
+async def sync_all_team_members(
+    *,
+    teams: list[Team],
+    storage,
+    client_factory,
+) -> str:
+    """Synchronize members for all selected teams and return a summary."""
+
+    if not teams:
+        return "❌ 未配置语雀 Token"
+
+    results: list[tuple[Team, str]] = []
+    total_members = 0
+    group_teams = 0
+
+    for team in teams:
+        try:
+            client = client_factory(team.team_id)
+            result = await sync_team_members(client=client, storage=storage, team=team)
+        except Exception as e:
+            logger.error(f"[Sync] 同步团队成员失败: team_id={team.team_id}, error={e}", exc_info=True)
+            result = f"❌ 同步失败: {e}"
+
+        results.append((team, result))
+        count = _extract_member_count(result)
+        if count is not None:
+            total_members += count
+            group_teams += 1
+
+    if len(teams) == 1:
+        return results[0][1]
+
+    status = "✅" if group_teams == len(teams) else "⚠️"
+    lines = [f"{status} 多团队成员同步处理完成"]
+    lines.append(f"团队: {group_teams}/{len(teams)} 个团队完成成员同步")
+    lines.append(f"成员记录: {total_members} 人次")
+    lines.append("━━━━━━━━━━━━━━━")
+    for team, result in results:
+        first_line = result.splitlines()[0] if result else "无结果"
+        count = _extract_member_count(result)
+        suffix = f"，{count} 人" if count is not None else ""
+        lines.append(f"- {team.name} ({team.team_id}): {first_line}{suffix}")
+    lines.append("使用 /bind <用户名> 绑定账号")
+    return "\n".join(lines)
+
+
+def _extract_member_count(result: str) -> int | None:
+    if not result.startswith("✅ 团队成员同步完成"):
+        return None
+
+    marker = "共 "
+    if marker not in result:
+        return None
+    tail = result.split(marker, 1)[1]
+    number_text = tail.split(" 人", 1)[0].strip()
+    try:
+        return int(number_text)
+    except ValueError:
+        return None
 
 
 async def run_background_sync_pipeline(

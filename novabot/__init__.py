@@ -13,7 +13,9 @@ from .sync_workflow import (
     run_background_sync_pipeline,
     run_post_sync_workflow,
     select_member_sync_team,
+    select_member_sync_teams,
     select_sync_teams,
+    sync_all_team_members,
     sync_team_members,
 )
 from .sync_status import format_sync_already_running, format_sync_started, format_sync_status
@@ -60,8 +62,10 @@ __all__ = [
     "run_multi_team_sync",
     "run_post_sync_workflow",
     "run_background_sync_pipeline",
+    "sync_all_team_members",
     "sync_team_members",
     "select_member_sync_team",
+    "select_member_sync_teams",
     "select_sync_teams",
     "refresh_collaboration_artifacts",
     "commit_sync_changes",
