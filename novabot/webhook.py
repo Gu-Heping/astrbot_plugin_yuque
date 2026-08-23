@@ -466,6 +466,7 @@ class WebhookHandler:
 
         # 处理文档移动（删除旧路径文件）
         old_record = self._get_old_record(doc_id, team_info["team_id"])
+        old_path = None
         if old_record:
             old_path = old_record.get("file_path")
             if old_path and old_path != rel_path:
@@ -506,12 +507,13 @@ class WebhookHandler:
 
         # Git commit
         author = self._match_editor_name(detail) or self._resolve_author(detail)
-        commit_hash = self._git_commit(rel_path, data.get("action_type", "update"), detail.get("title", ""), author)
+        diff_paths = [old_path, rel_path] if old_path and old_path != rel_path else rel_path
+        commit_hash = self._git_commit(diff_paths, data.get("action_type", "update"), detail.get("title", ""), author)
         if commit_hash:
             logger.info(f"[Webhook] Git 提交成功: {commit_hash}")
 
         # 智能推送判断
-        push_result = await self._handle_push(doc_id, commit_hash, rel_path, detail)
+        push_result = await self._handle_push(doc_id, commit_hash, rel_path, detail, diff_paths=diff_paths)
 
         # 记录成员轨迹（v0.27.0）
         self._record_trajectory(detail, data.get("action_type", "update"))
@@ -580,7 +582,8 @@ class WebhookHandler:
         doc_id: int,
         commit_hash: Optional[str],
         rel_path: str,
-        detail: dict
+        detail: dict,
+        diff_paths=None,
     ) -> Optional[dict]:
         """处理智能推送
 
@@ -607,7 +610,7 @@ class WebhookHandler:
         try:
             scoped_doc_id = scoped_document_id(detail.get("team_id") or DEFAULT_TEAM_ID, doc_id)
             # 1. 获取 diff
-            diff, is_first_push = self.push_notifier.get_diff(scoped_doc_id, commit_hash, rel_path)
+            diff, is_first_push = self.push_notifier.get_diff(scoped_doc_id, commit_hash, diff_paths or rel_path)
             logger.info(f"[Push] diff 长度: {len(diff)} 字符, 首次推送: {is_first_push}")
 
             # 2. 预处理检查（首次推送跳过预处理）

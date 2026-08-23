@@ -89,7 +89,20 @@ class PushNotifier:
             encoding="utf-8"
         )
 
-    def get_diff(self, doc_id: object, current_commit: str, doc_path: str) -> tuple[str, bool]:
+    def _format_diff_for_paths(self, diff: str, doc_path) -> str:
+        """为路径变更 diff 添加上下文，避免被误读为新建整篇文档。"""
+        if isinstance(doc_path, str):
+            return diff
+        paths = [str(path) for path in doc_path if path]
+        if len(set(paths)) <= 1 or not diff:
+            return diff
+        return (
+            "[文档路径或标题发生变化；以下是同一篇文档在旧路径与新路径之间的 diff，"
+            "不代表从空文件新建]\n\n"
+            f"{diff}"
+        )
+
+    def get_diff(self, doc_id: object, current_commit: str, doc_path) -> tuple[str, bool]:
         """获取与上次推送的 diff
 
         Args:
@@ -105,21 +118,37 @@ class PushNotifier:
         last_push = self.load_last_push()
         last_commit = last_push.get(str(doc_id))
 
+        git = GitOps(self.docs_dir)
         if not last_commit:
-            # 首次推送，没有 diff 信息
+            # 推送记录可能因旧版本迁移、写盘失败或 key 变化缺失。
+            # 若 Git 中已有父提交，仍可用本次提交的父提交作为保守基线，
+            # 避免把已有文档误判成“从空文件新建”。
+            if git.has_git():
+                parent_commit = git.get_parent_commit(current_commit)
+                if parent_commit and git.has_any_path_at_commit(parent_commit, doc_path):
+                    try:
+                        diff = git.get_diff(parent_commit, current_commit, doc_path)
+                        logger.info(
+                            "[Push] 未找到推送记录，使用当前提交父提交作为 diff 基线: "
+                            f"doc_id={doc_id}, parent={parent_commit[:8]}, current={current_commit[:8]}"
+                        )
+                        return self._format_diff_for_paths(diff or "[无文本变更]", doc_path), False
+                    except Exception as e:
+                        logger.warning(f"[Push] 使用父提交获取 diff 失败: {e}")
+
+            # Git 无可用父提交时才视为真正首次推送。
             return "[这是新发布的文档，首次推送，无历史 diff 信息]", True
 
         if last_commit == current_commit:
             # commit 相同，跳过
             return "", False
 
-        git = GitOps(self.docs_dir)
         if not git.has_git():
             return "[无 Git 仓库，无法获取 diff]", False
 
         try:
             diff = git.get_diff(last_commit, current_commit, doc_path)
-            return diff or "[无文本变更]", False
+            return self._format_diff_for_paths(diff or "[无文本变更]", doc_path), False
         except Exception as e:
             logger.warning(f"[Push] 获取 diff 失败: {e}")
             return f"[获取 diff 失败: {e}]", False
