@@ -99,3 +99,27 @@ def test_get_diff_without_push_record_falls_back_to_parent_commit(tmp_path):
     assert not is_first
     assert "-old content" in diff
     assert "+new content" in diff
+
+
+def test_get_diff_without_push_record_keeps_new_document_as_first_push(tmp_path):
+    docs_dir = tmp_path / "docs"
+    data_dir = tmp_path / "data"
+    docs_dir.mkdir()
+    data_dir.mkdir()
+    _git(docs_dir, "init")
+    _git(docs_dir, "config", "user.name", "NovaBot")
+    _git(docs_dir, "config", "user.email", "novabot@example.local")
+
+    seed_path = docs_dir / "team/repo/Seed.md"
+    seed_path.parent.mkdir(parents=True)
+    seed_path.write_text("seed\n", encoding="utf-8")
+    _commit(docs_dir, "initial")
+
+    doc_path = "team/repo/New.md"
+    (docs_dir / doc_path).write_text("short\n", encoding="utf-8")
+    second_commit = _commit(docs_dir, "new short document")
+
+    diff, is_first = _notifier(docs_dir, data_dir).get_diff("team:43", second_commit, doc_path)
+
+    assert is_first
+    assert diff == "[这是新发布的文档，首次推送，无历史 diff 信息]"

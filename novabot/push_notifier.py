@@ -125,7 +125,7 @@ class PushNotifier:
             # 避免把已有文档误判成“从空文件新建”。
             if git.has_git():
                 parent_commit = git.get_parent_commit(current_commit)
-                if parent_commit:
+                if parent_commit and git.has_any_path_at_commit(parent_commit, doc_path):
                     try:
                         diff = git.get_diff(parent_commit, current_commit, doc_path)
                         logger.info(

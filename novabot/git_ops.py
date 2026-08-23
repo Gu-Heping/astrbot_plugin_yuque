@@ -336,6 +336,37 @@ class GitOps:
             logger.error(f"[GitOps] get_parent_commit 异常: {e}")
         return None
 
+    def has_any_path_at_commit(self, commit: str, file_path) -> bool:
+        """检查指定 commit 中是否存在任一文件路径。"""
+        if not self.is_git_repo():
+            return False
+
+        if not re.match(r'^[0-9a-fA-F]+$', commit):
+            logger.warning(f"[GitOps] 无效的 commit hash: {commit}")
+            return False
+
+        paths = [file_path] if isinstance(file_path, (str, Path)) else list(file_path or [])
+        for path in paths:
+            try:
+                safe_path = _sanitize_git_path(str(path))
+            except ValueError as e:
+                logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
+                continue
+
+            try:
+                result = subprocess.run(
+                    ["git", "cat-file", "-e", f"{commit}:{safe_path}"],
+                    cwd=self.repo_dir,
+                    capture_output=True,
+                    text=True,
+                )
+                if result.returncode == 0:
+                    return True
+            except Exception as e:
+                logger.error(f"[GitOps] has_any_path_at_commit 异常: {e}")
+                return False
+        return False
+
     def get_file_diff(self, commit: str, file_path: str) -> str:
         """获取指定 commit 与当前文件的 diff（兼容旧接口）
 
