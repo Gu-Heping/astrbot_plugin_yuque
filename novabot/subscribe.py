@@ -82,13 +82,13 @@ class SubscriptionManager:
         async with self._lock:
             data = self._load_subscriptions_sync()
 
-            # 检查是否已存在相同订阅
+            # Subscriptions target a chat origin.  In group chats, different
+            # members should not create duplicate pushes for the same group.
             for sub in data["subscriptions"]:
-                if (sub["platform_id"] == platform_id and
-                    sub["umo"] == umo and
+                if (sub["umo"] == umo and
                     sub["sub_type"] == sub_type and
                     sub.get("target") == target):
-                    return False, "您已订阅此项"
+                    return False, "当前会话已订阅此项"
 
             # 添加新订阅
             sub_id = data["next_id"]
@@ -189,7 +189,7 @@ class SubscriptionManager:
             订阅者列表 [(umo, platform_id), ...]，已去重
         """
         data = self._load_subscriptions_sync()
-        subscribers = set()
+        subscribers_by_umo: dict[str, str] = {}
 
         book_name = doc_info.get("book_name", "")
         author = doc_info.get("author", "")
@@ -207,9 +207,9 @@ class SubscriptionManager:
                     matched = sub["target"].lower() == author.lower()
 
             if matched:
-                subscribers.add((sub["umo"], sub["platform_id"]))
+                subscribers_by_umo.setdefault(sub["umo"], sub["platform_id"])
 
-        return list(subscribers)
+        return [(umo, platform_id) for umo, platform_id in subscribers_by_umo.items()]
 
     def get_all_subscriptions(self) -> list[dict]:
         """获取所有订阅（用于管理，只读操作）"""
