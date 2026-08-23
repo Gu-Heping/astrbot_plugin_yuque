@@ -266,7 +266,7 @@ class GitOps:
         """检查是否有 Git 仓库"""
         return self.is_git_repo()
 
-    def get_diff(self, commit1: str, commit2: str = None, file_path: str = None) -> str:
+    def get_diff(self, commit1: str, commit2: str = None, file_path=None) -> str:
         """获取两个 commit 之间的 diff
 
         Args:
@@ -289,15 +289,19 @@ class GitOps:
             return ""
 
         try:
-            cmd = ["git", "diff", commit1]
+            cmd = ["git", "diff", "--find-renames=20%", commit1]
             if commit2:
                 cmd.append(commit2)
             if file_path:
-                try:
-                    safe_path = _sanitize_git_path(file_path)
-                    cmd.extend(["--", safe_path])
-                except ValueError as e:
-                    logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
+                paths = [file_path] if isinstance(file_path, str) else list(file_path)
+                safe_paths = []
+                for path in paths:
+                    try:
+                        safe_paths.append(_sanitize_git_path(str(path)))
+                    except ValueError as e:
+                        logger.warning(f"[GitOps] 跳过不安全的文件路径: {e}")
+                if safe_paths:
+                    cmd.extend(["--", *safe_paths])
 
             result = subprocess.run(
                 cmd,
@@ -309,6 +313,28 @@ class GitOps:
         except Exception as e:
             logger.error(f"[GitOps] get_diff 异常: {e}")
             return ""
+
+    def get_parent_commit(self, commit: str) -> Optional[str]:
+        """获取指定 commit 的父提交 hash。"""
+        if not self.is_git_repo():
+            return None
+
+        if not re.match(r'^[0-9a-fA-F]+$', commit):
+            logger.warning(f"[GitOps] 无效的 commit hash: {commit}")
+            return None
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--verify", f"{commit}^"],
+                cwd=self.repo_dir,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception as e:
+            logger.error(f"[GitOps] get_parent_commit 异常: {e}")
+        return None
 
     def get_file_diff(self, commit: str, file_path: str) -> str:
         """获取指定 commit 与当前文件的 diff（兼容旧接口）
