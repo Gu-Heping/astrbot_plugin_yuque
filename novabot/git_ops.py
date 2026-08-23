@@ -293,7 +293,7 @@ class GitOps:
             if commit2:
                 cmd.append(commit2)
             if file_path:
-                paths = [file_path] if isinstance(file_path, str) else list(file_path)
+                paths = [file_path] if isinstance(file_path, (str, Path)) else list(file_path)
                 safe_paths = []
                 for path in paths:
                     try:
