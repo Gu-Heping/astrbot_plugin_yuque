@@ -25,6 +25,23 @@ if TYPE_CHECKING:
 DEFAULT_MIN_DIFF_CHARS = 100
 DEFAULT_MAX_CONTENT_LEN = 2000
 
+FRONTMATTER_KEYS = {
+    "id",
+    "yuque_id",
+    "title",
+    "slug",
+    "author",
+    "team_id",
+    "team_name",
+    "book_name",
+    "book_namespace",
+    "created_at",
+    "updated_at",
+    "word_count",
+    "url",
+    "source_url",
+}
+
 
 class PushNotifier:
     """智能推送管理器
@@ -101,6 +118,51 @@ class PushNotifier:
             "不代表从空文件新建]\n\n"
             f"{diff}"
         )
+
+    def _is_non_body_diff_line(self, line: str) -> bool:
+        """判断 diff 中的变更行是否只是元数据或结构信息。"""
+        stripped = line.strip()
+        if not stripped or stripped == "---":
+            return True
+        if stripped.startswith(("# Yuque", "<!--", "-->")):
+            return True
+        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):", stripped)
+        return bool(match and match.group(1) in FRONTMATTER_KEYS)
+
+    def _extract_body_change_lines(self, diff: str, sign: str, *, limit: int) -> str:
+        """从 Git diff 中提取正文变更行，跳过 diff 头和 frontmatter。"""
+        lines: list[str] = []
+        total_len = 0
+        for raw_line in diff.splitlines():
+            if not raw_line.startswith(sign) or raw_line.startswith(sign * 3):
+                continue
+            line = raw_line[1:]
+            if self._is_non_body_diff_line(line):
+                continue
+            lines.append(line)
+            total_len += len(line) + 1
+            if total_len >= limit:
+                lines.append("... (正文变更已截断)")
+                break
+        return "\n".join(lines).strip()
+
+    def _prepare_update_diff_for_llm(self, diff: str) -> str:
+        """为更新推送准备正文优先的 diff 输入。"""
+        added = self._extract_body_change_lines(diff, "+", limit=self.max_content_len)
+        removed = self._extract_body_change_lines(diff, "-", limit=max(400, self.max_content_len // 3))
+
+        if not added and not removed:
+            return diff
+
+        parts = [
+            "以下内容从 Git diff 中抽取，已忽略路径移动、文件名变化、frontmatter、作者、时间等非正文信息。",
+            "请只基于正文内容总结主要变更；不要把路径移动、目录调整、元数据同步作为主要变更。",
+        ]
+        if added:
+            parts.extend(["", "新增或修改后的正文片段：", added])
+        if removed:
+            parts.extend(["", "被替换或删除的旧正文片段：", removed])
+        return "\n".join(parts)
 
     def get_diff(self, doc_id: object, current_commit: str, doc_path) -> tuple[str, bool]:
         """获取与上次推送的 diff
@@ -209,6 +271,8 @@ class PushNotifier:
                 return True, {"highlights": ["文档有更新"], "reason": "无 LLM，默认推送"}
 
             # 截断内容避免过长
+            if not is_first_push:
+                content = self._prepare_update_diff_for_llm(content)
             if len(content) > self.max_content_len:
                 content = content[:self.max_content_len] + "\n... (已截断)"
 
