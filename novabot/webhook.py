@@ -205,7 +205,7 @@ class WebhookHandler:
                     return member.get("name")
 
             # 3. 若嵌套对象只有 id 没有 name，再尝试成员缓存。
-            for key in ("last_editor", "creator", "user"):
+            for key in ("last_editor", "editor", "actor", "creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
                     user_id = obj.get("id")

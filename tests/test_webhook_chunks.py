@@ -276,6 +276,26 @@ def test_webhook_editor_name_prefers_realtime_detail_over_stale_member_cache(tmp
     assert name == "Current Editor"
 
 
+def test_webhook_editor_name_falls_back_to_actor_id_member_cache(tmp_path):
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        storage=_StorageWithStaleMembers(),
+    )
+
+    name = handler._match_editor_name(
+        {
+            "actor": {"id": 42},
+            "creator": {"id": 7},
+        }
+    )
+
+    assert name == "stale-42"
+
+
 def test_webhook_creator_name_prefers_realtime_detail_over_stale_member_cache(tmp_path):
     handler = WebhookHandler(
         docs_dir=tmp_path / "yuque_docs",
