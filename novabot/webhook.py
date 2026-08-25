@@ -180,7 +180,7 @@ class WebhookHandler:
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）
 
-        优先通过 last_editor_id 匹配，回退到名字模糊匹配。
+        优先使用 webhook/API detail 中随事件返回的实时显示名，回退到成员缓存。
 
         Args:
             detail: 文档详情
@@ -188,18 +188,23 @@ class WebhookHandler:
         Returns:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
-        if not self.storage:
-            return None
-
         try:
-            # 1. 优先通过 last_editor_id 匹配（文档详情 API 不返回 last_editor 对象）
+            # 1. Webhook 或文档列表 detail 中的嵌套对象通常比团队成员 API 更实时。
+            realtime_name = self._name_from_detail_user(detail, ("last_editor", "editor", "actor"))
+            if realtime_name:
+                return realtime_name
+
+            if not self.storage:
+                return None
+
+            # 2. 通过 last_editor_id 回退到成员缓存。
             last_editor_id = detail.get("last_editor_id")
             if last_editor_id:
                 member = self.storage.find_member_by_id(str(last_editor_id))
                 if member:
                     return member.get("name")
 
-            # 2. 尝试从嵌套对象获取（文档列表 API 会返回 last_editor 对象）
+            # 3. 若嵌套对象只有 id 没有 name，再尝试成员缓存。
             for key in ("last_editor", "creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
@@ -209,7 +214,7 @@ class WebhookHandler:
                         if member:
                             return member.get("name")
 
-            # 3. 回退：通过语雀用户名模糊匹配
+            # 4. 回退：通过语雀用户名模糊匹配
             yuque_name = YuqueClient.author_name_from_detail(detail)
             if yuque_name:
                 member = self.storage.find_member_by_name(yuque_name)
@@ -230,18 +235,23 @@ class WebhookHandler:
         Returns:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
-        if not self.storage:
-            return None
-
         try:
-            # 1. 优先通过 user_id/creator_id 匹配
+            # 1. 优先使用 webhook/API detail 的实时创建者显示名。
+            realtime_name = self._name_from_detail_user(detail, ("creator", "user"))
+            if realtime_name:
+                return realtime_name
+
+            if not self.storage:
+                return None
+
+            # 2. 通过 user_id/creator_id 回退到成员缓存。
             creator_id = detail.get("user_id") or detail.get("creator_id")
             if creator_id:
                 member = self.storage.find_member_by_id(str(creator_id))
                 if member:
                     return member.get("name")
 
-            # 2. 尝试从嵌套对象获取
+            # 3. 若嵌套对象只有 id 没有 name，再尝试成员缓存。
             for key in ("creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
@@ -254,6 +264,18 @@ class WebhookHandler:
         except Exception as e:
             logger.debug(f"[Webhook] 匹配创建者失败: {e}")
 
+        return None
+
+    @staticmethod
+    def _name_from_detail_user(detail: dict, keys: tuple[str, ...]) -> Optional[str]:
+        """从 webhook/API detail 的嵌套用户对象读取实时显示名。"""
+        for key in keys:
+            obj = detail.get(key)
+            if not isinstance(obj, dict):
+                continue
+            name = str(obj.get("name") or obj.get("login") or "").strip()
+            if name:
+                return name
         return None
 
     def _resolve_author(self, detail: dict) -> str:

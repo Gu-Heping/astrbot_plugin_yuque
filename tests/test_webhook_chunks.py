@@ -188,6 +188,14 @@ class _PushNotifier:
         self.pushed_ids.append(doc_id)
 
 
+class _StorageWithStaleMembers:
+    def find_member_by_id(self, member_id):
+        return {"name": f"stale-{member_id}"}
+
+    def find_member_by_name(self, name):
+        return {"name": f"stale-{name}"}
+
+
 def test_webhook_get_client_for_team_is_backward_compatible(tmp_path):
     store = ChunkStore(tmp_path / "chunks.db")
     handler = _handler(tmp_path, store)
@@ -245,6 +253,47 @@ def test_webhook_try_get_client_for_team_reraises_other_value_errors(tmp_path):
 
     with pytest.raises(ValueError, match="bad client state"):
         handler._try_get_client_for_team("other")
+
+
+def test_webhook_editor_name_prefers_realtime_detail_over_stale_member_cache(tmp_path):
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        storage=_StorageWithStaleMembers(),
+    )
+
+    name = handler._match_editor_name(
+        {
+            "last_editor_id": 42,
+            "last_editor": {"id": 42, "name": "Current Editor", "login": "old-editor"},
+            "creator": {"id": 7, "name": "Creator"},
+        }
+    )
+
+    assert name == "Current Editor"
+
+
+def test_webhook_creator_name_prefers_realtime_detail_over_stale_member_cache(tmp_path):
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        storage=_StorageWithStaleMembers(),
+    )
+
+    name = handler._match_creator_name(
+        {
+            "user_id": 42,
+            "creator": {"id": 42, "name": "Current Creator", "login": "old-creator"},
+        }
+    )
+
+    assert name == "Current Creator"
 
 
 def test_webhook_get_client_for_team_supports_keyword_only_callback(tmp_path):
