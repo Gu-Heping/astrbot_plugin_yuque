@@ -1,7 +1,8 @@
+import asyncio
 import subprocess
 from pathlib import Path
 
-from novabot.push_notifier import PushNotifier
+from novabot.push_notifier import NO_BODY_CHANGE, PushNotifier
 
 
 class _DummyContext:
@@ -10,6 +11,11 @@ class _DummyContext:
 
 class _DummySubscriptions:
     pass
+
+
+class _ProviderShouldNotBeUsed:
+    def get_using_provider(self):
+        raise AssertionError("provider should not be used")
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -123,3 +129,352 @@ def test_get_diff_without_push_record_keeps_new_document_as_first_push(tmp_path)
 
     assert is_first
     assert diff == "[这是新发布的文档，首次推送，无历史 diff 信息]"
+
+
+def test_prepare_update_diff_prefers_body_changes_over_paths_and_metadata(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """[文档路径或标题发生变化；以下是同一篇文档在旧路径与新路径之间的 diff，不代表从空文件新建]
+
+diff --git a/team/repo/old.md b/team/repo/new.md
+similarity index 87%
+rename from team/repo/old.md
+rename to team/repo/new.md
+@@ -1,8 +1,12 @@
+ ---
+-title: 旧标题
++title: 新标题
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
++## 课堂追问策略
++这次补充了课前预习、课堂提问和课后复盘三段式方法。
++每位成员需要记录一个可追问的问题，并在复盘中写出自己的判断。
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "课堂追问策略" in prepared
+    assert "三段式方法" in prepared
+    assert "路径移动" in prepared
+    assert "title:" not in prepared
+    assert "updated_at:" not in prepared
+    assert "rename from" not in prepared
+
+
+def test_prepare_update_diff_marks_metadata_only_diff_as_no_body_change(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/b.md
+rename from team/repo/a.md
+rename to team/repo/b.md
+@@ -1,5 +1,5 @@
+ ---
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+    assert notifier.pre_check(prepared, is_first_push=False) == (True, "无正文变更")
+
+
+def test_agent_should_push_skips_metadata_only_diff_before_provider(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderShouldNotBeUsed(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+    diff = """diff --git a/team/repo/a.md b/team/repo/b.md
+rename from team/repo/a.md
+rename to team/repo/b.md
+@@ -1,5 +1,5 @@
+ ---
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+"""
+
+    should_push, summary = asyncio.run(notifier.agent_should_push({}, diff, is_first_push=False))
+
+    assert not should_push
+    assert summary == {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
+
+
+def test_prepare_update_diff_filters_generated_metadata_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -1,11 +1,11 @@
+ ---
+ title: 文档
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+ 
+ | 作者 | 创建时间 | 更新时间 |
+ | --- | --- | --- |
+-| Old Name | 2026-08-01 | 2026-08-20 |
++| New Name | 2026-08-01 | 2026-08-25 |
+ 
+ 正文没有变化
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_keeps_body_date_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -30,3 +30,6 @@
+ 正文段落
++| 版本 | 日期 |
++| --- | --- |
++| v1.2 | 2026-08-25 |
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "版本" in prepared
+    assert "v1.2" in prepared
+    assert "2026-08-25" in prepared
+
+
+def test_prepare_update_diff_filters_frontmatter_when_hunk_starts_after_line_one(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -3,6 +3,6 @@
+ slug: demo
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ word_count: 12
+ ---
+ 
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_keeps_body_after_frontmatter_closing_fence(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -3,8 +3,9 @@
+ slug: demo
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+ 
+ ## 报名状态
+-否
++是
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "报名状态" in prepared
+    assert "是" in prepared
+    assert "否" in prepared
+    assert "updated_at" not in prepared
+
+
+def test_prepare_update_diff_does_not_treat_body_rule_as_frontmatter(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -15,7 +15,7 @@
+ ## 报名状态
+-否
++是
+ 
+ ---
+ 
+ 后续说明
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "报名状态" in prepared
+    assert "是" in prepared
+    assert "否" in prepared
+
+
+def test_prepare_update_diff_keeps_body_lines_starting_like_diff_headers(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -20,2 +20,2 @@
+---old_counter
++++new_counter
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "--old_counter" in prepared
+    assert "++new_counter" in prepared
+
+
+def test_prepare_update_diff_keeps_yaml_like_body_content(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -10,3 +10,6 @@
+ 正文段落
++```yaml
++title: 示例标题
++updated_at: 这里是正文示例，不是 frontmatter
++```
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "title: 示例标题" in prepared
+    assert "updated_at: 这里是正文示例" in prepared
+
+
+def test_prepare_update_diff_filters_multiline_html_comment(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -40,3 +40,6 @@
+ 正文段落
++<!--
++内部隐藏备注，不应被推送
++-->
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_get_diff_uses_large_context_to_filter_long_html_comment(tmp_path):
+    docs_dir = tmp_path / "docs"
+    data_dir = tmp_path / "data"
+    docs_dir.mkdir()
+    data_dir.mkdir()
+    _git(docs_dir, "init")
+    _git(docs_dir, "config", "user.name", "NovaBot")
+    _git(docs_dir, "config", "user.email", "novabot@example.local")
+
+    doc_path = "team/repo/Hidden.md"
+    comment_lines = "\n".join(f"隐藏备注 {i}" for i in range(20))
+    doc_file = docs_dir / doc_path
+    doc_file.parent.mkdir(parents=True)
+    doc_file.write_text(f"正文\n<!--\n{comment_lines}\n-->\n", encoding="utf-8")
+    first_commit = _commit(docs_dir, "initial")
+    (data_dir / "last_push.json").write_text(
+        '{"team:42": "' + first_commit + '"}',
+        encoding="utf-8",
+    )
+
+    updated_lines = comment_lines.replace("隐藏备注 10", "隐藏备注 10 已更新")
+    doc_file.write_text(f"正文\n<!--\n{updated_lines}\n-->\n", encoding="utf-8")
+    second_commit = _commit(docs_dir, "update hidden comment")
+
+    notifier = _notifier(docs_dir, data_dir)
+    diff, is_first = notifier.get_diff("team:42", second_commit, doc_path)
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert not is_first
+    assert "<!--" in diff
+    assert "-->" in diff
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_keeps_business_metadata_named_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -80,4 +80,4 @@
+ ## 业务统计表
+ | 作者 | 创建时间 | 更新时间 |
+ | --- | --- | --- |
+-| 活动负责人 | 2026-08-20 | 2026-08-24 |
++| 活动负责人 | 2026-08-20 | 2026-08-25 |
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "业务统计表" in prepared
+    assert "2026-08-25" in prepared
+
+
+def test_prepare_update_diff_adds_context_once_for_continuous_block(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -40,6 +40,9 @@
+ ## 任务清单
+ 当前安排如下：
++新增任务 1
++新增任务 2
++新增任务 3
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared.count("任务清单") == 1
+    assert prepared.count("当前安排如下") == 1
+    assert "新增任务 3" in prepared
+
+
+def test_prepare_update_diff_budget_keeps_added_and_removed_content(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_DummyContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_max_content_len": 900},
+    )
+    added = "\n".join(f"+新增正文内容 {i} " + "A" * 40 for i in range(30))
+    removed = "\n".join(f"-旧正文内容 {i} " + "B" * 30 for i in range(12))
+    diff = f"""diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -1,20 +1,30 @@
+{removed}
+{added}
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert len(prepared) <= notifier.max_content_len
+    assert "新增正文内容" in prepared
+    assert "旧正文内容" in prepared
+
+
+def test_prepare_update_diff_tiny_budget_does_not_expand_unbounded_text(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_DummyContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_max_content_len": 240},
+    )
+    added = "+新增正文内容 " + "A" * 500
+    removed = "-旧正文内容 " + "B" * 500
+    diff = f"""diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -30,1 +30,1 @@
+{removed}
+{added}
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert len(prepared) <= notifier.max_content_len
+    assert len(prepared) < 400
+
+
+def test_clip_text_respects_tiny_limit(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+
+    clipped = notifier._clip_text("正文" * 20, 3)
+
+    assert len(clipped) == 3
+
+
+def test_prepare_update_diff_keeps_diff_unavailable_state(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = "[无 Git 仓库，无法获取 diff]"
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == diff
+    assert notifier.pre_check(prepared, is_first_push=False) == (False, "")

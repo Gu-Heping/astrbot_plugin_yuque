@@ -266,13 +266,20 @@ class GitOps:
         """检查是否有 Git 仓库"""
         return self.is_git_repo()
 
-    def get_diff(self, commit1: str, commit2: str = None, file_path=None) -> str:
+    def get_diff(
+        self,
+        commit1: str,
+        commit2: str = None,
+        file_path=None,
+        context_lines: Optional[int] = None,
+    ) -> str:
         """获取两个 commit 之间的 diff
 
         Args:
             commit1: 旧 commit hash
             commit2: 新 commit hash（None 则比较工作区）
             file_path: 相对路径文件（可选）
+            context_lines: Git diff 上下文行数（可选）
 
         Returns:
             diff 文本
@@ -289,7 +296,11 @@ class GitOps:
             return ""
 
         try:
-            cmd = ["git", "diff", "--find-renames=20%", commit1]
+            cmd = ["git", "diff", "--find-renames=20%"]
+            if context_lines is not None:
+                safe_context = max(0, min(int(context_lines), 100000))
+                cmd.append(f"--unified={safe_context}")
+            cmd.append(commit1)
             if commit2:
                 cmd.append(commit2)
             if file_path:
@@ -308,6 +319,8 @@ class GitOps:
                 cwd=self.repo_dir,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
             )
             return result.stdout
         except Exception as e:

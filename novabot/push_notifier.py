@@ -5,6 +5,7 @@ NovaBot 智能推送模块
 
 import json
 import re
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -24,7 +25,8 @@ if TYPE_CHECKING:
 # 默认配置值
 DEFAULT_MIN_DIFF_CHARS = 100
 DEFAULT_MAX_CONTENT_LEN = 2000
-
+NO_BODY_CHANGE = "[无正文变更]"
+DIFF_UNAVAILABLE_PREFIXES = ("[无 Git 仓库", "[获取 diff 失败")
 
 class PushNotifier:
     """智能推送管理器
@@ -102,6 +104,253 @@ class PushNotifier:
             f"{diff}"
         )
 
+    @staticmethod
+    def _is_diff_file_header(raw_line: str, sign: str) -> bool:
+        """Return whether a diff line is a file header, not body content."""
+        if sign == "+":
+            return raw_line.startswith("+++ b/") or raw_line == "+++ /dev/null"
+        if sign == "-":
+            return raw_line.startswith("--- a/") or raw_line == "--- /dev/null"
+        return False
+
+    def _is_non_body_diff_line(
+        self,
+        line: str,
+        *,
+        in_frontmatter: bool = False,
+        in_generated_metadata_table: bool = False,
+        in_html_comment: bool = False,
+    ) -> bool:
+        """判断 diff 中的变更行是否只是元数据或结构信息。"""
+        stripped = line.strip()
+        if not stripped or stripped == "---":
+            return True
+        if in_html_comment or stripped.startswith(("<!--", "-->")):
+            return True
+        if in_generated_metadata_table:
+            return True
+        if in_frontmatter:
+            return True
+        return False
+
+    @staticmethod
+    def _hunk_has_frontmatter_delimiter(hunk_lines: list[str]) -> bool:
+        """Check whether a hunk shows part of the generated frontmatter fence."""
+        return any(
+            line[:1] in ("+", "-", " ") and line[1:].strip() == "---"
+            for line in hunk_lines
+        )
+
+    @staticmethod
+    def _looks_like_frontmatter_line(line: str) -> bool:
+        stripped = line.strip()
+        return bool(
+            not stripped
+            or re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:", stripped)
+            or stripped.startswith(("- ", "  ", "'"))
+        )
+
+    @staticmethod
+    def _is_generated_metadata_header(line: str) -> bool:
+        stripped = line.strip()
+        return (
+            stripped.startswith("|")
+            and stripped.endswith("|")
+            and "作者" in stripped
+            and "创建时间" in stripped
+            and "更新时间" in stripped
+        )
+
+    def _hunk_starts_in_frontmatter(self, hunk_lines: list[str], start_line: int) -> bool:
+        """Infer whether a partial hunk starts inside NovaBot frontmatter."""
+        before_fence: list[str] = []
+        after_fence: list[str] = []
+        saw_fence = False
+
+        for raw_line in hunk_lines[1:]:
+            if not raw_line or raw_line[0] not in ("+", "-", " "):
+                continue
+            line = raw_line[1:]
+            stripped = line.strip()
+            if stripped == "---":
+                saw_fence = True
+                continue
+            if saw_fence:
+                if stripped:
+                    after_fence.append(line)
+            else:
+                before_fence.append(line)
+
+        if not saw_fence:
+            return False
+        if start_line <= 1:
+            return True
+
+        visible_before = [line for line in before_fence if line.strip()]
+        if visible_before:
+            return all(self._looks_like_frontmatter_line(line) for line in visible_before)
+
+        return any(self._is_generated_metadata_header(line) for line in after_fence[:4])
+
+    @staticmethod
+    def _split_diff_hunks(diff: str) -> list[list[str]]:
+        """Split a unified diff into hunks with their hunk headers."""
+        hunks: list[list[str]] = []
+        current: list[str] = []
+        for line in diff.splitlines():
+            if line.startswith("@@"):
+                if current:
+                    hunks.append(current)
+                current = [line]
+            elif current:
+                current.append(line)
+        if current:
+            hunks.append(current)
+        return hunks
+
+    def _extract_body_change_lines(self, diff: str, sign: str) -> str:
+        """从 Git diff 中提取正文变更行，跳过 diff 头和开头 frontmatter。"""
+        lines: list[str] = []
+        for hunk in self._split_diff_hunks(diff):
+            header = hunk[0]
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", header)
+            if not match:
+                continue
+            old_line = int(match.group(1))
+            new_line = int(match.group(2))
+            hunk_start_line = min(old_line, new_line)
+            frontmatter_possible = (
+                hunk_start_line <= 30
+                and self._hunk_has_frontmatter_delimiter(hunk)
+                and self._hunk_starts_in_frontmatter(hunk, hunk_start_line)
+            )
+            in_frontmatter = frontmatter_possible
+            frontmatter_delimiters = 1 if frontmatter_possible and min(old_line, new_line) > 1 else 0
+            in_generated_metadata_table_region = False
+            allow_generated_metadata_table = False
+            html_comment_active = False
+            recent_context: deque[str] = deque(maxlen=2)
+            recent_heading: Optional[str] = None
+            context_emitted_for_block = False
+
+            def append_context() -> None:
+                nonlocal context_emitted_for_block
+                if context_emitted_for_block:
+                    return
+                for context_line in ([recent_heading] if recent_heading else []) + list(recent_context):
+                    if context_line and (not lines or lines[-1] != context_line):
+                        lines.append(context_line)
+                context_emitted_for_block = True
+
+            for raw_line in hunk[1:]:
+                if not raw_line:
+                    continue
+
+                prefix = raw_line[0]
+                if prefix not in ("+", "-", " "):
+                    continue
+
+                line = raw_line[1:]
+                if prefix in ("-", " "):
+                    old_line += 1
+                if prefix in ("+", " "):
+                    new_line += 1
+
+                stripped_line = line.strip()
+                if frontmatter_possible and stripped_line == "---" and frontmatter_delimiters < 2:
+                    frontmatter_delimiters += 1
+                    in_frontmatter = frontmatter_delimiters == 1
+                    if frontmatter_delimiters == 2:
+                        in_frontmatter = False
+                        allow_generated_metadata_table = True
+
+                starts_html_comment = stripped_line.startswith("<!--")
+                in_html_comment = html_comment_active or starts_html_comment
+                if starts_html_comment and "-->" not in stripped_line:
+                    html_comment_active = True
+                if html_comment_active and "-->" in stripped_line:
+                    html_comment_active = False
+
+                is_metadata_header = allow_generated_metadata_table and self._is_generated_metadata_header(line)
+                in_generated_metadata_table = False
+                if not in_frontmatter and is_metadata_header:
+                    in_generated_metadata_table_region = True
+                    in_generated_metadata_table = True
+                elif (
+                    not in_frontmatter
+                    and in_generated_metadata_table_region
+                    and stripped_line.startswith("|")
+                    and stripped_line.endswith("|")
+                ):
+                    in_generated_metadata_table = True
+                elif not (stripped_line.startswith("|") and stripped_line.endswith("|")):
+                    in_generated_metadata_table_region = False
+
+                is_non_body = self._is_non_body_diff_line(
+                    line,
+                    in_frontmatter=in_frontmatter,
+                    in_generated_metadata_table=in_generated_metadata_table,
+                    in_html_comment=in_html_comment,
+                )
+
+                if prefix == " " and not is_non_body:
+                    context_emitted_for_block = False
+                    if stripped_line.startswith("#"):
+                        recent_heading = line
+                        recent_context.clear()
+                    else:
+                        recent_context.append(line)
+                    continue
+
+                if prefix != sign or self._is_diff_file_header(raw_line, sign):
+                    continue
+
+                if is_non_body:
+                    continue
+                append_context()
+                lines.append(line)
+        return "\n".join(lines).strip()
+
+    @staticmethod
+    def _clip_text(text: str, limit: int) -> str:
+        """按字符预算裁剪文本。"""
+        if limit <= 0:
+            return ""
+        if len(text) <= limit:
+            return text
+        suffix = "\n... (正文变更已截断)"
+        if limit <= len(suffix):
+            return suffix[-limit:]
+        return text[: max(0, limit - len(suffix))].rstrip() + suffix
+
+    def _prepare_update_diff_for_llm(self, diff: str) -> str:
+        """为更新推送准备正文优先的 diff 输入。"""
+        if diff.startswith(DIFF_UNAVAILABLE_PREFIXES):
+            return diff
+
+        added = self._extract_body_change_lines(diff, "+")
+        removed = self._extract_body_change_lines(diff, "-")
+
+        if not added and not removed:
+            return NO_BODY_CHANGE
+
+        parts = [
+            "以下内容从 Git diff 中抽取，已忽略路径移动、文件名变化、frontmatter、作者、时间等非正文信息。",
+            "请只基于正文内容总结主要变更；不要把路径移动、目录调整、元数据同步作为主要变更。",
+        ]
+        fixed_text_len = len("\n".join(parts)) + len("\n\n新增或修改后的正文片段：\n")
+        if removed:
+            fixed_text_len += len("\n\n被替换或删除的旧正文片段：\n")
+        content_budget = max(0, self.max_content_len - fixed_text_len)
+        removed_budget = min(max(80, content_budget // 3), len(removed), content_budget) if removed else 0
+        added_budget = max(0, content_budget - removed_budget)
+
+        if added:
+            parts.extend(["", "新增或修改后的正文片段：", self._clip_text(added, added_budget)])
+        if removed:
+            parts.extend(["", "被替换或删除的旧正文片段：", self._clip_text(removed, removed_budget)])
+        return "\n".join(parts)
+
     def get_diff(self, doc_id: object, current_commit: str, doc_path) -> tuple[str, bool]:
         """获取与上次推送的 diff
 
@@ -127,7 +376,7 @@ class PushNotifier:
                 parent_commit = git.get_parent_commit(current_commit)
                 if parent_commit and git.has_any_path_at_commit(parent_commit, doc_path):
                     try:
-                        diff = git.get_diff(parent_commit, current_commit, doc_path)
+                        diff = git.get_diff(parent_commit, current_commit, doc_path, context_lines=100000)
                         logger.info(
                             "[Push] 未找到推送记录，使用当前提交父提交作为 diff 基线: "
                             f"doc_id={doc_id}, parent={parent_commit[:8]}, current={current_commit[:8]}"
@@ -147,7 +396,7 @@ class PushNotifier:
             return "[无 Git 仓库，无法获取 diff]", False
 
         try:
-            diff = git.get_diff(last_commit, current_commit, doc_path)
+            diff = git.get_diff(last_commit, current_commit, doc_path, context_lines=100000)
             return self._format_diff_for_paths(diff or "[无文本变更]", doc_path), False
         except Exception as e:
             logger.warning(f"[Push] 获取 diff 失败: {e}")
@@ -170,6 +419,10 @@ class PushNotifier:
         # 正文完全没变化
         if not diff.strip() or diff == "[无文本变更]":
             return True, "正文无变化"
+        if diff == NO_BODY_CHANGE:
+            return True, "无正文变更"
+        if diff.startswith(DIFF_UNAVAILABLE_PREFIXES):
+            return False, ""
 
         # diff 太小
         # 只计算实际变更内容（去掉 diff 元数据）
@@ -202,6 +455,11 @@ class PushNotifier:
             (should_push, summary) 是否推送，摘要信息
         """
         try:
+            if not is_first_push:
+                content = self._prepare_update_diff_for_llm(content)
+                if content == NO_BODY_CHANGE:
+                    return False, {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
+
             # 获取 Provider
             prov = self.context.get_using_provider()
             if not prov:
