@@ -180,7 +180,7 @@ class WebhookHandler:
     def _match_editor_name(self, detail: dict) -> Optional[str]:
         """匹配文档编辑者姓名（用于推送消息）
 
-        优先通过 last_editor_id 匹配，回退到名字模糊匹配。
+        优先使用 webhook/API detail 中随事件返回的实时显示名，回退到成员缓存。
 
         Args:
             detail: 文档详情
@@ -188,28 +188,31 @@ class WebhookHandler:
         Returns:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
-        if not self.storage:
-            return None
-
         try:
-            # 1. 优先通过 last_editor_id 匹配（文档详情 API 不返回 last_editor 对象）
-            last_editor_id = detail.get("last_editor_id")
-            if last_editor_id:
-                member = self.storage.find_member_by_id(str(last_editor_id))
-                if member:
-                    return member.get("name")
+            # 1. Webhook 操作者最贴近本次事件；其后回退到 editor/last_editor。
+            realtime_name = self._name_from_detail_user(detail, ("actor", "editor", "last_editor"))
+            if realtime_name:
+                return realtime_name
 
-            # 2. 尝试从嵌套对象获取（文档列表 API 会返回 last_editor 对象）
-            for key in ("last_editor", "creator", "user"):
+            if not self.storage:
+                return None
+
+            # 2. 若实时对象只有 id，优先按当前团队作用域查成员缓存。
+            for key in ("actor", "editor", "last_editor", "creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
                     user_id = obj.get("id")
-                    if user_id:
-                        member = self.storage.find_member_by_id(str(user_id))
-                        if member:
-                            return member.get("name")
+                    member = self._find_member_by_id(detail, user_id)
+                    if member:
+                        return member.get("name")
 
-            # 3. 回退：通过语雀用户名模糊匹配
+            # 3. 通过标量 editor id 回退到成员缓存。
+            for id_key in ("actor_id", "editor_id", "last_editor_id"):
+                member = self._find_member_by_id(detail, detail.get(id_key))
+                if member:
+                    return member.get("name")
+
+            # 4. 回退：通过语雀用户名模糊匹配
             yuque_name = YuqueClient.author_name_from_detail(detail)
             if yuque_name:
                 member = self.storage.find_member_by_name(yuque_name)
@@ -230,31 +233,81 @@ class WebhookHandler:
         Returns:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
-        if not self.storage:
-            return None
-
         try:
-            # 1. 优先通过 user_id/creator_id 匹配
-            creator_id = detail.get("user_id") or detail.get("creator_id")
-            if creator_id:
-                member = self.storage.find_member_by_id(str(creator_id))
-                if member:
-                    return member.get("name")
+            # Webhook/API detail carries the freshest creator display name. The
+            # team member API can lag behind renames, so only use cache as a
+            # fallback when no realtime name is present.
+            realtime_name = self._name_from_detail_user(detail, ("creator", "user"))
+            if realtime_name:
+                return realtime_name
+            if not self.storage:
+                return None
 
-            # 2. 尝试从嵌套对象获取
+            # 1. 若只有 id，按当前团队作用域查成员缓存。
+            creator_id = detail.get("user_id") or detail.get("creator_id")
+            member = self._find_member_by_id(detail, creator_id)
+            if member:
+                return member.get("name")
+
+            # 2. 嵌套对象只有 id 时，仍按当前团队作用域查成员缓存。
             for key in ("creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
-                    user_id = obj.get("id")
-                    if user_id:
-                        member = self.storage.find_member_by_id(str(user_id))
-                        if member:
-                            return member.get("name")
+                    member = self._find_member_by_id(detail, obj.get("id"))
+                    if member:
+                        return member.get("name")
 
         except Exception as e:
             logger.debug(f"[Webhook] 匹配创建者失败: {e}")
 
         return None
+
+    @staticmethod
+    def _name_from_detail_user(detail: dict, keys: tuple[str, ...]) -> Optional[str]:
+        """从 webhook/API detail 的嵌套用户对象读取实时显示名。"""
+        for key in keys:
+            obj = detail.get(key)
+            if not isinstance(obj, dict):
+                continue
+            name = str(obj.get("name") or obj.get("login") or "").strip()
+            if name:
+                return name
+        return None
+
+    def _find_member_by_id(self, detail: dict, user_id: object) -> Optional[dict]:
+        """按当前团队作用域优先查找成员缓存。"""
+        if not self.storage or not user_id:
+            return None
+
+        user_key = str(user_id)
+        team_id = str(detail.get("team_id") or "").strip()
+        try:
+            load_members = getattr(self.storage, "load_members", None)
+            if callable(load_members):
+                members = load_members()
+                if team_id:
+                    scoped = members.get(f"{team_id}:{user_key}")
+                    if scoped:
+                        return scoped
+                unscoped = members.get(user_key)
+                if unscoped:
+                    return unscoped
+            return self.storage.find_member_by_id(user_key)
+        except Exception as e:
+            logger.debug(f"[Webhook] 查找成员缓存失败: {e}")
+            return None
+
+    @staticmethod
+    def _merge_payload_user_objects(detail: dict, payload_data: dict) -> dict:
+        """保留 webhook payload 中可能比 doc detail 更实时的用户对象。"""
+        for key in ("actor", "editor", "last_editor"):
+            obj = payload_data.get(key)
+            if isinstance(obj, dict) and key not in detail:
+                detail[key] = obj
+        for key in ("actor_id", "editor_id", "last_editor_id"):
+            if payload_data.get(key) and not detail.get(key):
+                detail[key] = payload_data[key]
+        return detail
 
     def _resolve_author(self, detail: dict) -> str:
         """解析文档作者名"""
@@ -443,6 +496,7 @@ class WebhookHandler:
         if not detail:
             logger.warning(f"[Webhook] 文档详情为空: repo_id={repo_id}, slug={slug}")
             return {"status": "error", "message": "empty detail"}
+        detail = self._merge_payload_user_objects(detail, data)
 
         # 获取 namespace
         namespace = await self._get_namespace(client, repo_id, repo_slug)
