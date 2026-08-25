@@ -282,6 +282,26 @@ def test_prepare_update_diff_keeps_body_after_frontmatter_closing_fence(tmp_path
     assert "updated_at" not in prepared
 
 
+def test_prepare_update_diff_does_not_treat_body_rule_as_frontmatter(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -15,7 +15,7 @@
+ ## 报名状态
+-否
++是
+ 
+ ---
+ 
+ 后续说明
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "报名状态" in prepared
+    assert "是" in prepared
+    assert "否" in prepared
+
+
 def test_prepare_update_diff_keeps_body_lines_starting_like_diff_headers(tmp_path):
     notifier = _notifier(tmp_path / "docs", tmp_path / "data")
     diff = """diff --git a/team/repo/a.md b/team/repo/a.md
@@ -328,6 +348,40 @@ def test_prepare_update_diff_filters_multiline_html_comment(tmp_path):
     assert prepared == NO_BODY_CHANGE
 
 
+def test_get_diff_uses_large_context_to_filter_long_html_comment(tmp_path):
+    docs_dir = tmp_path / "docs"
+    data_dir = tmp_path / "data"
+    docs_dir.mkdir()
+    data_dir.mkdir()
+    _git(docs_dir, "init")
+    _git(docs_dir, "config", "user.name", "NovaBot")
+    _git(docs_dir, "config", "user.email", "novabot@example.local")
+
+    doc_path = "team/repo/Hidden.md"
+    comment_lines = "\n".join(f"隐藏备注 {i}" for i in range(20))
+    doc_file = docs_dir / doc_path
+    doc_file.parent.mkdir(parents=True)
+    doc_file.write_text(f"正文\n<!--\n{comment_lines}\n-->\n", encoding="utf-8")
+    first_commit = _commit(docs_dir, "initial")
+    (data_dir / "last_push.json").write_text(
+        '{"team:42": "' + first_commit + '"}',
+        encoding="utf-8",
+    )
+
+    updated_lines = comment_lines.replace("隐藏备注 10", "隐藏备注 10 已更新")
+    doc_file.write_text(f"正文\n<!--\n{updated_lines}\n-->\n", encoding="utf-8")
+    second_commit = _commit(docs_dir, "update hidden comment")
+
+    notifier = _notifier(docs_dir, data_dir)
+    diff, is_first = notifier.get_diff("team:42", second_commit, doc_path)
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert not is_first
+    assert "<!--" in diff
+    assert "-->" in diff
+    assert prepared == NO_BODY_CHANGE
+
+
 def test_prepare_update_diff_keeps_business_metadata_named_table(tmp_path):
     notifier = _notifier(tmp_path / "docs", tmp_path / "data")
     diff = """diff --git a/team/repo/a.md b/team/repo/a.md
@@ -343,6 +397,24 @@ def test_prepare_update_diff_keeps_business_metadata_named_table(tmp_path):
 
     assert "业务统计表" in prepared
     assert "2026-08-25" in prepared
+
+
+def test_prepare_update_diff_adds_context_once_for_continuous_block(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -40,6 +40,9 @@
+ ## 任务清单
+ 当前安排如下：
++新增任务 1
++新增任务 2
++新增任务 3
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared.count("任务清单") == 1
+    assert prepared.count("当前安排如下") == 1
+    assert "新增任务 3" in prepared
 
 
 def test_prepare_update_diff_budget_keeps_added_and_removed_content(tmp_path):

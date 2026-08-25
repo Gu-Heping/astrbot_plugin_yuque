@@ -142,6 +142,57 @@ class PushNotifier:
         )
 
     @staticmethod
+    def _looks_like_frontmatter_line(line: str) -> bool:
+        stripped = line.strip()
+        return bool(
+            not stripped
+            or re.match(r"^[A-Za-z_][A-Za-z0-9_-]*:", stripped)
+            or stripped.startswith(("- ", "  ", "'"))
+        )
+
+    @staticmethod
+    def _is_generated_metadata_header(line: str) -> bool:
+        stripped = line.strip()
+        return (
+            stripped.startswith("|")
+            and stripped.endswith("|")
+            and "作者" in stripped
+            and "创建时间" in stripped
+            and "更新时间" in stripped
+        )
+
+    def _hunk_starts_in_frontmatter(self, hunk_lines: list[str], start_line: int) -> bool:
+        """Infer whether a partial hunk starts inside NovaBot frontmatter."""
+        before_fence: list[str] = []
+        after_fence: list[str] = []
+        saw_fence = False
+
+        for raw_line in hunk_lines[1:]:
+            if not raw_line or raw_line[0] not in ("+", "-", " "):
+                continue
+            line = raw_line[1:]
+            stripped = line.strip()
+            if stripped == "---":
+                saw_fence = True
+                continue
+            if saw_fence:
+                if stripped:
+                    after_fence.append(line)
+            else:
+                before_fence.append(line)
+
+        if not saw_fence:
+            return False
+        if start_line <= 1:
+            return True
+
+        visible_before = [line for line in before_fence if line.strip()]
+        if visible_before:
+            return all(self._looks_like_frontmatter_line(line) for line in visible_before)
+
+        return any(self._is_generated_metadata_header(line) for line in after_fence[:4])
+
+    @staticmethod
     def _split_diff_hunks(diff: str) -> list[list[str]]:
         """Split a unified diff into hunks with their hunk headers."""
         hunks: list[list[str]] = []
@@ -167,18 +218,29 @@ class PushNotifier:
                 continue
             old_line = int(match.group(1))
             new_line = int(match.group(2))
-            frontmatter_possible = min(old_line, new_line) <= 20 and self._hunk_has_frontmatter_delimiter(hunk)
+            hunk_start_line = min(old_line, new_line)
+            frontmatter_possible = (
+                hunk_start_line <= 30
+                and self._hunk_has_frontmatter_delimiter(hunk)
+                and self._hunk_starts_in_frontmatter(hunk, hunk_start_line)
+            )
             in_frontmatter = frontmatter_possible
             frontmatter_delimiters = 1 if frontmatter_possible and min(old_line, new_line) > 1 else 0
             in_generated_metadata_table_region = False
+            allow_generated_metadata_table = False
             html_comment_active = False
             recent_context: deque[str] = deque(maxlen=2)
             recent_heading: Optional[str] = None
+            context_emitted_for_block = False
 
             def append_context() -> None:
+                nonlocal context_emitted_for_block
+                if context_emitted_for_block:
+                    return
                 for context_line in ([recent_heading] if recent_heading else []) + list(recent_context):
                     if context_line and (not lines or lines[-1] != context_line):
                         lines.append(context_line)
+                context_emitted_for_block = True
 
             for raw_line in hunk[1:]:
                 if not raw_line:
@@ -189,8 +251,6 @@ class PushNotifier:
                     continue
 
                 line = raw_line[1:]
-                current_old_line = old_line
-                current_new_line = new_line
                 if prefix in ("-", " "):
                     old_line += 1
                 if prefix in ("+", " "):
@@ -202,6 +262,7 @@ class PushNotifier:
                     in_frontmatter = frontmatter_delimiters == 1
                     if frontmatter_delimiters == 2:
                         in_frontmatter = False
+                        allow_generated_metadata_table = True
 
                 starts_html_comment = stripped_line.startswith("<!--")
                 in_html_comment = html_comment_active or starts_html_comment
@@ -210,15 +271,7 @@ class PushNotifier:
                 if html_comment_active and "-->" in stripped_line:
                     html_comment_active = False
 
-                metadata_table_possible = min(current_old_line, current_new_line) <= 30
-                is_metadata_header = (
-                    metadata_table_possible
-                    and stripped_line.startswith("|")
-                    and stripped_line.endswith("|")
-                    and "作者" in stripped_line
-                    and "创建时间" in stripped_line
-                    and "更新时间" in stripped_line
-                )
+                is_metadata_header = allow_generated_metadata_table and self._is_generated_metadata_header(line)
                 in_generated_metadata_table = False
                 if not in_frontmatter and is_metadata_header:
                     in_generated_metadata_table_region = True
@@ -241,6 +294,7 @@ class PushNotifier:
                 )
 
                 if prefix == " " and not is_non_body:
+                    context_emitted_for_block = False
                     if stripped_line.startswith("#"):
                         recent_heading = line
                         recent_context.clear()
@@ -322,7 +376,7 @@ class PushNotifier:
                 parent_commit = git.get_parent_commit(current_commit)
                 if parent_commit and git.has_any_path_at_commit(parent_commit, doc_path):
                     try:
-                        diff = git.get_diff(parent_commit, current_commit, doc_path)
+                        diff = git.get_diff(parent_commit, current_commit, doc_path, context_lines=100000)
                         logger.info(
                             "[Push] 未找到推送记录，使用当前提交父提交作为 diff 基线: "
                             f"doc_id={doc_id}, parent={parent_commit[:8]}, current={current_commit[:8]}"
@@ -342,7 +396,7 @@ class PushNotifier:
             return "[无 Git 仓库，无法获取 diff]", False
 
         try:
-            diff = git.get_diff(last_commit, current_commit, doc_path)
+            diff = git.get_diff(last_commit, current_commit, doc_path, context_lines=100000)
             return self._format_diff_for_paths(diff or "[无文本变更]", doc_path), False
         except Exception as e:
             logger.warning(f"[Push] 获取 diff 失败: {e}")
