@@ -5,6 +5,7 @@ NovaBot 智能推送模块
 
 import json
 import re
+from collections import deque
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -118,12 +119,13 @@ class PushNotifier:
         *,
         in_frontmatter: bool = False,
         in_generated_metadata_table: bool = False,
+        in_html_comment: bool = False,
     ) -> bool:
         """判断 diff 中的变更行是否只是元数据或结构信息。"""
         stripped = line.strip()
         if not stripped or stripped == "---":
             return True
-        if stripped.startswith(("<!--", "-->")):
+        if in_html_comment or stripped.startswith(("<!--", "-->")):
             return True
         if in_generated_metadata_table:
             return True
@@ -167,8 +169,16 @@ class PushNotifier:
             new_line = int(match.group(2))
             frontmatter_possible = min(old_line, new_line) <= 20 and self._hunk_has_frontmatter_delimiter(hunk)
             in_frontmatter = frontmatter_possible
-            frontmatter_delimiters = 0
+            frontmatter_delimiters = 1 if frontmatter_possible and min(old_line, new_line) > 1 else 0
             in_generated_metadata_table_region = False
+            html_comment_active = False
+            recent_context: deque[str] = deque(maxlen=2)
+            recent_heading: Optional[str] = None
+
+            def append_context() -> None:
+                for context_line in ([recent_heading] if recent_heading else []) + list(recent_context):
+                    if context_line and (not lines or lines[-1] != context_line):
+                        lines.append(context_line)
 
             for raw_line in hunk[1:]:
                 if not raw_line:
@@ -179,20 +189,31 @@ class PushNotifier:
                     continue
 
                 line = raw_line[1:]
+                current_old_line = old_line
+                current_new_line = new_line
                 if prefix in ("-", " "):
                     old_line += 1
                 if prefix in ("+", " "):
                     new_line += 1
 
-                if frontmatter_possible and line.strip() == "---" and frontmatter_delimiters < 2:
+                stripped_line = line.strip()
+                if frontmatter_possible and stripped_line == "---" and frontmatter_delimiters < 2:
                     frontmatter_delimiters += 1
                     in_frontmatter = frontmatter_delimiters == 1
                     if frontmatter_delimiters == 2:
                         in_frontmatter = False
 
-                stripped_line = line.strip()
+                starts_html_comment = stripped_line.startswith("<!--")
+                in_html_comment = html_comment_active or starts_html_comment
+                if starts_html_comment and "-->" not in stripped_line:
+                    html_comment_active = True
+                if html_comment_active and "-->" in stripped_line:
+                    html_comment_active = False
+
+                metadata_table_possible = min(current_old_line, current_new_line) <= 30
                 is_metadata_header = (
-                    stripped_line.startswith("|")
+                    metadata_table_possible
+                    and stripped_line.startswith("|")
                     and stripped_line.endswith("|")
                     and "作者" in stripped_line
                     and "创建时间" in stripped_line
@@ -212,15 +233,27 @@ class PushNotifier:
                 elif not (stripped_line.startswith("|") and stripped_line.endswith("|")):
                     in_generated_metadata_table_region = False
 
-                if prefix != sign or self._is_diff_file_header(raw_line, sign):
-                    continue
-
-                if self._is_non_body_diff_line(
+                is_non_body = self._is_non_body_diff_line(
                     line,
                     in_frontmatter=in_frontmatter,
                     in_generated_metadata_table=in_generated_metadata_table,
-                ):
+                    in_html_comment=in_html_comment,
+                )
+
+                if prefix == " " and not is_non_body:
+                    if stripped_line.startswith("#"):
+                        recent_heading = line
+                        recent_context.clear()
+                    else:
+                        recent_context.append(line)
                     continue
+
+                if prefix != sign or self._is_diff_file_header(raw_line, sign):
+                    continue
+
+                if is_non_body:
+                    continue
+                append_context()
                 lines.append(line)
         return "\n".join(lines).strip()
 

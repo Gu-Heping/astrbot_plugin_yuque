@@ -260,6 +260,28 @@ def test_prepare_update_diff_filters_frontmatter_when_hunk_starts_after_line_one
     assert prepared == NO_BODY_CHANGE
 
 
+def test_prepare_update_diff_keeps_body_after_frontmatter_closing_fence(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -3,8 +3,9 @@
+ slug: demo
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+ 
+ ## 报名状态
+-否
++是
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "报名状态" in prepared
+    assert "是" in prepared
+    assert "否" in prepared
+    assert "updated_at" not in prepared
+
+
 def test_prepare_update_diff_keeps_body_lines_starting_like_diff_headers(tmp_path):
     notifier = _notifier(tmp_path / "docs", tmp_path / "data")
     diff = """diff --git a/team/repo/a.md b/team/repo/a.md
@@ -289,6 +311,38 @@ def test_prepare_update_diff_keeps_yaml_like_body_content(tmp_path):
 
     assert "title: 示例标题" in prepared
     assert "updated_at: 这里是正文示例" in prepared
+
+
+def test_prepare_update_diff_filters_multiline_html_comment(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -40,3 +40,6 @@
+ 正文段落
++<!--
++内部隐藏备注，不应被推送
++-->
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_keeps_business_metadata_named_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -80,4 +80,4 @@
+ ## 业务统计表
+ | 作者 | 创建时间 | 更新时间 |
+ | --- | --- | --- |
+-| 活动负责人 | 2026-08-20 | 2026-08-24 |
++| 活动负责人 | 2026-08-20 | 2026-08-25 |
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "业务统计表" in prepared
+    assert "2026-08-25" in prepared
 
 
 def test_prepare_update_diff_budget_keeps_added_and_removed_content(tmp_path):
