@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 # 默认配置值
 DEFAULT_MIN_DIFF_CHARS = 100
 DEFAULT_MAX_CONTENT_LEN = 2000
+NO_BODY_CHANGE = "[无正文变更]"
 
 FRONTMATTER_KEYS = {
     "id",
@@ -119,7 +120,7 @@ class PushNotifier:
             f"{diff}"
         )
 
-    def _is_non_body_diff_line(self, line: str) -> bool:
+    def _is_non_body_diff_line(self, line: str, *, in_frontmatter: bool = False) -> bool:
         """判断 diff 中的变更行是否只是元数据或结构信息。"""
         stripped = line.strip()
         if not stripped or stripped == "---":
@@ -127,41 +128,71 @@ class PushNotifier:
         if stripped.startswith(("# Yuque", "<!--", "-->")):
             return True
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):", stripped)
-        return bool(match and match.group(1) in FRONTMATTER_KEYS)
+        return bool(in_frontmatter and match and match.group(1) in FRONTMATTER_KEYS)
 
-    def _extract_body_change_lines(self, diff: str, sign: str, *, limit: int) -> str:
-        """从 Git diff 中提取正文变更行，跳过 diff 头和 frontmatter。"""
+    def _extract_body_change_lines(self, diff: str, sign: str) -> str:
+        """从 Git diff 中提取正文变更行，跳过 diff 头和开头 frontmatter。"""
         lines: list[str] = []
-        total_len = 0
+        frontmatter_possible = False
+        in_frontmatter = False
+        frontmatter_delimiters = 0
         for raw_line in diff.splitlines():
+            if raw_line.startswith("@@"):
+                frontmatter_possible = bool(re.match(r"@@ -1(?:,\d+)? \+1(?:,\d+)? @@", raw_line))
+                in_frontmatter = False
+                frontmatter_delimiters = 0
+                continue
+
+            if not raw_line:
+                continue
+
+            prefix = raw_line[0]
+            if prefix in ("+", "-", " "):
+                line = raw_line[1:]
+                if frontmatter_possible and line.strip() == "---" and frontmatter_delimiters < 2:
+                    frontmatter_delimiters += 1
+                    in_frontmatter = frontmatter_delimiters == 1
+
             if not raw_line.startswith(sign) or raw_line.startswith(sign * 3):
                 continue
+
             line = raw_line[1:]
-            if self._is_non_body_diff_line(line):
+            if self._is_non_body_diff_line(line, in_frontmatter=in_frontmatter):
                 continue
             lines.append(line)
-            total_len += len(line) + 1
-            if total_len >= limit:
-                lines.append("... (正文变更已截断)")
-                break
         return "\n".join(lines).strip()
+
+    @staticmethod
+    def _clip_text(text: str, limit: int) -> str:
+        """按字符预算裁剪文本。"""
+        if limit <= 0 or len(text) <= limit:
+            return text
+        suffix = "\n... (正文变更已截断)"
+        return text[: max(0, limit - len(suffix))].rstrip() + suffix
 
     def _prepare_update_diff_for_llm(self, diff: str) -> str:
         """为更新推送准备正文优先的 diff 输入。"""
-        added = self._extract_body_change_lines(diff, "+", limit=self.max_content_len)
-        removed = self._extract_body_change_lines(diff, "-", limit=max(400, self.max_content_len // 3))
+        added = self._extract_body_change_lines(diff, "+")
+        removed = self._extract_body_change_lines(diff, "-")
 
         if not added and not removed:
-            return diff
+            return NO_BODY_CHANGE
 
         parts = [
             "以下内容从 Git diff 中抽取，已忽略路径移动、文件名变化、frontmatter、作者、时间等非正文信息。",
             "请只基于正文内容总结主要变更；不要把路径移动、目录调整、元数据同步作为主要变更。",
         ]
-        if added:
-            parts.extend(["", "新增或修改后的正文片段：", added])
+        fixed_text_len = len("\n".join(parts)) + len("\n\n新增或修改后的正文片段：\n")
         if removed:
-            parts.extend(["", "被替换或删除的旧正文片段：", removed])
+            fixed_text_len += len("\n\n被替换或删除的旧正文片段：\n")
+        content_budget = max(200, self.max_content_len - fixed_text_len)
+        removed_budget = min(max(200, content_budget // 3), len(removed)) if removed else 0
+        added_budget = max(0, content_budget - removed_budget)
+
+        if added:
+            parts.extend(["", "新增或修改后的正文片段：", self._clip_text(added, added_budget)])
+        if removed:
+            parts.extend(["", "被替换或删除的旧正文片段：", self._clip_text(removed, removed_budget)])
         return "\n".join(parts)
 
     def get_diff(self, doc_id: object, current_commit: str, doc_path) -> tuple[str, bool]:
@@ -232,6 +263,8 @@ class PushNotifier:
         # 正文完全没变化
         if not diff.strip() or diff == "[无文本变更]":
             return True, "正文无变化"
+        if diff == NO_BODY_CHANGE:
+            return True, "无正文变更"
 
         # diff 太小
         # 只计算实际变更内容（去掉 diff 元数据）
@@ -264,6 +297,11 @@ class PushNotifier:
             (should_push, summary) 是否推送，摘要信息
         """
         try:
+            if not is_first_push:
+                content = self._prepare_update_diff_for_llm(content)
+                if content == NO_BODY_CHANGE:
+                    return False, {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
+
             # 获取 Provider
             prov = self.context.get_using_provider()
             if not prov:
@@ -271,8 +309,6 @@ class PushNotifier:
                 return True, {"highlights": ["文档有更新"], "reason": "无 LLM，默认推送"}
 
             # 截断内容避免过长
-            if not is_first_push:
-                content = self._prepare_update_diff_for_llm(content)
             if len(content) > self.max_content_len:
                 content = content[:self.max_content_len] + "\n... (已截断)"
 
