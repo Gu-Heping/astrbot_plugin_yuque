@@ -234,27 +234,28 @@ class WebhookHandler:
             匹配到的团队成员真实姓名，未匹配返回 None
         """
         try:
+            # Webhook/API detail carries the freshest creator display name. The
+            # team member API can lag behind renames, so only use cache as a
+            # fallback when no realtime name is present.
+            realtime_name = self._name_from_detail_user(detail, ("creator", "user"))
+            if realtime_name:
+                return realtime_name
             if not self.storage:
-                return self._name_from_detail_user(detail, ("creator", "user"))
+                return None
 
-            # 1. 文档作者元数据与全量同步保持一致，优先使用当前团队成员缓存。
+            # 1. 若只有 id，按当前团队作用域查成员缓存。
             creator_id = detail.get("user_id") or detail.get("creator_id")
             member = self._find_member_by_id(detail, creator_id)
             if member:
                 return member.get("name")
 
-            # 2. 若嵌套对象只有 id，仍按当前团队作用域查成员缓存。
+            # 2. 嵌套对象只有 id 时，仍按当前团队作用域查成员缓存。
             for key in ("creator", "user"):
                 obj = detail.get(key)
                 if isinstance(obj, dict):
                     member = self._find_member_by_id(detail, obj.get("id"))
                     if member:
                         return member.get("name")
-
-            # 3. 最后才使用 detail 中的实时显示名，避免与全量同步反复改写作者字段。
-            realtime_name = self._name_from_detail_user(detail, ("creator", "user"))
-            if realtime_name:
-                return realtime_name
 
         except Exception as e:
             logger.debug(f"[Webhook] 匹配创建者失败: {e}")

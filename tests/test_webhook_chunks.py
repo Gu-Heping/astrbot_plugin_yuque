@@ -325,7 +325,7 @@ def test_webhook_editor_name_falls_back_to_actor_id_member_cache(tmp_path):
     assert name == "scoped-42"
 
 
-def test_webhook_creator_name_prefers_scoped_member_cache_over_realtime_detail(tmp_path):
+def test_webhook_creator_name_prefers_realtime_detail_over_stale_member_cache(tmp_path):
     handler = WebhookHandler(
         docs_dir=tmp_path / "yuque_docs",
         data_dir=tmp_path,
@@ -340,6 +340,27 @@ def test_webhook_creator_name_prefers_scoped_member_cache_over_realtime_detail(t
             "team_id": "other",
             "user_id": 42,
             "creator": {"id": 42, "name": "Current Creator", "login": "old-creator"},
+        }
+    )
+
+    assert name == "Current Creator"
+
+
+def test_webhook_creator_name_falls_back_to_scoped_member_cache_without_realtime_name(tmp_path):
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        storage=_StorageWithStaleMembers(),
+    )
+
+    name = handler._match_creator_name(
+        {
+            "team_id": "other",
+            "user_id": 42,
+            "creator": {"id": 42},
         }
     )
 
