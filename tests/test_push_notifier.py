@@ -226,6 +226,23 @@ def test_prepare_update_diff_filters_generated_metadata_table(tmp_path):
     assert prepared == NO_BODY_CHANGE
 
 
+def test_prepare_update_diff_keeps_body_date_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -30,3 +30,6 @@
+ 正文段落
++| 版本 | 日期 |
++| --- | --- |
++| v1.2 | 2026-08-25 |
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "版本" in prepared
+    assert "v1.2" in prepared
+    assert "2026-08-25" in prepared
+
+
 def test_prepare_update_diff_filters_frontmatter_when_hunk_starts_after_line_one(tmp_path):
     notifier = _notifier(tmp_path / "docs", tmp_path / "data")
     diff = """diff --git a/team/repo/a.md b/team/repo/a.md
@@ -317,3 +334,21 @@ def test_prepare_update_diff_tiny_budget_does_not_expand_unbounded_text(tmp_path
 
     assert len(prepared) <= notifier.max_content_len
     assert len(prepared) < 400
+
+
+def test_clip_text_respects_tiny_limit(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+
+    clipped = notifier._clip_text("正文" * 20, 3)
+
+    assert len(clipped) == 3
+
+
+def test_prepare_update_diff_keeps_diff_unavailable_state(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = "[无 Git 仓库，无法获取 diff]"
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == diff
+    assert notifier.pre_check(prepared, is_first_push=False) == (False, "")

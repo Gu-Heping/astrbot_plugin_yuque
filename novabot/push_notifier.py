@@ -25,24 +25,7 @@ if TYPE_CHECKING:
 DEFAULT_MIN_DIFF_CHARS = 100
 DEFAULT_MAX_CONTENT_LEN = 2000
 NO_BODY_CHANGE = "[无正文变更]"
-
-FRONTMATTER_KEYS = {
-    "id",
-    "yuque_id",
-    "title",
-    "slug",
-    "author",
-    "team_id",
-    "team_name",
-    "book_name",
-    "book_namespace",
-    "created_at",
-    "updated_at",
-    "word_count",
-    "url",
-    "source_url",
-}
-
+DIFF_UNAVAILABLE_PREFIXES = ("[无 Git 仓库", "[获取 diff 失败")
 
 class PushNotifier:
     """智能推送管理器
@@ -144,8 +127,9 @@ class PushNotifier:
             return True
         if in_generated_metadata_table:
             return True
-        match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):", stripped)
-        return bool(in_frontmatter and match and match.group(1) in FRONTMATTER_KEYS)
+        if in_frontmatter:
+            return True
+        return False
 
     @staticmethod
     def _hunk_has_frontmatter_delimiter(hunk_lines: list[str]) -> bool:
@@ -154,18 +138,6 @@ class PushNotifier:
             line[:1] in ("+", "-", " ") and line[1:].strip() == "---"
             for line in hunk_lines
         )
-
-    @staticmethod
-    def _is_metadata_table_line(line: str) -> bool:
-        """Return whether a line belongs to NovaBot's generated metadata table."""
-        stripped = line.strip()
-        if not stripped.startswith("|") or not stripped.endswith("|"):
-            return False
-        if "作者" in stripped and "创建时间" in stripped and "更新时间" in stripped:
-            return True
-        if re.fullmatch(r"\|\s*:?-+:?\s*\|\s*:?-+:?\s*\|\s*:?-+:?\s*\|", stripped):
-            return True
-        return bool(re.search(r"\|\s*[^|]*\|\s*\d{4}-\d{2}-\d{2}", stripped))
 
     @staticmethod
     def _split_diff_hunks(diff: str) -> list[list[str]]:
@@ -196,6 +168,7 @@ class PushNotifier:
             frontmatter_possible = min(old_line, new_line) <= 20 and self._hunk_has_frontmatter_delimiter(hunk)
             in_frontmatter = frontmatter_possible
             frontmatter_delimiters = 0
+            in_generated_metadata_table_region = False
 
             for raw_line in hunk[1:]:
                 if not raw_line:
@@ -214,6 +187,30 @@ class PushNotifier:
                 if frontmatter_possible and line.strip() == "---" and frontmatter_delimiters < 2:
                     frontmatter_delimiters += 1
                     in_frontmatter = frontmatter_delimiters == 1
+                    if frontmatter_delimiters == 2:
+                        in_frontmatter = False
+
+                stripped_line = line.strip()
+                is_metadata_header = (
+                    stripped_line.startswith("|")
+                    and stripped_line.endswith("|")
+                    and "作者" in stripped_line
+                    and "创建时间" in stripped_line
+                    and "更新时间" in stripped_line
+                )
+                in_generated_metadata_table = False
+                if not in_frontmatter and is_metadata_header:
+                    in_generated_metadata_table_region = True
+                    in_generated_metadata_table = True
+                elif (
+                    not in_frontmatter
+                    and in_generated_metadata_table_region
+                    and stripped_line.startswith("|")
+                    and stripped_line.endswith("|")
+                ):
+                    in_generated_metadata_table = True
+                elif not (stripped_line.startswith("|") and stripped_line.endswith("|")):
+                    in_generated_metadata_table_region = False
 
                 if prefix != sign or self._is_diff_file_header(raw_line, sign):
                     continue
@@ -221,7 +218,7 @@ class PushNotifier:
                 if self._is_non_body_diff_line(
                     line,
                     in_frontmatter=in_frontmatter,
-                    in_generated_metadata_table=self._is_metadata_table_line(line),
+                    in_generated_metadata_table=in_generated_metadata_table,
                 ):
                     continue
                 lines.append(line)
@@ -235,10 +232,15 @@ class PushNotifier:
         if len(text) <= limit:
             return text
         suffix = "\n... (正文变更已截断)"
+        if limit <= len(suffix):
+            return suffix[-limit:]
         return text[: max(0, limit - len(suffix))].rstrip() + suffix
 
     def _prepare_update_diff_for_llm(self, diff: str) -> str:
         """为更新推送准备正文优先的 diff 输入。"""
+        if diff.startswith(DIFF_UNAVAILABLE_PREFIXES):
+            return diff
+
         added = self._extract_body_change_lines(diff, "+")
         removed = self._extract_body_change_lines(diff, "-")
 
@@ -332,6 +334,8 @@ class PushNotifier:
             return True, "正文无变化"
         if diff == NO_BODY_CHANGE:
             return True, "无正文变更"
+        if diff.startswith(DIFF_UNAVAILABLE_PREFIXES):
+            return False, ""
 
         # diff 太小
         # 只计算实际变更内容（去掉 diff 元数据）
