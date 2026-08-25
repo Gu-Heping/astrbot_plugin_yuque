@@ -203,6 +203,60 @@ rename to team/repo/b.md
     assert summary == {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
 
 
+def test_prepare_update_diff_filters_generated_metadata_table(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -1,11 +1,11 @@
+ ---
+ title: 文档
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ ---
+ 
+ | 作者 | 创建时间 | 更新时间 |
+ | --- | --- | --- |
+-| Old Name | 2026-08-01 | 2026-08-20 |
++| New Name | 2026-08-01 | 2026-08-25 |
+ 
+ 正文没有变化
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_filters_frontmatter_when_hunk_starts_after_line_one(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -3,6 +3,6 @@
+ slug: demo
+-updated_at: 2026-08-20
++updated_at: 2026-08-25
+ word_count: 12
+ ---
+ 
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert prepared == NO_BODY_CHANGE
+
+
+def test_prepare_update_diff_keeps_body_lines_starting_like_diff_headers(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -20,2 +20,2 @@
+---old_counter
++++new_counter
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert "--old_counter" in prepared
+    assert "++new_counter" in prepared
+
+
 def test_prepare_update_diff_keeps_yaml_like_body_content(tmp_path):
     notifier = _notifier(tmp_path / "docs", tmp_path / "data")
     diff = """diff --git a/team/repo/a.md b/team/repo/a.md
@@ -241,3 +295,25 @@ def test_prepare_update_diff_budget_keeps_added_and_removed_content(tmp_path):
     assert len(prepared) <= notifier.max_content_len
     assert "新增正文内容" in prepared
     assert "旧正文内容" in prepared
+
+
+def test_prepare_update_diff_tiny_budget_does_not_expand_unbounded_text(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_DummyContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_max_content_len": 240},
+    )
+    added = "+新增正文内容 " + "A" * 500
+    removed = "-旧正文内容 " + "B" * 500
+    diff = f"""diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -30,1 +30,1 @@
+{removed}
+{added}
+"""
+
+    prepared = notifier._prepare_update_diff_for_llm(diff)
+
+    assert len(prepared) <= notifier.max_content_len
+    assert len(prepared) < 400

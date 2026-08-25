@@ -120,52 +120,119 @@ class PushNotifier:
             f"{diff}"
         )
 
-    def _is_non_body_diff_line(self, line: str, *, in_frontmatter: bool = False) -> bool:
+    @staticmethod
+    def _is_diff_file_header(raw_line: str, sign: str) -> bool:
+        """Return whether a diff line is a file header, not body content."""
+        if sign == "+":
+            return raw_line.startswith("+++ b/") or raw_line == "+++ /dev/null"
+        if sign == "-":
+            return raw_line.startswith("--- a/") or raw_line == "--- /dev/null"
+        return False
+
+    def _is_non_body_diff_line(
+        self,
+        line: str,
+        *,
+        in_frontmatter: bool = False,
+        in_generated_metadata_table: bool = False,
+    ) -> bool:
         """判断 diff 中的变更行是否只是元数据或结构信息。"""
         stripped = line.strip()
         if not stripped or stripped == "---":
             return True
-        if stripped.startswith(("# Yuque", "<!--", "-->")):
+        if stripped.startswith(("<!--", "-->")):
+            return True
+        if in_generated_metadata_table:
             return True
         match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):", stripped)
         return bool(in_frontmatter and match and match.group(1) in FRONTMATTER_KEYS)
 
+    @staticmethod
+    def _hunk_has_frontmatter_delimiter(hunk_lines: list[str]) -> bool:
+        """Check whether a hunk shows part of the generated frontmatter fence."""
+        return any(
+            line[:1] in ("+", "-", " ") and line[1:].strip() == "---"
+            for line in hunk_lines
+        )
+
+    @staticmethod
+    def _is_metadata_table_line(line: str) -> bool:
+        """Return whether a line belongs to NovaBot's generated metadata table."""
+        stripped = line.strip()
+        if not stripped.startswith("|") or not stripped.endswith("|"):
+            return False
+        if "作者" in stripped and "创建时间" in stripped and "更新时间" in stripped:
+            return True
+        if re.fullmatch(r"\|\s*:?-+:?\s*\|\s*:?-+:?\s*\|\s*:?-+:?\s*\|", stripped):
+            return True
+        return bool(re.search(r"\|\s*[^|]*\|\s*\d{4}-\d{2}-\d{2}", stripped))
+
+    @staticmethod
+    def _split_diff_hunks(diff: str) -> list[list[str]]:
+        """Split a unified diff into hunks with their hunk headers."""
+        hunks: list[list[str]] = []
+        current: list[str] = []
+        for line in diff.splitlines():
+            if line.startswith("@@"):
+                if current:
+                    hunks.append(current)
+                current = [line]
+            elif current:
+                current.append(line)
+        if current:
+            hunks.append(current)
+        return hunks
+
     def _extract_body_change_lines(self, diff: str, sign: str) -> str:
         """从 Git diff 中提取正文变更行，跳过 diff 头和开头 frontmatter。"""
         lines: list[str] = []
-        frontmatter_possible = False
-        in_frontmatter = False
-        frontmatter_delimiters = 0
-        for raw_line in diff.splitlines():
-            if raw_line.startswith("@@"):
-                frontmatter_possible = bool(re.match(r"@@ -1(?:,\d+)? \+1(?:,\d+)? @@", raw_line))
-                in_frontmatter = False
-                frontmatter_delimiters = 0
+        for hunk in self._split_diff_hunks(diff):
+            header = hunk[0]
+            match = re.match(r"@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", header)
+            if not match:
                 continue
+            old_line = int(match.group(1))
+            new_line = int(match.group(2))
+            frontmatter_possible = min(old_line, new_line) <= 20 and self._hunk_has_frontmatter_delimiter(hunk)
+            in_frontmatter = frontmatter_possible
+            frontmatter_delimiters = 0
 
-            if not raw_line:
-                continue
+            for raw_line in hunk[1:]:
+                if not raw_line:
+                    continue
 
-            prefix = raw_line[0]
-            if prefix in ("+", "-", " "):
+                prefix = raw_line[0]
+                if prefix not in ("+", "-", " "):
+                    continue
+
                 line = raw_line[1:]
+                if prefix in ("-", " "):
+                    old_line += 1
+                if prefix in ("+", " "):
+                    new_line += 1
+
                 if frontmatter_possible and line.strip() == "---" and frontmatter_delimiters < 2:
                     frontmatter_delimiters += 1
                     in_frontmatter = frontmatter_delimiters == 1
 
-            if not raw_line.startswith(sign) or raw_line.startswith(sign * 3):
-                continue
+                if prefix != sign or self._is_diff_file_header(raw_line, sign):
+                    continue
 
-            line = raw_line[1:]
-            if self._is_non_body_diff_line(line, in_frontmatter=in_frontmatter):
-                continue
-            lines.append(line)
+                if self._is_non_body_diff_line(
+                    line,
+                    in_frontmatter=in_frontmatter,
+                    in_generated_metadata_table=self._is_metadata_table_line(line),
+                ):
+                    continue
+                lines.append(line)
         return "\n".join(lines).strip()
 
     @staticmethod
     def _clip_text(text: str, limit: int) -> str:
         """按字符预算裁剪文本。"""
-        if limit <= 0 or len(text) <= limit:
+        if limit <= 0:
+            return ""
+        if len(text) <= limit:
             return text
         suffix = "\n... (正文变更已截断)"
         return text[: max(0, limit - len(suffix))].rstrip() + suffix
@@ -185,8 +252,8 @@ class PushNotifier:
         fixed_text_len = len("\n".join(parts)) + len("\n\n新增或修改后的正文片段：\n")
         if removed:
             fixed_text_len += len("\n\n被替换或删除的旧正文片段：\n")
-        content_budget = max(200, self.max_content_len - fixed_text_len)
-        removed_budget = min(max(200, content_budget // 3), len(removed)) if removed else 0
+        content_budget = max(0, self.max_content_len - fixed_text_len)
+        removed_budget = min(max(80, content_budget // 3), len(removed), content_budget) if removed else 0
         added_budget = max(0, content_budget - removed_budget)
 
         if added:
