@@ -298,6 +298,37 @@ class WebhookHandler:
             return None
 
     @staticmethod
+    def _first_user_id(detail: dict, object_keys: tuple[str, ...], scalar_keys: tuple[str, ...]) -> str:
+        """Return the first stable Yuque user id from nested objects or scalar fields."""
+        for key in object_keys:
+            obj = detail.get(key)
+            if isinstance(obj, dict):
+                user_id = str(obj.get("id") or "").strip()
+                if user_id:
+                    return user_id
+        for key in scalar_keys:
+            user_id = str(detail.get(key) or "").strip()
+            if user_id:
+                return user_id
+        return ""
+
+    def _non_creator_update_push_skip_reason(self, detail: dict) -> str:
+        """Return a skip reason when the webhook updater is clearly not the creator."""
+        updater_id = self._first_user_id(
+            detail,
+            ("actor", "editor", "last_editor"),
+            ("actor_id", "editor_id", "last_editor_id"),
+        )
+        creator_id = self._first_user_id(
+            detail,
+            ("creator", "user"),
+            ("user_id", "creator_id"),
+        )
+        if updater_id and creator_id and updater_id != creator_id:
+            return f"更新者不是文档创建者 (updater_id={updater_id}, creator_id={creator_id})"
+        return ""
+
+    @staticmethod
     def _merge_payload_user_objects(detail: dict, payload_data: dict) -> dict:
         """保留 webhook payload 中可能比 doc detail 更实时的用户对象。"""
         for key in ("actor", "editor", "last_editor"):
@@ -663,6 +694,12 @@ class WebhookHandler:
 
         try:
             scoped_doc_id = scoped_document_id(detail.get("team_id") or DEFAULT_TEAM_ID, doc_id)
+
+            non_creator_reason = self._non_creator_update_push_skip_reason(detail)
+            if non_creator_reason:
+                logger.info(f"[Push] 跳过推送且保留 diff 基线: {non_creator_reason}")
+                return {"skipped": True, "reason": non_creator_reason}
+
             # 1. 获取 diff
             diff, is_first_push = self.push_notifier.get_diff(scoped_doc_id, commit_hash, diff_paths or rel_path)
             logger.info(f"[Push] diff 长度: {len(diff)} 字符, 首次推送: {is_first_push}")

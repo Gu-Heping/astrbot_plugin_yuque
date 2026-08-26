@@ -380,6 +380,31 @@ def test_webhook_merge_payload_user_objects_preserves_actor_from_event(tmp_path)
     assert merged["last_editor_id"] == 7
 
 
+def test_webhook_detects_non_creator_update_for_push_skip(tmp_path):
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+    )
+
+    reason = handler._non_creator_update_push_skip_reason(
+        {
+            "actor": {"id": 42, "name": "Updater"},
+            "creator": {"id": 7, "name": "Creator"},
+        }
+    )
+
+    assert "更新者不是文档创建者" in reason
+    assert handler._non_creator_update_push_skip_reason(
+        {
+            "actor": {"id": 7, "name": "Creator"},
+            "creator": {"id": 7, "name": "Creator"},
+        }
+    ) == ""
+
+
 def test_webhook_get_client_for_team_supports_keyword_only_callback(tmp_path):
     calls = []
 
@@ -569,6 +594,43 @@ def test_webhook_push_state_is_team_scoped(tmp_path):
 
     assert push_notifier.diff_ids == ["42", "other:42"]
     assert push_notifier.pushed_ids == ["42", "other:42"]
+
+
+def test_webhook_skips_non_creator_push_without_advancing_baseline(tmp_path):
+    import asyncio
+
+    push_notifier = _PushNotifier()
+    handler = WebhookHandler(
+        docs_dir=tmp_path / "yuque_docs",
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        push_notifier=push_notifier,
+    )
+    handler.docs_dir.mkdir()
+
+    result = asyncio.run(
+        handler._handle_push(
+            42,
+            "a" * 40,
+            "工程/协作文档.md",
+            {
+                "title": "协作文档",
+                "team_id": "default",
+                "book": {"name": "工程"},
+                "actor": {"id": 42, "name": "Updater"},
+                "creator": {"id": 7, "name": "Creator"},
+            },
+        )
+    )
+
+    assert result == {
+        "skipped": True,
+        "reason": "更新者不是文档创建者 (updater_id=42, creator_id=7)",
+    }
+    assert push_notifier.diff_ids == []
+    assert push_notifier.pushed_ids == []
 
 
 def test_webhook_updates_and_deletes_chunk_index(tmp_path):
