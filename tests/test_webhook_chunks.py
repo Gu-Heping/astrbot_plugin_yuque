@@ -118,6 +118,124 @@ def test_webhook_resolves_doc_output_with_team_prefix(tmp_path):
     assert repo_dir == handler.docs_dir / "other" / "工程"
 
 
+def test_webhook_resolves_duplicate_title_path_from_toc_order(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    handler = _handler(tmp_path, store)
+    toc_list = [
+        {
+            "id": 1,
+            "uuid": "doc-1",
+            "type": "DOC",
+            "title": "语雀插件",
+            "url": "first-doc",
+            "sibling_uuid": "doc-2",
+        },
+        {
+            "id": 2,
+            "uuid": "doc-2",
+            "type": "DOC",
+            "title": "语雀插件",
+            "url": "rkp9qkvr7t6vit9g",
+        },
+    ]
+
+    _, first_file, first_rel = handler._resolve_doc_output(
+        {
+            "id": 1,
+            "title": "语雀插件",
+            "slug": "first-doc",
+            "team_id": "default",
+        },
+        repo_name="认知课程-周五仙林&苏州",
+        namespace="ghxd00/sqr5i3",
+        toc_list=toc_list,
+    )
+    _, second_file, second_rel = handler._resolve_doc_output(
+        {
+            "id": 2,
+            "title": "语雀插件",
+            "slug": "rkp9qkvr7t6vit9g",
+            "team_id": "default",
+        },
+        repo_name="认知课程-周五仙林&苏州",
+        namespace="ghxd00/sqr5i3",
+        toc_list=toc_list,
+    )
+
+    assert first_rel == "认知课程-周五仙林&苏州/语雀插件.md"
+    assert first_file == handler.docs_dir / "认知课程-周五仙林&苏州" / "语雀插件.md"
+    assert second_rel == "认知课程-周五仙林&苏州/语雀插件_2.md"
+    assert second_file == handler.docs_dir / "认知课程-周五仙林&苏州" / "语雀插件_2.md"
+
+
+def test_webhook_keeps_duplicate_titles_under_doc_parents(tmp_path):
+    store = ChunkStore(tmp_path / "chunks.db")
+    handler = _handler(tmp_path, store)
+    toc_list = [
+        {
+            "id": 10,
+            "uuid": "parent-a",
+            "type": "DOC",
+            "title": "第一组",
+            "url": "parent-a",
+            "child_uuid": "child-a",
+            "sibling_uuid": "parent-b",
+        },
+        {
+            "id": 11,
+            "uuid": "parent-b",
+            "type": "DOC",
+            "title": "第二组",
+            "url": "parent-b",
+            "child_uuid": "child-b",
+        },
+        {
+            "id": 20,
+            "uuid": "child-a",
+            "parent_uuid": "parent-a",
+            "type": "DOC",
+            "title": "语雀插件",
+            "url": "plugin-a",
+        },
+        {
+            "id": 21,
+            "uuid": "child-b",
+            "parent_uuid": "parent-b",
+            "type": "DOC",
+            "title": "语雀插件",
+            "url": "plugin-b",
+        },
+    ]
+
+    _, first_file, first_rel = handler._resolve_doc_output(
+        {
+            "id": 20,
+            "title": "语雀插件",
+            "slug": "plugin-a",
+            "team_id": "default",
+        },
+        repo_name="认知课程",
+        namespace="ghxd00/sqr5i3",
+        toc_list=toc_list,
+    )
+    _, second_file, second_rel = handler._resolve_doc_output(
+        {
+            "id": 21,
+            "title": "语雀插件",
+            "slug": "plugin-b",
+            "team_id": "default",
+        },
+        repo_name="认知课程",
+        namespace="ghxd00/sqr5i3",
+        toc_list=toc_list,
+    )
+
+    assert first_rel == "认知课程/第一组/语雀插件.md"
+    assert first_file == handler.docs_dir / "认知课程" / "第一组" / "语雀插件.md"
+    assert second_rel == "认知课程/第二组/语雀插件.md"
+    assert second_file == handler.docs_dir / "认知课程" / "第二组" / "语雀插件.md"
+
+
 def test_webhook_resolves_repo_dir_from_team_prefixed_path(tmp_path):
     store = ChunkStore(tmp_path / "chunks.db")
     handler = _handler(tmp_path, store)

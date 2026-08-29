@@ -366,9 +366,73 @@ class WebhookHandler:
                 if item.get("id") == doc_id:
                     return parent_path
 
+                if item_type in ("DOC", "SHEET"):
+                    slug = item.get("url") or item.get("slug") or item.get("uuid", "")
+                    children = toc_list_children(item.get("uuid"), toc_by_uuid)
+                    if children:
+                        segment = YuqueClient.slug_safe(title) or YuqueClient.slug_safe(slug)
+                        next_path = f"{parent_path}/{segment}" if parent_path else segment
+                        result = walk(item.get("uuid"), next_path)
+                        if result is not None:
+                            return result
+
             return None
 
         return walk(None, "")
+
+    def _find_toc_item_basename(self, toc_list: list, doc_id: int, fallback_base: str) -> str:
+        """根据 TOC 顺序解析文档文件名，保持同级同名文档与全量同步一致。"""
+        if not toc_list or not doc_id:
+            return fallback_base
+
+        toc_by_uuid = {item["uuid"]: item for item in toc_list if item.get("uuid")}
+        used_basenames: dict[str, set[str]] = {}
+
+        def resolve(parent_path: str, base: str) -> str:
+            used = used_basenames.setdefault(parent_path, set())
+            if base not in used:
+                used.add(base)
+                return base
+
+            i = 2
+            while f"{base}_{i}" in used:
+                i += 1
+            unique_base = f"{base}_{i}"
+            used.add(unique_base)
+            return unique_base
+
+        def walk(parent_uuid: Optional[str], parent_path: str) -> Optional[str]:
+            for item in toc_list_children(parent_uuid, toc_by_uuid):
+                item_type = item.get("type", "DOC")
+                title = item.get("title", "无标题")
+                slug = item.get("url") or item.get("slug") or item.get("uuid", "")
+                uuid = item.get("uuid")
+
+                if item_type in ("DOC", "SHEET"):
+                    item_base = YuqueClient.doc_basename(title, slug) or "untitled"
+                    unique_base = resolve(parent_path, item_base)
+                    if item.get("id") == doc_id:
+                        return unique_base
+
+                    children = toc_list_children(uuid, toc_by_uuid)
+                    if children:
+                        seg = YuqueClient.slug_safe(title) or YuqueClient.slug_safe(slug)
+                        child_parent = f"{parent_path}/{seg}" if parent_path else seg
+                        result = walk(uuid, child_parent)
+                        if result is not None:
+                            return result
+                    continue
+
+                if item_type == "TITLE":
+                    seg = YuqueClient.slug_safe(title)
+                    next_path = f"{parent_path}/{seg}" if parent_path else seg
+                    result = walk(uuid, next_path)
+                    if result is not None:
+                        return result
+
+            return None
+
+        return walk(None, "") or fallback_base
 
     def _resolve_doc_output(self, detail: dict, repo_name: str, namespace: Optional[str], toc_list: Optional[list]) -> tuple[Path, Path, str]:
         """统一解析文档输出目录与相对路径
@@ -395,6 +459,7 @@ class WebhookHandler:
         base = YuqueClient.doc_basename(title, slug) or "untitled"
 
         relative_parent = self._find_toc_item_path(toc_list or [], doc_id) or ""
+        base = self._find_toc_item_basename(toc_list or [], doc_id, base)
         target_dir = repo_dir / relative_parent if relative_parent else repo_dir
         target_dir.mkdir(parents=True, exist_ok=True)
 
