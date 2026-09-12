@@ -911,7 +911,7 @@ class NovaBotPlugin(Star):
         known_commands = [
             "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
             "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions",
+            "subscriptions", "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions",
             "trajectory", "collab"
         ]
         first_word = msg.split()[0].lower() if msg.split() else ""
