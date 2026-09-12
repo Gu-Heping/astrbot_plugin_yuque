@@ -1524,6 +1524,27 @@ class NovaBotPlugin(Star):
 
         yield event.plain_result(f"{'✅' if success else '❌'} {msg}")
 
+    @filter.command("subscriptions")
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def subscriptions_cmd(self, event: AstrMessageEvent, action: str = ""):
+        """管理员订阅维护
+
+        用法:
+        - /subscriptions clear - 清空所有订阅记录
+        """
+        if not self._is_event_scope_allowed(event):
+            return
+
+        if action.lower() not in ("clear", "clear-all"):
+            yield event.plain_result(
+                "用法: /subscriptions clear\n"
+                "此命令会清空所有会话的订阅记录，仅管理员可用。"
+            )
+            return
+
+        removed = await self.subscription_manager.clear_all_subscriptions()
+        yield event.plain_result(f"✅ 已清空所有订阅记录，共删除 {removed} 项")
+
     @filter.command("rag")
     @filter.permission_type(filter.PermissionType.ADMIN)
     async def rag_cmd(self, event: AstrMessageEvent, action: str = "", query: str = ""):

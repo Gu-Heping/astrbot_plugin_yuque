@@ -61,3 +61,20 @@ def test_get_subscribers_deduplicates_legacy_group_duplicates(tmp_path):
     subscribers = manager.get_subscribers({"book_name": "工程", "author": "Alice"})
 
     assert sorted(subscribers) == [("group-1", "user-a"), ("group-2", "user-c")]
+
+
+@pytest.mark.asyncio
+async def test_clear_all_subscriptions_removes_every_record_and_resets_next_id(tmp_path):
+    manager = SubscriptionManager(_Storage(tmp_path))
+    await manager.subscribe("user-a", "group-1", "all")
+    await manager.subscribe("user-b", "group-2", "repo", "工程")
+
+    removed = await manager.clear_all_subscriptions()
+
+    assert removed == 2
+    assert manager.get_all_subscriptions() == []
+
+    success, msg = await manager.subscribe("user-c", "group-3", "all")
+
+    assert success is True
+    assert "ID: 1" in msg

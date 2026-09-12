@@ -216,6 +216,18 @@ class SubscriptionManager:
         data = self._load_subscriptions_sync()
         return data["subscriptions"]
 
+    async def clear_all_subscriptions(self) -> int:
+        """清空所有订阅记录，返回删除数量。"""
+        async with self._lock:
+            data = self._load_subscriptions_sync()
+            removed = len(data.get("subscriptions", []))
+            data["subscriptions"] = []
+            data["next_id"] = 1
+            self._save_subscriptions_sync(data)
+
+        logger.warning(f"[Subscribe] 管理员清空所有订阅: {removed} 项")
+        return removed
+
 
 def format_subscription_list(subscriptions: list[dict]) -> str:
     """格式化订阅列表
