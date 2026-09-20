@@ -44,6 +44,12 @@
     "default": true,
     "hint": "开启后，私聊消息直接触发 NovaBot，无需唤醒词"
   },
+  "max_pending_messages_per_session": {
+    "description": "单会话最大排队消息数",
+    "type": "int",
+    "default": 8,
+    "hint": "同一私聊或群聊的自然语言请求按顺序处理；范围 0-100，超过上限时提示稍后重试"
+  },
   "enable_group_at": {
     "description": "群聊 @ 触发",
     "type": "bool",

@@ -5,7 +5,9 @@ NovaBot - NOVA 社团智能助手
 
 import asyncio
 import time
+from sys import maxsize
 from typing import Optional
+from uuid import uuid4
 
 from aiohttp import web
 from astrbot.api import AstrBotConfig, logger
@@ -50,6 +52,15 @@ from .novabot.chat_scope import (
     is_group_chat_allowed,
     normalize_group_ids,
     suppress_default_llm,
+)
+from .novabot.message_guard import ConversationQueue, MessageDeduplicator
+from .novabot.message_routing import (
+    has_matched_registered_command,
+    is_claimed,
+    is_self_message,
+    is_unknown_slash_message,
+    mark_claimed,
+    raw_message_text,
 )
 from .novabot.reply_formatting import markdown_to_plaintext
 from .novabot.table_renderer import (
@@ -132,7 +143,7 @@ from .novabot import group_reply_gate
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.29.3")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.30.1")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -158,6 +169,17 @@ class NovaBotPlugin(Star):
         self.enable_group_whitelist = config.get("enable_group_whitelist", False)
         self.group_whitelist = normalize_group_ids(config.get("group_whitelist", ""))
         self.group_reply_mode = config.get("group_reply_mode", "trigger")
+        try:
+            self.max_pending_messages_per_session = int(
+                config.get("max_pending_messages_per_session", 8)
+            )
+        except (TypeError, ValueError):
+            self.max_pending_messages_per_session = 8
+        if not 0 <= self.max_pending_messages_per_session <= 100:
+            logger.warning(
+                "[Config] max_pending_messages_per_session 超出范围，回退为 8"
+            )
+            self.max_pending_messages_per_session = 8
         self.render_tables_as_images = config.get("render_tables_as_images", True)
         self.table_font_path = str(config.get("table_font_path", "") or "")
         self.auto_download_table_font = config.get("auto_download_table_font", True)
@@ -198,6 +220,11 @@ class NovaBotPlugin(Star):
         self.search_logger = SearchLogger(self.storage.data_dir)
         self.ask_box = AskBoxManager(self.storage.data_dir)
         self.agent = NovaBotAgent(self)
+        self._instance_id = uuid4().hex[:8]
+        self._message_deduplicator = MessageDeduplicator(max_entries=4096)
+        self._conversation_queue = ConversationQueue(
+            max_pending=self.max_pending_messages_per_session
+        )
         self.team_registry = TeamRegistry(config)
         self.memory_manager = ConversationMemory(self.storage.data_dir)  # 长期记忆
         self.trajectory_manager = MemberTrajectory(self.storage.data_dir)  # 成员轨迹
@@ -280,7 +307,9 @@ class NovaBotPlugin(Star):
             self._get_doc_index(), self.rag, self.storage.docs_dir
         )
 
-        logger.info("NovaBot 插件初始化完成 (v0.29.3)")
+        logger.info(
+            f"NovaBot 插件初始化完成 (v0.30.1, instance={self._instance_id})"
+        )
 
         # 注册 FunctionTool
         self._register_tools()
@@ -854,7 +883,10 @@ class NovaBotPlugin(Star):
 
     # ========== 自然语言交互 ==========
 
-    @filter.event_message_type(filter.EventMessageType.ALL)
+    @filter.event_message_type(
+        filter.EventMessageType.ALL,
+        priority=maxsize - 2,
+    )
     async def on_message(self, event: AstrMessageEvent):
         """处理消息（根据消息路由规则）
 
@@ -865,13 +897,62 @@ class NovaBotPlugin(Star):
         - 命令消息：跳过，让命令处理器处理
         """
         msg = event.message_str.strip()
+        original = raw_message_text(event)
+        platform = str(event.get_platform_id() or event.get_platform_name())
+        umo = str(event.unified_msg_origin)
+        sender_id = str(event.get_sender_id() or "")
+        masked_sender = f"***{sender_id[-4:]}" if sender_id else "unknown"
+
+        if is_self_message(event):
+            suppress_default_llm(event)
+            event.stop_event()
+            logger.warning(
+                f"[Routing] instance={self._instance_id} route=self_message "
+                f"platform={platform} umo={umo} sender={masked_sender}"
+            )
+            return
+
+        # Multiple live plugin instances can see the same event after a hot reload.
+        if is_claimed(event):
+            logger.warning(
+                f"[Routing] instance={self._instance_id} route=already_claimed "
+                f"platform={platform} umo={umo} sender={masked_sender}"
+            )
+            return
 
         if not self._is_event_scope_allowed(event):
             suppress_default_llm(event)
             return
 
-        # 跳过命令消息
-        if self._is_command(msg):
+        # AstrBot computes command matches before invoking ALL-message handlers.
+        # Use that metadata instead of maintaining a second command name list.
+        if has_matched_registered_command(event):
+            dedupe = self._message_deduplicator.check_and_mark(event, original)
+            if dedupe.duplicate:
+                suppress_default_llm(event)
+                event.stop_event()
+                logger.warning(
+                    f"[Routing] instance={self._instance_id} route=duplicate_command "
+                    f"platform={platform} umo={umo} sender={masked_sender} "
+                    f"message={dedupe.identity.display_id}"
+                )
+                return
+            mark_claimed(event)
+            logger.info(
+                f"[Routing] instance={self._instance_id} route=command "
+                f"platform={platform} umo={umo} sender={masked_sender} "
+                f"message={dedupe.identity.display_id}"
+            )
+            return
+
+        # Do not let an unmatched slash command become an ordinary LLM prompt.
+        # Leave propagation open so another plugin can still recognize it.
+        if is_unknown_slash_message(event, original):
+            suppress_default_llm(event)
+            logger.info(
+                f"[Routing] instance={self._instance_id} route=unknown_command "
+                f"platform={platform} umo={umo} sender={masked_sender}"
+            )
             return
 
         # 判断是否应该处理这条消息
@@ -889,36 +970,51 @@ class NovaBotPlugin(Star):
                 suppress_default_llm(event)
                 return
 
-        # 处理消息
-        logger.info(f"[on_message] 处理消息 ({trigger}): {query[:30]}...")
-        try:
-            response = await self.agent.handle_message(event, query)
-            yield await self._rich_result(event, response)
-        except Exception as e:
-            logger.error(f"自然语言处理失败: {e}", exc_info=True)
-            yield event.plain_result("处理消息时出错，请稍后重试。")
+        dedupe = self._message_deduplicator.check_and_mark(event, original)
+        if dedupe.duplicate:
+            suppress_default_llm(event)
+            event.stop_event()
+            logger.warning(
+                f"[Routing] instance={self._instance_id} route=duplicate_chat "
+                f"platform={platform} umo={umo} sender={masked_sender} "
+                f"message={dedupe.identity.display_id} "
+                f"identity={dedupe.identity.source}"
+            )
+            return
+
+        mark_claimed(event)
+        suppress_default_llm(event)
+        admission = self._conversation_queue.admit(umo)
+        if not admission.accepted:
+            logger.warning(
+                f"[Routing] instance={self._instance_id} route=queue_overflow "
+                f"platform={platform} umo={umo} sender={masked_sender} "
+                f"message={dedupe.identity.display_id} depth={admission.depth}"
+            )
+            if admission.notify_overflow:
+                yield event.plain_result("当前消息较多，请稍后再试。")
+            event.stop_event()
+            return
+
+        logger.info(
+            f"[Routing] instance={self._instance_id} route={trigger} "
+            f"platform={platform} umo={umo} sender={masked_sender} "
+            f"message={dedupe.identity.display_id} depth={admission.depth}"
+        )
+        async with admission:
+            logger.info(
+                f"[on_message] 开始处理: instance={self._instance_id} "
+                f"umo={umo} message={dedupe.identity.display_id}"
+            )
+            try:
+                response = await self.agent.handle_message(event, query)
+                yield await self._rich_result(event, response)
+            except Exception as e:
+                logger.error(f"自然语言处理失败: {e}", exc_info=True)
+                yield event.plain_result("处理消息时出错，请稍后重试。")
 
         # 阻止事件继续传播
         event.stop_event()
-
-    def _is_command(self, msg: str) -> bool:
-        """判断是否是命令消息"""
-        # 检查 / 前缀
-        if msg.startswith("/"):
-            return True
-
-        # 飞书等平台可能去掉 / 前缀，检查已知命令名
-        known_commands = [
-            "novabot", "sync", "bind", "unbind", "profile", "partner", "path",
-            "subscribe", "unsubscribe", "rag", "webhook", "weekly", "gap",
-            "subscriptions", "tokens", "ask", "askreset", "kb", "nova", "card", "persona", "memory", "progress", "questions",
-            "trajectory", "collab"
-        ]
-        first_word = msg.split()[0].lower() if msg.split() else ""
-        if first_word in known_commands:
-            return True
-
-        return False
 
     def _is_event_scope_allowed(self, event: AstrMessageEvent) -> bool:
         allowed = is_group_chat_allowed(
@@ -2226,7 +2322,10 @@ class NovaBotPlugin(Star):
             logger.error(f"[KB] 操作失败: {e}", exc_info=True)
             yield event.plain_result(f"❌ 操作失败: {e}")
 
-    @filter.command("novabot")
+    @filter.command(
+        "novabot",
+        alias={"Novabot", "NovaBot", "NOVABOT"},
+    )
     async def help_cmd(self, event: AstrMessageEvent):
         """帮助信息"""
         if not self._is_event_scope_allowed(event):

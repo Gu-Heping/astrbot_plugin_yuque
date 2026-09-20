@@ -139,6 +139,7 @@ Docker/服务器环境如果每次重启后仓库缺少 `user.name/user.email`�
 |--------|------|
 | `wake_words` | 唤醒词（默认：novabot,nova,诺瓦） |
 | `enable_private_chat` | 私聊直接响应（默认 true） |
+| `max_pending_messages_per_session` | 单会话自然语言请求最大排队数（默认 8，范围 0-100） |
 | `enable_group_at` | 群聊 @ 触发（默认 true） |
 | `enable_group_whitelist` | 群聊白名单总开关，默认 false；开启后仅目标群聊可使用插件 |
 | `group_whitelist` | 允许使用 NovaBot 的群 ID，逗号分隔；开启白名单但留空时拒绝所有群聊 |
