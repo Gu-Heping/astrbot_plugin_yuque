@@ -8,6 +8,57 @@ from typing import Any
 
 CLAIM_MARKER = "_novabot_message_claimed"
 COMMAND_FILTER_NAMES = frozenset({"CommandFilter", "CommandGroupFilter"})
+NON_CHAT_POST_TYPES = frozenset({"request", "notice", "meta_event"})
+
+
+def _raw_field(raw: Any, name: str) -> Any:
+    getter = getattr(raw, "get", None)
+    if callable(getter):
+        try:
+            return getter(name)
+        except (TypeError, AttributeError):
+            pass
+    return getattr(raw, name, None)
+
+
+def _normalized_type_name(value: Any) -> str:
+    return "".join(character for character in str(value or "").lower() if character.isalnum())
+
+
+def non_chat_event_reason(event: Any) -> str:
+    """Return why an event is not user chat content, or an empty string."""
+    message_obj = getattr(event, "message_obj", None)
+    raw = getattr(message_obj, "raw_message", None)
+    post_type = str(_raw_field(raw, "post_type") or "").strip().lower()
+    if post_type in NON_CHAT_POST_TYPES:
+        return f"post_type:{post_type}"
+
+    type_getter = getattr(event, "get_message_type", None)
+    if callable(type_getter):
+        try:
+            message_type = type_getter()
+        except (TypeError, AttributeError, ValueError):
+            message_type = None
+        type_names = {
+            _normalized_type_name(message_type),
+            _normalized_type_name(getattr(message_type, "name", None)),
+            _normalized_type_name(getattr(message_type, "value", None)),
+        }
+        if "othermessage" in type_names:
+            return "message_type:other"
+
+    text = str(getattr(event, "message_str", "") or "").strip()
+    components = getattr(message_obj, "message", None)
+    has_components = False
+    if isinstance(components, Iterable) and not isinstance(components, (str, bytes)):
+        try:
+            has_components = len(components) > 0
+        except TypeError:
+            # Do not consume a one-shot component iterator merely to classify it.
+            has_components = True
+    if not text and not has_components:
+        return "empty_event"
+    return ""
 
 
 def raw_message_text(event: Any) -> str:

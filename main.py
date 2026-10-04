@@ -60,6 +60,7 @@ from .novabot.message_routing import (
     is_self_message,
     is_unknown_slash_message,
     mark_claimed,
+    non_chat_event_reason,
     raw_message_text,
 )
 from .novabot.reply_formatting import markdown_to_plaintext
@@ -143,7 +144,7 @@ from .novabot import group_reply_gate
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.30.1")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.30.2")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -308,7 +309,7 @@ class NovaBotPlugin(Star):
         )
 
         logger.info(
-            f"NovaBot 插件初始化完成 (v0.30.1, instance={self._instance_id})"
+            f"NovaBot 插件初始化完成 (v0.30.2, instance={self._instance_id})"
         )
 
         # 注册 FunctionTool
@@ -909,6 +910,16 @@ class NovaBotPlugin(Star):
             logger.warning(
                 f"[Routing] instance={self._instance_id} route=self_message "
                 f"platform={platform} umo={umo} sender={masked_sender}"
+            )
+            return
+
+        non_chat_reason = non_chat_event_reason(event)
+        if non_chat_reason:
+            suppress_default_llm(event)
+            logger.info(
+                f"[Routing] instance={self._instance_id} route=non_chat "
+                f"platform={platform} umo={umo} sender={masked_sender} "
+                f"reason={non_chat_reason}"
             )
             return
 
