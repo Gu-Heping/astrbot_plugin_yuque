@@ -144,7 +144,7 @@ from .novabot import group_reply_gate
 # 主插件类
 # ============================================================================
 
-@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.30.2")
+@register("astrbot_plugin_yuque", "peace", "NOVA 社团智能助手", "v0.30.3")
 class NovaBotPlugin(Star):
     """NovaBot 主插件"""
 
@@ -309,7 +309,7 @@ class NovaBotPlugin(Star):
         )
 
         logger.info(
-            f"NovaBot 插件初始化完成 (v0.30.2, instance={self._instance_id})"
+            f"NovaBot 插件初始化完成 (v0.30.3, instance={self._instance_id})"
         )
 
         # 注册 FunctionTool

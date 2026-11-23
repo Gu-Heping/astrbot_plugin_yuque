@@ -6,6 +6,7 @@ NovaBot 智能推送模块
 import json
 import re
 from collections import deque
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -25,8 +26,10 @@ if TYPE_CHECKING:
 # 默认配置值
 DEFAULT_MIN_DIFF_CHARS = 100
 DEFAULT_MAX_CONTENT_LEN = 2000
+FIRST_PUSH_NORMAL_MIN_CHARS = 50
 NO_BODY_CHANGE = "[无正文变更]"
 DIFF_UNAVAILABLE_PREFIXES = ("[无 Git 仓库", "[获取 diff 失败")
+UPDATE_CONTEXT_UNCLEAR = "[更新上下文不足]"
 
 class PushNotifier:
     """智能推送管理器
@@ -208,7 +211,7 @@ class PushNotifier:
             hunks.append(current)
         return hunks
 
-    def _extract_body_change_lines(self, diff: str, sign: str) -> str:
+    def _extract_body_change_lines(self, diff: str, sign: str, *, include_context: bool = True) -> str:
         """从 Git diff 中提取正文变更行，跳过 diff 头和开头 frontmatter。"""
         lines: list[str] = []
         for hunk in self._split_diff_hunks(diff):
@@ -307,7 +310,8 @@ class PushNotifier:
 
                 if is_non_body:
                     continue
-                append_context()
+                if include_context:
+                    append_context()
                 lines.append(line)
         return "\n".join(lines).strip()
 
@@ -350,6 +354,199 @@ class PushNotifier:
         if removed:
             parts.extend(["", "被替换或删除的旧正文片段：", self._clip_text(removed, removed_budget)])
         return "\n".join(parts)
+
+    @staticmethod
+    def _plain_text_len(text: str) -> int:
+        return len(re.sub(r"\s+", "", text or ""))
+
+    @staticmethod
+    def effective_char_count(text: str) -> int:
+        """Count non-whitespace characters in already-cleaned document body."""
+        return len(re.sub(r"\s+", "", text or ""))
+
+    @staticmethod
+    def _normalized_evidence(text: str) -> str:
+        return re.sub(r"\s+", "", str(text or "")).strip()
+
+    @staticmethod
+    def _string_list(value: object) -> list[str]:
+        """Normalize only JSON arrays; scalar strings are invalid model output."""
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    def _validate_first_push_result(
+        self,
+        result: dict,
+        body: str,
+        *,
+        is_short_body: bool,
+    ) -> tuple[bool, dict]:
+        """Require directly verifiable body evidence for a first-push decision."""
+        highlights = self._string_list(result.get("highlights", []))
+        evidence = self._string_list(result.get("evidence", []))
+        change_type = str(result.get("change_type", "unclear") or "unclear")
+        confidence = str(result.get("confidence", "low") or "low").lower()
+        reason = str(result.get("reason", "") or "")
+        should_push = result.get("should_push") is True
+
+        summary = {
+            "highlights": highlights,
+            "evidence": evidence,
+            "reason": reason,
+            "change_type": change_type,
+            "confidence": confidence,
+        }
+        if not should_push:
+            return False, summary
+
+        rejection_reason = ""
+        if not highlights or not evidence:
+            rejection_reason = "首次推送缺少可验证的正文摘要或证据"
+        elif confidence == "low":
+            rejection_reason = "首次推送判断置信度低"
+        elif is_short_body and change_type != "short_announcement":
+            rejection_reason = "短正文未被识别为包含具体事实的简短公告"
+        else:
+            normalized_body = self._normalized_evidence(body)
+            invalid_evidence = [
+                item
+                for item in evidence
+                if self._normalized_evidence(item) not in normalized_body
+            ]
+            if invalid_evidence:
+                rejection_reason = "首次推送证据无法在正文中验证"
+
+        if rejection_reason:
+            summary.update(
+                {
+                    "highlights": [],
+                    "reason": rejection_reason,
+                    "change_type": "unclear",
+                    "confidence": "low",
+                }
+            )
+            return False, summary
+        return True, summary
+
+    @staticmethod
+    def _has_draft_marker(text: str) -> bool:
+        return bool(re.search(r"(TODO|todo|待写|待补充|未完成|占位|草稿|WIP)", text or ""))
+
+    @staticmethod
+    def _has_completion_marker(text: str) -> bool:
+        return bool(re.search(r"(结论|总结|步骤|流程|完成|确定|产出|成果|实现|示例)", text or ""))
+
+    @staticmethod
+    def _has_structural_addition(text: str) -> bool:
+        return bool(
+            re.search(r"(^|\n)\s{0,3}#{1,6}\s+\S", text or "")
+            or re.search(r"(^|\n)\s*```", text or "")
+            or re.search(r"(^|\n)\s*[-*+]\s+\S", text or "")
+            or re.search(r"(^|\n)\s*\d+[.、]\s+\S", text or "")
+            or re.search(r"(^|\n)\s*\|.+\|", text or "")
+        )
+
+    @staticmethod
+    def _document_outline(body: str, limit: int = 20) -> str:
+        headings = []
+        for line in (body or "").splitlines():
+            match = re.match(r"^\s{0,3}(#{1,6})\s+(.+?)\s*$", line)
+            if not match:
+                continue
+            level = len(match.group(1))
+            title = match.group(2).strip()
+            headings.append(f"{'  ' * (level - 1)}- {title}")
+            if len(headings) >= limit:
+                break
+        return "\n".join(headings) if headings else "（未发现标题结构）"
+
+    def _changed_sections(self, diff: str, limit: int = 8) -> str:
+        sections: list[str] = []
+        for hunk in self._split_diff_hunks(diff):
+            recent_heading = ""
+            for raw_line in hunk[1:]:
+                if not raw_line or raw_line[0] not in (" ", "+", "-"):
+                    continue
+                line = raw_line[1:].strip()
+                if line.startswith("#"):
+                    recent_heading = line.lstrip("#").strip()
+                if raw_line[0] in ("+", "-") and recent_heading and recent_heading not in sections:
+                    sections.append(recent_heading)
+                    if len(sections) >= limit:
+                        return "\n".join(f"- {s}" for s in sections)
+        return "\n".join(f"- {s}" for s in sections) if sections else "（无法从 diff 判断章节）"
+
+    def classify_update_change(self, diff: str, current_body: str = "") -> tuple[str, str]:
+        """保守分类更新性质，避免把旧段落润色误判为新进展。"""
+        prepared = self._prepare_update_diff_for_llm(diff)
+        if prepared == NO_BODY_CHANGE:
+            return "minor_revision", "只有路径、元数据或无正文变化"
+        if prepared.startswith(DIFF_UNAVAILABLE_PREFIXES):
+            return "unclear", "无法取得可靠 diff"
+
+        added = self._extract_body_change_lines(diff, "+", include_context=False)
+        removed = self._extract_body_change_lines(diff, "-", include_context=False)
+        added_len = self._plain_text_len(added)
+        removed_len = self._plain_text_len(removed)
+
+        if not added and not removed:
+            return "unclear", "没有可判断的正文变更"
+        if not current_body.strip():
+            return "unclear", "缺少当前全文语境"
+
+        if self._has_draft_marker(current_body) and not self._has_completion_marker(added):
+            return "draft_update", "当前全文仍含草稿/待补充标记，本次变更未显示阶段性完成"
+
+        if added and removed and not self._has_structural_addition(added):
+            similarity = SequenceMatcher(None, removed, added).ratio()
+            if similarity >= 0.58 and added_len <= max(removed_len * 2, removed_len + 120):
+                return "minor_revision", "主要是对既有段落的措辞、补句或局部调整"
+
+        if added and self._has_structural_addition(added):
+            if removed:
+                return "mixed_update", "同时包含旧内容调整和新增结构化内容"
+            return "substantive_addition", "新增了结构化正文内容"
+
+        if added_len < max(self.min_diff_chars, 120):
+            return "minor_revision", "新增正文较少，倾向局部修订"
+        if added and not removed:
+            return "substantive_addition", "新增了较多正文内容"
+        return "unclear", "变更主要是替换或删除，缺少可确认的新增进展"
+
+    def build_update_context(self, diff: str, current_body: str = "") -> str:
+        """构造给 LLM 的更新上下文：全文大纲 + 变更证据。"""
+        prepared = self._prepare_update_diff_for_llm(diff)
+        if prepared == NO_BODY_CHANGE:
+            return NO_BODY_CHANGE
+        if prepared.startswith(DIFF_UNAVAILABLE_PREFIXES) and not current_body.strip():
+            return UPDATE_CONTEXT_UNCLEAR
+
+        added = self._extract_body_change_lines(diff, "+")
+        removed = self._extract_body_change_lines(diff, "-")
+        change_type, reason = self.classify_update_change(diff, current_body)
+
+        header = [
+            f"预分类：{change_type}",
+            f"预分类理由：{reason}",
+            "",
+            "当前文档大纲：",
+            self._document_outline(current_body),
+            "",
+            "本次变更所在章节：",
+            self._changed_sections(diff),
+            "",
+            "新增或修改后的正文证据：",
+            self._clip_text(added or "（无可见新增正文）", self.max_content_len // 2),
+        ]
+        if removed:
+            header.extend([
+                "",
+                "被替换或删除的旧正文证据（不能当作新增内容总结）：",
+                self._clip_text(removed, max(120, self.max_content_len // 4)),
+            ])
+        header.extend(["", "过滤后的 diff 证据：", prepared])
+        return self._clip_text("\n".join(header), max(self.max_content_len, 1200))
 
     def get_diff(self, doc_id: object, current_commit: str, doc_path) -> tuple[str, bool]:
         """获取与上次推送的 diff
@@ -440,7 +637,8 @@ class PushNotifier:
         self,
         doc_info: dict,
         content: str,
-        is_first_push: bool = False
+        is_first_push: bool = False,
+        current_body: str = "",
     ) -> tuple[bool, Optional[dict]]:
         """通过 LLM 判断是否推送
 
@@ -455,16 +653,48 @@ class PushNotifier:
             (should_push, summary) 是否推送，摘要信息
         """
         try:
-            if not is_first_push:
-                content = self._prepare_update_diff_for_llm(content)
-                if content == NO_BODY_CHANGE:
-                    return False, {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
+            first_push_chars = 0
+            is_short_first_push = False
+            if is_first_push:
+                first_push_chars = self.effective_char_count(content)
+                if first_push_chars == 0:
+                    return False, {
+                        "highlights": [],
+                        "evidence": [],
+                        "reason": "有效正文为空，仅包含标题或生成的元数据",
+                        "change_type": "empty_body",
+                        "confidence": "high",
+                    }
+                is_short_first_push = first_push_chars < FIRST_PUSH_NORMAL_MIN_CHARS
+            else:
+                change_type, change_reason = self.classify_update_change(content, current_body)
+                if change_type in ("minor_revision", "draft_update", "unclear"):
+                    return False, {
+                        "highlights": [],
+                        "reason": change_reason,
+                        "change_type": change_type,
+                        "confidence": "medium" if change_type != "unclear" else "low",
+                    }
+                content = self.build_update_context(content, current_body)
+                if content in (NO_BODY_CHANGE, UPDATE_CONTEXT_UNCLEAR):
+                    return False, {
+                        "highlights": [],
+                        "reason": "只有结构或元数据变化，正文信息不足",
+                        "change_type": "unclear",
+                        "confidence": "low",
+                    }
 
             # 获取 Provider
             prov = self.context.get_using_provider()
             if not prov:
                 logger.warning("[Push] 无可用的 LLM Provider")
-                return True, {"highlights": ["文档有更新"], "reason": "无 LLM，默认推送"}
+                return False, {
+                    "highlights": [],
+                    "evidence": [],
+                    "reason": "无可用 LLM，已按保守策略跳过推送",
+                    "change_type": "unclear",
+                    "confidence": "low",
+                }
 
             # 截断内容避免过长
             if len(content) > self.max_content_len:
@@ -472,11 +702,19 @@ class PushNotifier:
 
             # 根据是否首次推送使用不同的提示词
             if is_first_push:
+                short_body_rule = (
+                    "当前正文少于 50 个非空白字符，默认不推送；只有正文直接给出具体通知、"
+                    "时间、行动项、结论或可独立理解的说明时，才可判定为 short_announcement"
+                    if is_short_first_push
+                    else "当前正文已达到常规长度，但仍须依据正文完成度和具体证据判断"
+                )
                 prompt = FIRST_PUSH_PROMPT.format(
                     title=doc_info.get("title", "未知"),
                     author=doc_info.get("author", "未知"),
                     book_name=doc_info.get("book_name", "未知"),
-                    content=content
+                    body_chars=first_push_chars,
+                    short_body_rule=short_body_rule,
+                    content=content,
                 )
                 system_prompt = "你是一个知识推送决策专家，服务于 NOVA 社团。"
             else:
@@ -496,20 +734,41 @@ class PushNotifier:
                 feature=FEATURE_PUSH,
             )
 
-            should_push = result.get("should_push", True)
-            highlights = result.get("highlights", [])
+            if is_first_push:
+                should_push, summary = self._validate_first_push_result(
+                    result,
+                    content,
+                    is_short_body=is_short_first_push,
+                )
+                logger.info(
+                    f"[Push] LLM 判断: should_push={should_push}, "
+                    f"reason={summary.get('reason', '')}"
+                )
+                return should_push, summary
+
+            should_push = result.get("should_push") is True
+            highlights = result.get("observable_changes") or result.get("highlights", [])
             reason = result.get("reason", "")
+            change_type = result.get("change_type", "substantive_addition" if should_push else "unclear")
+            confidence = result.get("confidence", "medium")
 
             logger.info(f"[Push] LLM 判断: should_push={should_push}, reason={reason}")
 
             return should_push, {
                 "highlights": highlights,
-                "reason": reason
+                "reason": reason,
+                "change_type": change_type,
+                "confidence": confidence,
             }
 
         except Exception as e:
             logger.error(f"[Push] LLM 判断失败: {e}")
-            return True, {"highlights": ["文档有更新"], "reason": f"判断失败: {e}"}
+            return False, {
+                "highlights": [],
+                "reason": f"判断失败，已按保守策略跳过推送: {e}",
+                "change_type": "unclear",
+                "confidence": "low",
+            }
 
     async def notify_subscribers(self, doc_info: dict, summary: dict):
         """推送通知给订阅者

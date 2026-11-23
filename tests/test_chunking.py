@@ -1,4 +1,36 @@
 from novabot.chunking import split_markdown
+from novabot.doc_utils import extract_effective_body
+
+
+def test_extract_effective_body_removes_frontmatter_and_generated_table():
+    markdown = """---
+id: 1
+title: 空文档
+---
+
+| 作者 | 创建时间 | 更新时间 |
+|------|----------|----------|
+| Alice | 2026-01-01 | 2026-01-02 |
+"""
+
+    assert extract_effective_body(markdown) == ""
+
+
+def test_extract_effective_body_preserves_user_content_after_generated_table():
+    markdown = """---
+id: 1
+---
+
+| 作者 | 更新时间 |
+|------|----------|
+| Alice | 2026-01-02 |
+
+# 公告
+
+活动改到周五晚上七点。
+"""
+
+    assert extract_effective_body(markdown) == "# 公告\n\n活动改到周五晚上七点。"
 
 
 def test_split_markdown_strips_metadata_and_keeps_stable_ids():

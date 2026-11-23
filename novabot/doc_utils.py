@@ -92,6 +92,12 @@ def strip_meta_table(body: str) -> str:
     return "\n".join(lines[content_start:]).strip()
 
 
+def extract_effective_body(markdown: str) -> str:
+    """Return user-authored body without generated frontmatter or metadata table."""
+    _, body = parse_frontmatter(markdown or "")
+    return strip_meta_table(body)
+
+
 def read_document_content(
     file_path: Path,
     offset: int = 0,

@@ -18,6 +18,19 @@ class _ProviderShouldNotBeUsed:
         raise AssertionError("provider should not be used")
 
 
+class _ProviderContext:
+    def __init__(self):
+        self.provider = object()
+
+    def get_using_provider(self):
+        return self.provider
+
+
+class _NoProviderContext:
+    def get_using_provider(self):
+        return None
+
+
 def _git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args],
@@ -200,7 +213,161 @@ rename to team/repo/b.md
     should_push, summary = asyncio.run(notifier.agent_should_push({}, diff, is_first_push=False))
 
     assert not should_push
-    assert summary == {"highlights": [], "reason": "只有路径或元数据变化，正文信息不足"}
+    assert summary == {
+        "highlights": [],
+        "reason": "只有路径、元数据或无正文变化",
+        "change_type": "minor_revision",
+        "confidence": "medium",
+    }
+
+
+def test_first_push_empty_effective_body_skips_before_provider(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderShouldNotBeUsed(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push(
+            {"title": "只有标题"},
+            "",
+            is_first_push=True,
+        )
+    )
+
+    assert not should_push
+    assert summary["change_type"] == "empty_body"
+    assert summary["evidence"] == []
+
+
+def test_first_push_short_announcement_requires_verifiable_evidence(tmp_path, monkeypatch):
+    calls = {}
+
+    async def fake_call_llm(**kwargs):
+        calls["prompt"] = kwargs["prompt"]
+        return {
+            "should_push": True,
+            "change_type": "short_announcement",
+            "confidence": "high",
+            "highlights": ["活动调整到周五晚上七点"],
+            "evidence": ["活动改到周五晚上七点"],
+            "reason": "正文包含具体时间调整",
+        }
+
+    monkeypatch.setattr("novabot.push_notifier.call_llm", fake_call_llm)
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+    body = "活动改到周五晚上七点，请大家准时参加。"
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push(
+            {"title": "活动通知", "author": "Alice", "book_name": "社团"},
+            body,
+            is_first_push=True,
+        )
+    )
+
+    assert should_push
+    assert summary["evidence"] == ["活动改到周五晚上七点"]
+    assert "<document_body>" in calls["prompt"]
+    assert body in calls["prompt"]
+    assert "当前正文少于 50 个非空白字符" in calls["prompt"]
+
+
+def test_first_push_rejects_title_inference_without_body_evidence(tmp_path, monkeypatch):
+    async def fake_call_llm(**kwargs):
+        return {
+            "should_push": True,
+            "change_type": "short_announcement",
+            "confidence": "high",
+            "highlights": ["记录了成员参与活动的观察与思考"],
+            "evidence": ["成员参与活动的观察与思考"],
+            "reason": "标题显示这是活动记录",
+        }
+
+    monkeypatch.setattr("novabot.push_notifier.call_llm", fake_call_llm)
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push(
+            {"title": "社员视角下的南苏活动"},
+            "稍后补充。",
+            is_first_push=True,
+        )
+    )
+
+    assert not should_push
+    assert summary["highlights"] == []
+    assert summary["reason"] == "首次推送证据无法在正文中验证"
+
+
+def test_first_push_rejects_scalar_highlights_and_evidence(tmp_path, monkeypatch):
+    async def fake_call_llm(**kwargs):
+        return {
+            "should_push": True,
+            "change_type": "short_announcement",
+            "confidence": "high",
+            "highlights": "活动调整到周五晚上七点",
+            "evidence": "活动改到周五晚上七点",
+            "reason": "正文包含具体时间调整",
+        }
+
+    monkeypatch.setattr("novabot.push_notifier.call_llm", fake_call_llm)
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push(
+            {"title": "活动通知"},
+            "活动改到周五晚上七点，请大家准时参加。",
+            is_first_push=True,
+        )
+    )
+
+    assert not should_push
+    assert summary["highlights"] == []
+    assert summary["reason"] == "首次推送缺少可验证的正文摘要或证据"
+
+
+def test_first_push_without_provider_uses_conservative_skip(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_NoProviderContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={},
+    )
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push(
+            {},
+            "这是包含足够具体内容的正文。" * 5,
+            is_first_push=True,
+        )
+    )
+
+    assert not should_push
+    assert summary["confidence"] == "low"
+    assert "无可用 LLM" in summary["reason"]
 
 
 def test_prepare_update_diff_filters_generated_metadata_table(tmp_path):
@@ -415,6 +582,121 @@ def test_prepare_update_diff_adds_context_once_for_continuous_block(tmp_path):
     assert prepared.count("任务清单") == 1
     assert prepared.count("当前安排如下") == 1
     assert "新增任务 3" in prepared
+
+
+def test_agent_should_push_skips_minor_revision_before_provider(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderShouldNotBeUsed(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_min_diff_chars": 30},
+    )
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -20,3 +20,3 @@
+ ## 数据获取
+-数据获取是难点，需要优先研究 API 和 token。
++数据获取是目前最难、也最需要优先处理的部分，需要先研究 API 调用和 token 使用方式。
+"""
+    body = "# 语雀插件\n\n## 数据获取\n数据获取是目前最难、也最需要优先处理的部分，需要先研究 API 调用和 token 使用方式。\n"
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push({}, diff, is_first_push=False, current_body=body)
+    )
+
+    assert not should_push
+    assert summary["change_type"] == "minor_revision"
+    assert "既有段落" in summary["reason"]
+
+
+def test_agent_should_push_skips_draft_update_before_provider(tmp_path):
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderShouldNotBeUsed(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_min_diff_chars": 20},
+    )
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -10,2 +10,4 @@
+ ## TODO
+ 待补充 API 调研
++先看看开放平台文档
++也许可以参考同学方案
+"""
+    body = "# 语雀插件\n\n## TODO\n待补充 API 调研\n先看看开放平台文档\n也许可以参考同学方案\n"
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push({}, diff, is_first_push=False, current_body=body)
+    )
+
+    assert not should_push
+    assert summary["change_type"] == "draft_update"
+
+
+def test_build_update_context_includes_outline_and_change_sections(tmp_path):
+    notifier = _notifier(tmp_path / "docs", tmp_path / "data")
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -5,2 +5,5 @@
+ ## 新增结论
++确定第一阶段先完成语雀 TOC 接口验证。
++输出最小可用 demo 后再讨论 RAG。
+"""
+    body = "# 语雀插件\n\n## 背景\n旧内容\n\n## 新增结论\n确定第一阶段先完成语雀 TOC 接口验证。\n"
+
+    context = notifier.build_update_context(diff, body)
+
+    assert "当前文档大纲" in context
+    assert "- 语雀插件" in context
+    assert "本次变更所在章节" in context
+    assert "新增结论" in context
+    assert "语雀 TOC 接口验证" in context
+
+
+def test_agent_should_push_mixed_update_uses_observable_changes(tmp_path, monkeypatch):
+    calls = {}
+
+    async def fake_call_llm(**kwargs):
+        calls["prompt"] = kwargs["prompt"]
+        return {
+            "should_push": True,
+            "change_type": "mixed_update",
+            "confidence": "high",
+            "observable_changes": ["新增了第一阶段验证目标：先完成语雀 TOC 接口验证"],
+            "highlights": ["不应优先使用这个字段"],
+            "reason": "包含新增独立章节",
+        }
+
+    monkeypatch.setattr("novabot.push_notifier.call_llm", fake_call_llm)
+    notifier = PushNotifier(
+        docs_dir=tmp_path / "docs",
+        data_dir=tmp_path / "data",
+        context=_ProviderContext(),
+        subscription_manager=_DummySubscriptions(),
+        config={"push_min_diff_chars": 20},
+    )
+    diff = """diff --git a/team/repo/a.md b/team/repo/a.md
+@@ -3,2 +3,8 @@
+ ## 数据获取
+-数据获取是难点。
++数据获取是当前优先处理的问题。
++
++## 第一阶段验证
++先完成语雀 TOC 接口验证。
++输出最小可用 demo 后再讨论 RAG。
+"""
+    body = "# 语雀插件\n\n## 数据获取\n数据获取是当前优先处理的问题。\n\n## 第一阶段验证\n先完成语雀 TOC 接口验证。\n"
+
+    should_push, summary = asyncio.run(
+        notifier.agent_should_push({}, diff, is_first_push=False, current_body=body)
+    )
+
+    assert should_push
+    assert summary["change_type"] == "mixed_update"
+    assert summary["confidence"] == "high"
+    assert summary["highlights"] == ["新增了第一阶段验证目标：先完成语雀 TOC 接口验证"]
+    assert "当前文档大纲" in calls["prompt"]
+    assert "被替换或删除的旧正文证据（不能当作新增内容总结）" in calls["prompt"]
 
 
 def test_prepare_update_diff_budget_keeps_added_and_removed_content(tmp_path):

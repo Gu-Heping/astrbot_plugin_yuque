@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from astrbot.api import logger
 
+from .doc_utils import extract_effective_body, parse_frontmatter
 from .doc_projection import build_doc_metadata, build_markdown
 from .git_ops import GitOps
 from .rag import RAGEngine
@@ -805,25 +806,45 @@ class WebhookHandler:
                 "url": doc_url,
             }
 
-            # 4. 首次推送时读取文档内容
-            doc_content = diff  # 默认使用 diff
-            if is_first_push:
-                doc_file = self.docs_dir / rel_path
-                if doc_file.exists():
-                    try:
-                        content = doc_file.read_text(encoding="utf-8")
-                        # 去掉 frontmatter
-                        _, body = YuqueClient.parse_frontmatter(content)
+            # 4. 读取当前正文。首次推送绝不能把内部占位文本当作文档内容。
+            doc_content = "" if is_first_push else diff
+            current_body = ""
+            raw_body_chars = 0
+            doc_file = self.docs_dir / rel_path
+            if doc_file.exists():
+                try:
+                    content = doc_file.read_text(encoding="utf-8")
+                    _, raw_body = parse_frontmatter(content)
+                    raw_body_chars = len(raw_body)
+                    current_body = extract_effective_body(content)
+                    effective_body_chars = self.push_notifier.effective_char_count(
+                        current_body
+                    )
+                    logger.info(
+                        f"[Push] 正文清理: raw_body_chars={raw_body_chars}, "
+                        f"effective_body_chars={effective_body_chars}"
+                    )
+                    if is_first_push:
                         # 截取前 2000 字符
+                        body = current_body
                         doc_content = body[:2000]
                         if len(body) > 2000:
                             doc_content += "\n... (内容已截断)"
                         logger.info(f"[Push] 首次推送，使用文档原文 ({len(body)} 字符)")
-                    except Exception as e:
-                        logger.warning(f"[Push] 读取文档失败: {e}")
+                    else:
+                        logger.info(f"[Push] 更新推送，已读取当前正文语境 ({len(current_body)} 字符)")
+                except Exception as e:
+                    logger.warning(f"[Push] 读取文档失败: {e}")
+            elif is_first_push:
+                logger.warning(f"[Push] 首次推送文档文件不存在: {rel_path}")
 
             # 5. LLM 判断是否推送
-            should_push, summary = await self.push_notifier.agent_should_push(doc_info, doc_content, is_first_push)
+            should_push, summary = await self.push_notifier.agent_should_push(
+                doc_info,
+                doc_content,
+                is_first_push,
+                current_body=current_body,
+            )
 
             if should_push:
                 # 6. 推送给订阅者

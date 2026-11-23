@@ -6,6 +6,7 @@ import hashlib
 import re
 from typing import Any
 
+from .doc_utils import extract_effective_body
 from .models import DEFAULT_TEAM_ID, DEFAULT_TEAM_NAME, Chunk, scoped_document_id
 
 
@@ -19,15 +20,8 @@ def _content_hash(content: str) -> str:
 
 
 def strip_frontmatter_and_meta_table(body: str) -> str:
-    if body.startswith("---\n"):
-        parts = body.split("---\n", 2)
-        if len(parts) == 3:
-            body = parts[2]
-    return re.sub(
-        r"\A\s*\|[^\n]*\|\n\|(?:[-: ]+\|)+\n(?:\|[^\n]*\|\n?)*",
-        "",
-        body,
-    ).lstrip()
+    """Backward-compatible wrapper around the shared body extractor."""
+    return extract_effective_body(body)
 
 
 def _clean_text(text: str) -> str:

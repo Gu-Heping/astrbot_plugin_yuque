@@ -285,6 +285,8 @@ class _PushNotifier:
     def __init__(self):
         self.diff_ids = []
         self.pushed_ids = []
+        self.current_bodies = []
+        self.contents = []
 
     def should_enable(self):
         return True
@@ -296,7 +298,9 @@ class _PushNotifier:
     def pre_check(self, diff, is_first_push=False):
         return False, ""
 
-    async def agent_should_push(self, doc_info, content, is_first_push=False):
+    async def agent_should_push(self, doc_info, content, is_first_push=False, current_body=""):
+        self.current_bodies.append(current_body)
+        self.contents.append(content)
         return True, {"highlights": ["更新"], "reason": ""}
 
     async def notify_subscribers(self, doc_info, summary):
@@ -712,6 +716,106 @@ def test_webhook_push_state_is_team_scoped(tmp_path):
 
     assert push_notifier.diff_ids == ["42", "other:42"]
     assert push_notifier.pushed_ids == ["42", "other:42"]
+
+
+def test_webhook_update_push_passes_current_body_context(tmp_path):
+    import asyncio
+
+    push_notifier = _PushNotifier()
+    docs_dir = tmp_path / "yuque_docs"
+    doc_file = docs_dir / "工程" / "部署.md"
+    doc_file.parent.mkdir(parents=True)
+    doc_file.write_text(
+        """---
+id: 42
+title: 部署
+---
+
+# 部署
+
+当前正文语境。
+""",
+        encoding="utf-8",
+    )
+    handler = WebhookHandler(
+        docs_dir=docs_dir,
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        push_notifier=push_notifier,
+    )
+
+    result = asyncio.run(
+        handler._handle_push(
+            42,
+            "a" * 40,
+            "工程/部署.md",
+            {"title": "部署", "team_id": "default", "book": {"name": "工程"}},
+        )
+    )
+
+    assert result["pushed"] is True
+    assert push_notifier.current_bodies == ["# 部署\n\n当前正文语境。"]
+
+
+def test_webhook_first_push_passes_empty_effective_body_not_metadata_table(tmp_path):
+    import asyncio
+
+    class FirstPushNotifier(_PushNotifier):
+        def get_diff(self, doc_id, current_commit, doc_path):
+            self.diff_ids.append(doc_id)
+            return "[这是新发布的文档，首次推送，无历史 diff 信息]", True
+
+        async def agent_should_push(
+            self,
+            doc_info,
+            content,
+            is_first_push=False,
+            current_body="",
+        ):
+            self.current_bodies.append(current_body)
+            self.contents.append(content)
+            return False, {"highlights": [], "reason": "有效正文为空"}
+
+    push_notifier = FirstPushNotifier()
+    docs_dir = tmp_path / "yuque_docs"
+    doc_file = docs_dir / "工程" / "空文档.md"
+    doc_file.parent.mkdir(parents=True)
+    doc_file.write_text(
+        """---
+id: 42
+title: 空文档
+---
+
+| 作者 | 创建时间 | 更新时间 |
+|------|----------|----------|
+| Alice | 2026-11-24 | 2026-11-24 |
+""",
+        encoding="utf-8",
+    )
+    handler = WebhookHandler(
+        docs_dir=docs_dir,
+        data_dir=tmp_path,
+        get_client=lambda: None,
+        rag=None,
+        config={"git_enabled": False},
+        push_notifier=push_notifier,
+    )
+
+    result = asyncio.run(
+        handler._handle_push(
+            42,
+            "a" * 40,
+            "工程/空文档.md",
+            {"title": "空文档", "team_id": "default", "book": {"name": "工程"}},
+        )
+    )
+
+    assert result == {"pushed": False, "reason": "有效正文为空"}
+    assert push_notifier.contents == [""]
+    assert push_notifier.current_bodies == [""]
+    assert push_notifier.pushed_ids == []
 
 
 def test_webhook_skips_non_creator_push_without_advancing_baseline(tmp_path):
